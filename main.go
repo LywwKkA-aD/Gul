@@ -26,6 +26,7 @@ var assets embed.FS
 
 func init() {
 	application.RegisterEvent[domain.ConnectionStatus](domain.EventConnectionState)
+	application.RegisterEvent[domain.ConnectionLatency](domain.EventConnectionLatency)
 	application.RegisterEvent[domain.ChannelNode](domain.EventChannelsTree)
 	application.RegisterEvent[domain.ChatMessage](domain.EventChatMessage)
 	application.RegisterEvent[domain.TofuPrompt](domain.EventTofuMismatch)

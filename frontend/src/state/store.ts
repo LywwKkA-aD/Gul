@@ -4,6 +4,8 @@ import type { ChannelNode, ChatMessage, ConnectionStatus, TofuPrompt } from './t
 
 interface GulState {
   status: ConnectionStatus;
+  /** Smoothed TCP RTT of the active Mumble session; null until sampled. */
+  pingMs: number | null;
   tree: ChannelNode | null;
   // Session chat history per channel id, appended from chat:message events.
   messages: Record<number, ChatMessage[]>;
@@ -27,6 +29,7 @@ interface GulState {
   settingsOpen: boolean;
 
   setStatus: (status: ConnectionStatus) => void;
+  setPingMs: (pingMs: number | null) => void;
   setTree: (tree: ChannelNode) => void;
   appendMessage: (message: ChatMessage) => void;
   setHistory: (channelId: number, messages: ChatMessage[]) => void;
@@ -48,6 +51,7 @@ const NO_TALKING: ReadonlySet<number> = new Set<number>();
 
 export const useGulStore = create<GulState>((set) => ({
   status: initialStatus,
+  pingMs: null,
   tree: null,
   messages: {},
   tofu: null,
@@ -70,6 +74,7 @@ export const useGulStore = create<GulState>((set) => ({
       const live = status.state === 'connected';
       return {
         status,
+        pingMs: live ? s.pingMs : null,
         // A fresh disconnect invalidates the tree; history stays for the session.
         tree: status.state === 'disconnected' ? null : s.tree,
         activeChannelId:
@@ -83,6 +88,7 @@ export const useGulStore = create<GulState>((set) => ({
         outDb: live ? s.outDb : SILENT_DB,
       };
     }),
+  setPingMs: (pingMs) => set((s) => (s.status.state === 'connected' ? { pingMs } : s)),
   setTree: (tree) => set({ tree }),
   appendMessage: (message) =>
     set((s) => ({
@@ -116,6 +122,7 @@ export const useGulStore = create<GulState>((set) => ({
   reset: () =>
     set({
       status: initialStatus,
+      pingMs: null,
       tree: null,
       messages: {},
       tofu: null,

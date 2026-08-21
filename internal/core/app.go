@@ -16,8 +16,8 @@ import (
 )
 
 // Version is the application version reported in diagnostics and the about
-// screen. Bumped per milestone until packaging takes over in M4.
-const Version = "0.1.0-m1"
+// screen. Keep it aligned with build/config.yml package metadata.
+const Version = "0.2.0"
 
 const (
 	// historyPerChannel caps the in-memory session transcript per channel.
@@ -89,6 +89,7 @@ func (a *App) SetController(c mumble.Controller) {
 func (a *App) Callbacks() mumble.Callbacks {
 	return mumble.Callbacks{
 		OnStatus:  a.HandleStatus,
+		OnLatency: a.HandleLatency,
 		OnTree:    a.HandleTree,
 		OnMessage: a.HandleMessage,
 		OnTofu:    a.HandleTofu,
@@ -257,6 +258,15 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	case s.State == domain.StateDisconnected:
 		a.stopVoice()
 	}
+}
+
+// HandleLatency forwards session telemetry separately from lifecycle status.
+// A periodic sample must not look like a fresh connection and restart audio.
+func (a *App) HandleLatency(latency domain.ConnectionLatency) {
+	a.notifyMu.Lock()
+	defer a.notifyMu.Unlock()
+
+	a.emit(domain.EventConnectionLatency, latency)
 }
 
 // HandleTree records a channel tree snapshot and pushes it to the UI.

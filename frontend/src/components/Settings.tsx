@@ -173,6 +173,8 @@ function AudioTab() {
         />
       </Field>
 
+      <OutputMeter />
+
       {failed && (
         <p className="text-sm text-danger">
           Не удалось получить список устройств. Останется системное по умолчанию; подробности в
@@ -223,21 +225,62 @@ function DeviceSelect({
 
 function MicMeter() {
   const micDb = useGulStore((s) => s.micDb);
-  const percent = meterPercent(micDb);
-  const silent = micDb <= SILENT_DB;
+
+  return (
+    <LevelMeter
+      db={micDb}
+      label="Тест микрофона"
+      ariaLabel="Уровень микрофона"
+      description={
+        'Метр оживает, пока работает голосовой движок. Говорите обычным голосом: ' +
+        'полоса должна уверенно двигаться, но не упираться в правый край.'
+      }
+    />
+  );
+}
+
+function OutputMeter() {
+  const outDb = useGulStore((s) => s.outDb);
+
+  return (
+    <LevelMeter
+      db={outDb}
+      label="Сигнал собеседников"
+      ariaLabel="Уровень выходного сигнала"
+      description={
+        'Если полоса движется, а в наушниках тишина, голос уже принят и смешан — ' +
+        'проверьте выбранное устройство вывода и системную громкость.'
+      }
+    />
+  );
+}
+
+function LevelMeter({
+  db,
+  label,
+  ariaLabel,
+  description,
+}: {
+  db: number;
+  label: string;
+  ariaLabel: string;
+  description: string;
+}) {
+  const percent = meterPercent(db);
+  const silent = db <= SILENT_DB;
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs tracking-[.08em] text-text-3 uppercase">Тест микрофона</span>
+        <span className="text-xs tracking-[.08em] text-text-3 uppercase">{label}</span>
         <span className="font-mono text-xs text-text-1">
-          {silent ? '— dBFS' : `${micDb.toFixed(0)} dBFS`}
+          {silent ? '— dBFS' : `${db.toFixed(0)} dBFS`}
         </span>
       </div>
       <div
         className="relative h-2 overflow-hidden rounded-pill bg-bg-3"
         role="meter"
-        aria-label="Уровень микрофона"
+        aria-label={ariaLabel}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(percent)}
@@ -247,10 +290,7 @@ function MicMeter() {
           style={{ width: `${percent}%` }}
         />
       </div>
-      <p className="text-sm text-text-2">
-        Метр оживает, пока работает голосовой движок. Говорите обычным голосом: полоса должна
-        уверенно двигаться, но не упираться в правый край.
-      </p>
+      <p className="text-sm text-text-2">{description}</p>
     </div>
   );
 }

@@ -357,6 +357,28 @@ func TestHandleStatusStoresAndEmits(t *testing.T) {
 	}
 }
 
+func TestHandleLatencyEmitsWithoutChangingConnectionState(t *testing.T) {
+	t.Parallel()
+	app, _, em := newTestApp(t)
+	app.HandleStatus(domain.ConnectionStatus{
+		State: domain.StateConnected, Server: "localhost:64738", SelfSession: 9,
+	})
+
+	want := domain.ConnectionLatency{PingMS: 28.6}
+	app.HandleLatency(want)
+
+	if got := app.Status(); got.State != domain.StateConnected || got.SelfSession != 9 {
+		t.Fatalf("Status() changed after latency update: %+v", got)
+	}
+	ev, ok := em.last()
+	if !ok || ev.name != domain.EventConnectionLatency {
+		t.Fatalf("last event = %+v, want %s", ev, domain.EventConnectionLatency)
+	}
+	if got, ok := ev.payload.(domain.ConnectionLatency); !ok || got != want {
+		t.Fatalf("payload = %#v, want %+v", ev.payload, want)
+	}
+}
+
 func TestHandleTreeStoresAndEmits(t *testing.T) {
 	t.Parallel()
 	app, _, em := newTestApp(t)
@@ -548,14 +570,16 @@ func TestCallbacksAreConcurrencySafe(t *testing.T) {
 		go func(w int) {
 			defer wg.Done()
 			for i := range iterations {
-				switch (w + i) % 4 {
+				switch (w + i) % 5 {
 				case 0:
 					app.HandleStatus(domain.ConnectionStatus{State: domain.StateConnected})
 				case 1:
-					app.HandleTree(domain.ChannelNode{ID: uint32(i), Name: "Root"})
+					app.HandleLatency(domain.ConnectionLatency{PingMS: float64(i)})
 				case 2:
-					app.HandleMessage(mumble.RawMessage{ChannelID: uint32(w), HTML: "<b>x</b>"})
+					app.HandleTree(domain.ChannelNode{ID: uint32(i), Name: "Root"})
 				case 3:
+					app.HandleMessage(mumble.RawMessage{ChannelID: uint32(w), HTML: "<b>x</b>"})
+				case 4:
 					app.HandleTofu(domain.TofuPrompt{Server: "s"})
 				}
 			}
@@ -574,7 +598,8 @@ func TestCallbacksAreConcurrencySafe(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := em.count(domain.EventConnectionState) + em.count(domain.EventChannelsTree) +
+	if got := em.count(domain.EventConnectionState) + em.count(domain.EventConnectionLatency) +
+		em.count(domain.EventChannelsTree) +
 		em.count(domain.EventChatMessage) + em.count(domain.EventTofuMismatch); got != workers*iterations {
 		t.Fatalf("emitted %d events, want %d", got, workers*iterations)
 	}
@@ -585,15 +610,16 @@ func TestCallbacksBundle(t *testing.T) {
 	app, _, em := newTestApp(t)
 
 	cb := app.Callbacks()
-	if cb.OnStatus == nil || cb.OnTree == nil || cb.OnMessage == nil || cb.OnTofu == nil {
+	if cb.OnStatus == nil || cb.OnLatency == nil || cb.OnTree == nil || cb.OnMessage == nil || cb.OnTofu == nil {
 		t.Fatal("Callbacks() left a hook nil")
 	}
 	cb.OnStatus(domain.ConnectionStatus{State: domain.StateConnecting})
+	cb.OnLatency(domain.ConnectionLatency{PingMS: 12.5})
 	cb.OnTree(domain.ChannelNode{Name: "Root"})
 	cb.OnMessage(mumble.RawMessage{ChannelID: 1, HTML: "hi"})
 	cb.OnTofu(domain.TofuPrompt{Server: "s"})
 
-	if got := len(em.all()); got != 4 {
-		t.Fatalf("emitted %d events, want 4", got)
+	if got := len(em.all()); got != 5 {
+		t.Fatalf("emitted %d events, want 5", got)
 	}
 }

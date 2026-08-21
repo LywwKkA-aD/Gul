@@ -4,6 +4,7 @@ package mumble
 
 import (
 	"log/slog"
+	"math"
 	"os/exec"
 	"sync"
 	"testing"
@@ -46,10 +47,34 @@ func TestTwoManagersChat(t *testing.T) {
 	t.Fatalf("B never received A's message; got: %+v", b.messages())
 }
 
+// TestManagerReportsLatency verifies the public UserStats path used by the UI.
+// It measures RTT on the already-open TLS/TCP session, not a separate UDP ping.
+func TestManagerReportsLatency(t *testing.T) {
+	c := newLiveManager(t, "gul-latency")
+	defer c.mgr.Close()
+
+	c.mgr.Connect("127.0.0.1:64738", "gul-latency", "")
+	waitState(t, c, domain.StateConnected)
+
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		if latency, ok := c.connectionLatency(); ok {
+			if math.IsNaN(latency.PingMS) || math.IsInf(latency.PingMS, 0) || latency.PingMS < 0 {
+				t.Fatalf("invalid TCP RTT: %f ms", latency.PingMS)
+			}
+			t.Logf("TCP RTT: %.2f ms", latency.PingMS)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("no TCP RTT sample arrived")
+}
+
 type liveClient struct {
 	mgr *Manager
 	mu  sync.Mutex
 	st  domain.ConnectionStatus
+	lat *domain.ConnectionLatency
 	tr  *domain.ChannelNode
 	msg []RawMessage
 }
@@ -59,7 +84,12 @@ func newLiveManager(t *testing.T, name string) *liveClient {
 	c := &liveClient{}
 	mgr, err := NewManager(t.TempDir(), slog.Default().With("client", name), Callbacks{
 		OnStatus: func(s domain.ConnectionStatus) { c.mu.Lock(); c.st = s; c.mu.Unlock() },
-		OnTree:   func(n domain.ChannelNode) { c.mu.Lock(); c.tr = &n; c.mu.Unlock() },
+		OnLatency: func(latency domain.ConnectionLatency) {
+			c.mu.Lock()
+			c.lat = &latency
+			c.mu.Unlock()
+		},
+		OnTree: func(n domain.ChannelNode) { c.mu.Lock(); c.tr = &n; c.mu.Unlock() },
 		OnMessage: func(m RawMessage) {
 			c.mu.Lock()
 			c.msg = append(c.msg, m)
@@ -71,6 +101,15 @@ func newLiveManager(t *testing.T, name string) *liveClient {
 	}
 	c.mgr = mgr
 	return c
+}
+
+func (c *liveClient) connectionLatency() (domain.ConnectionLatency, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lat == nil {
+		return domain.ConnectionLatency{}, false
+	}
+	return *c.lat, true
 }
 
 func (c *liveClient) state() domain.ConnState {

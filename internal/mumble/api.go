@@ -16,6 +16,7 @@ type RawMessage struct {
 // no calls back into the Manager.
 type Callbacks struct {
 	OnStatus  func(domain.ConnectionStatus)
+	OnLatency func(domain.ConnectionLatency)
 	OnTree    func(domain.ChannelNode)
 	OnMessage func(RawMessage)
 	OnTofu    func(domain.TofuPrompt)

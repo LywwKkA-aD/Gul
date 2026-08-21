@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,8 @@ import (
 
 // ErrNotConnected is returned by actions that need a live session.
 var ErrNotConnected = errors.New("mumble: not connected")
+
+const statsPollInterval = 5 * time.Second
 
 type credentials struct {
 	address  string
@@ -45,9 +48,12 @@ type Manager struct {
 	tofu *TOFUStore
 	cert tls.Certificate
 
-	// dialFn and backoffFn are seams for tests; NewManager wires the real ones.
-	dialFn    func(DialConfig, sessionHooks) (*Session, error)
-	backoffFn func(int) time.Duration
+	// Network timing seams keep the lifecycle deterministic in tests;
+	// NewManager wires the production implementations.
+	dialFn         func(DialConfig, sessionHooks) (*Session, error)
+	backoffFn      func(int) time.Duration
+	statsInterval  time.Duration
+	requestStatsFn func(*gumble.Client)
 
 	// voice is the transport for raw Opus. It outlives sessions: the audio
 	// pipeline holds its channels while connections come and go.
@@ -79,14 +85,16 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 	}
 
 	m := &Manager{
-		log:       log,
-		cb:        cb,
-		tofu:      tofu,
-		cert:      cert,
-		backoffFn: backoffDelay,
-		accept:    make(chan struct{}, 1),
-		status:    domain.ConnectionStatus{State: domain.StateDisconnected},
-		voice:     newVoiceIO(log),
+		log:            log,
+		cb:             cb,
+		tofu:           tofu,
+		cert:           cert,
+		backoffFn:      backoffDelay,
+		statsInterval:  statsPollInterval,
+		requestStatsFn: requestSelfStats,
+		accept:         make(chan struct{}, 1),
+		status:         domain.ConnectionStatus{State: domain.StateDisconnected},
+		voice:          newVoiceIO(log),
 	}
 	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
 		return dial(cfg, m.tofu, hooks, m.log)
@@ -293,30 +301,72 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
-		select {
-		case <-stop:
-			m.clearSession()
+		event, stopped := m.waitSession(session.client, dropped, stop)
+		m.clearSession()
+		if stopped {
 			_ = session.Disconnect()
 			return
+		}
 
+		reason, terminal := disconnectReason(event)
+		if terminal {
+			m.emitStatus(domain.ConnectionStatus{
+				State: domain.StateDisconnected, Server: c.address, Error: reason,
+			})
+			return
+		}
+		m.log.Warn("connection lost", "server", c.address, "reason", reason)
+		reconnecting = true
+		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address})
+		if !sleepOrStop(m.backoffFn(attempt), stop) {
+			return
+		}
+		attempt++
+	}
+}
+
+// waitSession owns the stats ticker for exactly one live session. Returning
+// stops new requests before reconnecting; publishLatency rejects any response
+// that was already in flight from the old client.
+func (m *Manager) waitSession(
+	client *gumble.Client,
+	dropped <-chan *gumble.DisconnectEvent,
+	stop <-chan struct{},
+) (event *gumble.DisconnectEvent, stopped bool) {
+	interval := m.statsInterval
+	if interval <= 0 {
+		interval = statsPollInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	request := m.requestStatsFn
+	if request == nil {
+		request = requestSelfStats
+	}
+	request(client)
+
+	for {
+		select {
+		case <-stop:
+			return nil, true
 		case event := <-dropped:
-			m.clearSession()
-			reason, terminal := disconnectReason(event)
-			if terminal {
-				m.emitStatus(domain.ConnectionStatus{
-					State: domain.StateDisconnected, Server: c.address, Error: reason,
-				})
-				return
-			}
-			m.log.Warn("connection lost", "server", c.address, "reason", reason)
-			reconnecting = true
-			m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address})
-			if !sleepOrStop(m.backoffFn(attempt), stop) {
-				return
-			}
-			attempt++
+			return event, false
+		case <-ticker.C:
+			request(client)
 		}
 	}
+}
+
+func requestSelfStats(client *gumble.Client) {
+	if client == nil {
+		return
+	}
+	client.Do(func() {
+		if client.Self != nil {
+			client.Self.RequestStatsOnly()
+		}
+	})
 }
 
 func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent) (*Session, error) {
@@ -406,6 +456,16 @@ func channelToRestore(client *gumble.Client, channelID uint32) *gumble.Channel {
 }
 
 func (m *Manager) onUserChange(e *gumble.UserChangeEvent, server string) {
+	if e == nil {
+		return
+	}
+	if e.Type.Has(gumble.UserChangeStats) {
+		m.publishLatency(e)
+		if e.Type == gumble.UserChangeStats {
+			return
+		}
+	}
+
 	m.pushTree(e.Client)
 
 	if e.User == nil || e.Client == nil || e.Client.Self == nil ||
@@ -423,6 +483,25 @@ func (m *Manager) onUserChange(e *gumble.UserChangeEvent, server string) {
 
 	// The status carries SelfChannel, so refresh it.
 	m.emitStatus(m.connectedStatus(e.Client, server))
+}
+
+func (m *Manager) publishLatency(e *gumble.UserChangeEvent) {
+	if m.cb.OnLatency == nil || e.Client == nil || e.Client.Self == nil || e.User == nil ||
+		e.User.Session != e.Client.Self.Session || e.User.Stats == nil || e.User.Stats.TCPPackets == 0 {
+		return
+	}
+	// Listener callbacks can still be queued while a dropped session is being
+	// replaced or after it has been cleared. Only the currently active client
+	// may publish a latency sample.
+	if activeClient := m.currentClient(); activeClient != e.Client {
+		return
+	}
+
+	pingMS := float64(e.User.Stats.TCPPingAverage)
+	if math.IsNaN(pingMS) || math.IsInf(pingMS, 0) || pingMS < 0 {
+		return
+	}
+	m.cb.OnLatency(domain.ConnectionLatency{PingMS: pingMS})
 }
 
 func (m *Manager) onTextMessage(e *gumble.TextMessageEvent) {

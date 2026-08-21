@@ -4,6 +4,7 @@ import { normalizeTree } from './types';
 import type {
   AudioLevels,
   ChatMessage,
+  ConnectionLatency,
   ConnectionStatus,
   TalkingEvent,
   TofuPrompt,
@@ -14,6 +15,7 @@ import type {
 // events from the generated bindings (eventdata.d.ts); payloads are cast to
 // our local structural twins (enum values are the same string literals).
 const CONNECTION_STATE = 'connection:state';
+const CONNECTION_LATENCY = 'connection:latency';
 const CHANNELS_TREE = 'channels:tree';
 const CHAT_MESSAGE = 'chat:message';
 const TOFU_MISMATCH = 'tofu:mismatch';
@@ -30,6 +32,11 @@ export function subscribeGulEvents(): void {
 
   Events.On(CONNECTION_STATE, (e) => {
     useGulStore.getState().setStatus(e.data as unknown as ConnectionStatus);
+  });
+  Events.On(CONNECTION_LATENCY, (e) => {
+    const latency = e.data as unknown as ConnectionLatency;
+    const pingMs = Number.isFinite(latency.pingMs) && latency.pingMs >= 0 ? latency.pingMs : null;
+    useGulStore.getState().setPingMs(pingMs);
   });
   Events.On(CHANNELS_TREE, (e) => {
     useGulStore.getState().setTree(normalizeTree(e.data as unknown as WireChannelNode));

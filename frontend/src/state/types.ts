@@ -49,6 +49,10 @@ export interface ConnectionStatus {
   selfChannel?: number;
 }
 
+export interface ConnectionLatency {
+  pingMs: number;
+}
+
 export interface TofuPrompt {
   server: string;
   oldFingerprint: string;

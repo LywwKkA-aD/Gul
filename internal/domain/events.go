@@ -3,13 +3,20 @@ package domain
 // Wails event names (PLAN.md §6). The UI subscribes to these; Go pushes state.
 // Register every name in main.go via application.RegisterEvent.
 const (
-	EventConnectionState = "connection:state" // payload: ConnectionStatus
-	EventChannelsTree    = "channels:tree"    // payload: ChannelNode (root)
-	EventChatMessage     = "chat:message"     // payload: ChatMessage
-	EventTofuMismatch    = "tofu:mismatch"    // payload: TofuPrompt
-	EventUserTalking     = "user:talking"     // payload: TalkingEvent
-	EventAudioLevels     = "audio:levels"     // payload: AudioLevels
+	EventConnectionState   = "connection:state"   // payload: ConnectionStatus
+	EventConnectionLatency = "connection:latency" // payload: ConnectionLatency
+	EventChannelsTree      = "channels:tree"      // payload: ChannelNode (root)
+	EventChatMessage       = "chat:message"       // payload: ChatMessage
+	EventTofuMismatch      = "tofu:mismatch"      // payload: TofuPrompt
+	EventUserTalking       = "user:talking"       // payload: TalkingEvent
+	EventAudioLevels       = "audio:levels"       // payload: AudioLevels
 )
+
+// ConnectionLatency is the smoothed TCP round-trip time of the active Mumble
+// session. Zero is valid on a local server; no event means no sample yet.
+type ConnectionLatency struct {
+	PingMS float64 `json:"pingMs"`
+}
 
 // TalkingEvent reports a remote user starting or stopping to speak.
 type TalkingEvent struct {
