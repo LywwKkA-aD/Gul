@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
 import { SpeakerHighIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';
-import { AudioService } from '../../bindings/gul/services';
+import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { ChannelNode, UserInfo } from '../state/types';
 import {

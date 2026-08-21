@@ -3,7 +3,7 @@ import { SlidersHorizontalIcon } from '@phosphor-icons/react/dist/csr/SlidersHor
 import { KeyboardIcon } from '@phosphor-icons/react/dist/csr/Keyboard';
 import { PaletteIcon } from '@phosphor-icons/react/dist/csr/Palette';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
-import { AudioService } from '../../bindings/gul/services';
+import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { AudioDevice } from '../state/types';
 import { SILENT_DB, meterPercent } from '../state/types';

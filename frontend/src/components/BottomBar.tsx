@@ -5,7 +5,7 @@ import { HeadphonesIcon } from '@phosphor-icons/react/dist/csr/Headphones';
 import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
 import { GearSixIcon } from '@phosphor-icons/react/dist/csr/GearSix';
 import { LifebuoyIcon } from '@phosphor-icons/react/dist/csr/Lifebuoy';
-import { AudioService, DiagnosticsService } from '../../bindings/gul/services';
+import { AudioService, DiagnosticsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { selfUser, useGulStore } from '../state/store';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar, IconButton } from './ui';

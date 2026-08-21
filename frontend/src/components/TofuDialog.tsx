@@ -1,5 +1,5 @@
 import { ShieldWarningIcon } from '@phosphor-icons/react/dist/csr/ShieldWarning';
-import { ConnectionService } from '../../bindings/gul/services';
+import { ConnectionService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { TofuPrompt } from '../state/types';
 import { Button } from './ui';

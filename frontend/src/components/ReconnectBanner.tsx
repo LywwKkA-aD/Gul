@@ -1,4 +1,4 @@
-import { ConnectionService } from '../../bindings/gul/services';
+import { ConnectionService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { Button, Spinner } from './ui';
 
 // Scenario C from the prototype: the UI beneath is locked (opacity + no

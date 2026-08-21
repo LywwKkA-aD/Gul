@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaperPlaneRightIcon } from '@phosphor-icons/react/dist/csr/PaperPlaneRight';
-import { ChatService } from '../../bindings/gul/services';
+import { ChatService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { IconButton, TextInput } from './ui';
 
 export function Composer({ channelId }: { channelId: number | null }) {

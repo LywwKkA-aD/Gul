@@ -1,5 +1,5 @@
 import { HashIcon } from '@phosphor-icons/react/dist/csr/Hash';
-import { ChannelsService } from '../../bindings/gul/services';
+import { ChannelsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { ChannelNode, UserInfo } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';

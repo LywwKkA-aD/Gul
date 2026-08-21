@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PlugsIcon } from '@phosphor-icons/react/dist/csr/Plugs';
-import { ConnectionService } from '../../bindings/gul/services';
+import { ConnectionService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import { Button, Field, Spinner, TextInput } from '../components/ui';
 

@@ -1,5 +1,5 @@
 import { useEffect, type CSSProperties } from 'react';
-import { ChatService } from '../../bindings/gul/services';
+import { ChatService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { findChannel, selfUser, useGulStore } from '../state/store';
 import type { ChatMessage } from '../state/types';
 import { ChannelTree } from '../components/ChannelTree';

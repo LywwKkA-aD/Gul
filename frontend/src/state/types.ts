@@ -1,5 +1,5 @@
 // UI-side model types. Field names mirror the JSON tags of internal/domain
-// (and the generated bindings in ../bindings/gul/internal/domain/models.ts).
+// (and the generated bindings in frontend/bindings/github.com/LywwKkA-aD/Gul/internal/domain/models.ts).
 // Nullability differs from the wire: events are normalized at the boundary
 // (events.ts), so inside the app users/children are never null.
 
