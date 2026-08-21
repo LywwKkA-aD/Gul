@@ -1,0 +1,100 @@
+/* Gul design tokens - the single source of truth for color, rhythm and time.
+   Extracted VERBATIM from the design prototype (docs/design/prototype-source.html).
+   Do not edit values here without updating the prototype decision in docs/DECISIONS.md. */
+
+:root {
+  /* ─── Светлые поверхности ─── */
+  --bg-0: #EEF0F4;   /* Хром окна, серые подложки, hover в полотне */
+  --bg-1: #FFFFFF;   /* Панель — правая колонка, модал, карточки */
+  --bg-2: #FFFFFF;   /* Полотно — центр, чат */
+  --bg-3: #F4F5F8;   /* Поля ввода, тихая подложка внутри панели */
+  --bg-4: #E6E9EF;   /* Hover / active на светлом */
+
+  --line: #D3D8E0;         /* Линия — границы колонок, поля ввода */
+  --line-soft: #E5E8EE;    /* Тихая линия внутри панели */
+
+  /* ─── Текст на светлом ─── */
+  --text-1: #262A33;   /* Основной */
+  --text-2: #545C6B;   /* Второстепенный */
+  --text-3: #656C7C;   /* Приглушённый (AA на bg-0…bg-3) */
+
+  /* ─── Тёмный сайдбар: своя шкала, чтобы светлая не «протекала» ─── */
+  --sb-0: #141B31;   /* Подвал сайдбара, тултипы */
+  --sb-1: #1B2440;   /* Основной фон сайдбара */
+  --sb-2: #26314F;   /* Hover */
+  --sb-3: #2E3A5C;   /* Приподнятое */
+  --sb-line: #29334F;
+  --sb-text-1: #F3F5F9;
+  --sb-text-2: #B9C1D4;
+  --sb-text-3: #8F99B2;
+  --sb-active: color-mix(in oklab, var(--accent) 46%, var(--sb-1)); /* активный канал */
+  --sb-danger: color-mix(in oklab, var(--danger), white 26%);        /* мьют-иконки на тёмном */
+
+  /* ─── Акцент: синий. Производные — через color-mix, ───────────────────
+     поэтому переопределения --accent достаточно, чтобы поехала вся тема. */
+  --accent: #2F52DE;
+  --accent-hover: color-mix(in oklab, var(--accent), black 10%);
+  --accent-active: color-mix(in oklab, var(--accent), black 22%);
+  --accent-weak: color-mix(in oklab, var(--accent) 10%, var(--bg-1));
+  --accent-line: color-mix(in oklab, var(--accent) 45%, var(--line));
+  --accent-text: color-mix(in oklab, var(--accent), black 8%); /* акцентный текст на светлом */
+  --on-accent: #FFFFFF;   /* текст и иконки на акценте и на цветных аватарах */
+
+  /* Свеча — цвет речи: акцент на шаг светлее, читается и на сайдбаре, и на белом */
+  --speak: color-mix(in oklab, var(--accent), white 14%);
+  --speak-halo: color-mix(in oklab, var(--speak) 42%, transparent);
+  --glow-spread: 10px;  /* 0 / 10px / 18px — степень свечения */
+
+  /* ─── Семантика ─── */
+  --danger: #CE4A55;
+  --danger-weak: color-mix(in oklab, var(--danger) 12%, var(--bg-1));
+  --success: #2E9E77;
+  --warning: #C8842A;
+  --warning-weak: color-mix(in oklab, var(--warning) 14%, var(--bg-1));
+
+  /* ─── Радиусы ─── */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* ─── Отступы: кратно 4px ─── */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  /* ─── Плотность (переключается тумблером плотности) ─── */
+  --row-pad-y: 4px;    /* вертикальный паддинг строки сообщения */
+  --item-h: 30px;      /* высота элемента канала/участника */
+
+  /* ─── Тени: кромка + мягкая синеватая подложка ─── */
+  --sh-sm: 0 0 0 1px var(--line);
+  --sh-md: 0 0 0 1px var(--line), 0 6px 16px rgba(20, 27, 49, .10);
+  --sh-lg: 0 0 0 1px var(--line), 0 22px 48px rgba(20, 27, 49, .22);
+
+  /* ─── Z-шкала: именованная, без 9999 ─── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-tooltip: 200;
+  --z-modal: 300;
+
+  /* ─── Шрифты. Начертания тонкие: 400 в тексте, 500 — максимум для заголовков ─── */
+  --font-display: "Martian Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-ui: 14px;      /* интерфейсный кегль 13–15px */
+  --fs-sm: 13px;
+  --fs-xs: 11px;
+
+  /* ─── Время и easing ─── */
+  --t-fast: 90ms;    /* hover, tint, иконки */
+  --t-mid: 160ms;    /* поповеры, тумблеры, баннер */
+  --t-slow: 260ms;   /* модал, смена экрана */
+  --t-pulse: 1800ms; /* пульс речи */
+  --e-out: cubic-bezier(.2, .8, .3, 1);
+  --e-in-out: cubic-bezier(.4, 0, .2, 1);
+}

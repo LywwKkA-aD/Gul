@@ -1,0 +1,91 @@
+import { HashIcon } from '@phosphor-icons/react/dist/csr/Hash';
+import { ChannelsService } from '../../bindings/gul/services';
+import { useGulStore } from '../state/store';
+import type { ChannelNode, UserInfo } from '../state/types';
+import { initialsOf, tintFor } from '../state/types';
+import { Avatar } from './ui';
+import { cx } from './ui/cx';
+
+export function ChannelTree() {
+  const tree = useGulStore((s) => s.tree);
+  if (!tree) return null;
+
+  // The server root renders its children at top level; joining the root is
+  // still possible through its own row.
+  return (
+    <nav aria-label="Каналы">
+      <ChannelRow channel={tree} depth={0} />
+    </nav>
+  );
+}
+
+function ChannelRow({ channel, depth }: { channel: ChannelNode; depth: number }) {
+  const activeChannelId = useGulStore((s) => s.activeChannelId);
+  const active = activeChannelId === channel.id;
+
+  const join = () => {
+    if (!active) ChannelsService.Join(channel.id).catch(console.error);
+  };
+
+  const sorted = [...channel.children].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={join}
+        onDoubleClick={join}
+        title={active ? channel.name : `Перейти в «${channel.name}»`}
+        style={{ paddingLeft: `${12 + depth * 14}px`, height: 'var(--item-h)' }}
+        className={cx(
+          'flex w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm transition-colors duration-[var(--t-fast)]',
+          active
+            ? 'bg-[var(--sb-active)] text-sb-text-1'
+            : 'text-sb-text-2 hover:bg-sb-2 hover:text-sb-text-1',
+        )}
+      >
+        <HashIcon size={14} className="shrink-0 opacity-70" />
+        <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+      </button>
+
+      {channel.users.length > 0 && (
+        <ul className="mb-1">
+          {channel.users
+            .slice()
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((u, i) => (
+              <UserRow key={u.session} user={u} depth={depth} index={i} />
+            ))}
+        </ul>
+      )}
+
+      {sorted.map((child) => (
+        <ChannelRow key={child.id} channel={child} depth={depth + 1} />
+      ))}
+    </div>
+  );
+}
+
+function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index: number }) {
+  return (
+    <li
+      style={{ paddingLeft: `${12 + depth * 14 + 20}px`, height: 'var(--item-h)' }}
+      className={cx(
+        'flex min-w-0 items-center gap-2 pr-2 text-sm',
+        user.isSelf ? 'text-sb-text-1' : 'text-sb-text-3',
+      )}
+    >
+      <Avatar
+        size={20}
+        tint={tintFor(user)}
+        initials={initialsOf(user.name)}
+        muted={user.selfMute}
+        deaf={user.selfDeaf}
+        self={user.isSelf}
+        surface="sidebar"
+        haloIndex={index}
+      />
+      <span className="min-w-0 flex-1 truncate">{user.name}</span>
+    </li>
+  );
+}

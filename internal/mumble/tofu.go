@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,16 +24,37 @@ type TOFUStore struct {
 	path string
 	// host -> lowercase hex SHA-256 of the leaf certificate DER
 	known map[string]string
+	// host -> fingerprint that was rejected on the last mismatch. Kept in
+	// memory only: it is a prompt candidate, not a trust decision.
+	pending map[string]string
 }
 
-// ErrFingerprintChanged is wrapped into the error returned when a previously
-// pinned server presents a different certificate.
-var ErrFingerprintChanged = fmt.Errorf("server certificate changed since first use")
+// ErrFingerprintChanged is reported when a previously pinned server presents a
+// different certificate. Match it with errors.Is; use errors.As with
+// *MismatchError to recover both fingerprints for the user prompt.
+var ErrFingerprintChanged = errors.New("server certificate changed since first use")
+
+// MismatchError carries the pinned and the presented fingerprint so the caller
+// can build a TOFU prompt without parsing an error string.
+type MismatchError struct {
+	Host      string
+	Pinned    string
+	Presented string
+}
+
+func (e *MismatchError) Error() string {
+	return fmt.Sprintf("%s: host %s pinned %s, got %s",
+		ErrFingerprintChanged.Error(), e.Host, e.Pinned, e.Presented)
+}
+
+// Is makes errors.Is(err, ErrFingerprintChanged) succeed for this type.
+func (e *MismatchError) Is(target error) bool { return target == ErrFingerprintChanged }
 
 func NewTOFUStore(configDir string) (*TOFUStore, error) {
 	s := &TOFUStore{
-		path:  filepath.Join(configDir, tofuFileName),
-		known: map[string]string{},
+		path:    filepath.Join(configDir, tofuFileName),
+		known:   map[string]string{},
+		pending: map[string]string{},
 	}
 	data, err := os.ReadFile(s.path)
 	switch {
@@ -71,12 +93,46 @@ func (s *TOFUStore) verify(host, fingerprint string) error {
 	pinned, ok := s.known[host]
 	if !ok {
 		s.known[host] = fingerprint
+		delete(s.pending, host)
 		return s.save()
 	}
 	if pinned != fingerprint {
-		return fmt.Errorf("%w: host %s pinned %s, got %s", ErrFingerprintChanged, host, pinned, fingerprint)
+		// Remember the candidate so the prompt survives an error value that
+		// gets flattened somewhere between crypto/tls and the caller.
+		s.pending[host] = fingerprint
+		return &MismatchError{Host: host, Pinned: pinned, Presented: fingerprint}
 	}
+	delete(s.pending, host)
 	return nil
+}
+
+// Fingerprint returns the fingerprint currently pinned for host.
+func (s *TOFUStore) Fingerprint(host string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fp, ok := s.known[host]
+	return fp, ok
+}
+
+// Pending returns the fingerprint rejected by the last mismatch for host. It is
+// the candidate the user is asked to accept, and is cleared once the outcome is
+// decided (Replace, or a later successful verification).
+func (s *TOFUStore) Pending(host string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fp, ok := s.pending[host]
+	return fp, ok
+}
+
+// Replace pins fingerprint for host, overriding whatever was pinned before.
+// It implements the user accepting a changed server certificate, so it must
+// only be called after an explicit confirmation.
+func (s *TOFUStore) Replace(host, fingerprint string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.known[host] = fingerprint
+	delete(s.pending, host)
+	return s.save()
 }
 
 func (s *TOFUStore) save() error {
