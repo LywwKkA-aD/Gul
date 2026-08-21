@@ -4,6 +4,7 @@ import { subscribeGulEvents } from './state/events';
 import { ConnectScreen } from './app/ConnectScreen';
 import { MainScreen } from './app/MainScreen';
 import { TofuDialog } from './components/TofuDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 function App() {
   const state = useGulStore((s) => s.status.state);
@@ -19,10 +20,10 @@ function App() {
   const showMain = state === 'connected' || state === 'reconnecting';
 
   return (
-    <>
+    <ErrorBoundary>
       {showMain ? <MainScreen /> : <ConnectScreen />}
       {tofu && <TofuDialog prompt={tofu} />}
-    </>
+    </ErrorBoundary>
   );
 }
 
