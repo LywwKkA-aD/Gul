@@ -15,8 +15,6 @@ includes:
   windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
-  ios: ./build/ios/Taskfile.yml
-  android: ./build/android/Taskfile.yml
 
 tasks:
   build:
@@ -63,3 +61,18 @@ tasks:
     summary: Builds and runs the Docker image
     cmds:
       - task: common:run:docker
+
+  murmur:up:
+    summary: Starts the development Mumble server (murmur) in Docker
+    cmds:
+      - docker compose -f deploy/murmur/docker-compose.yml up -d
+
+  murmur:down:
+    summary: Stops the development Mumble server (murmur)
+    cmds:
+      - docker compose -f deploy/murmur/docker-compose.yml down
+
+  murmur:logs:
+    summary: Shows the last 50 log lines of the development Mumble server
+    cmds:
+      - docker compose -f deploy/murmur/docker-compose.yml logs --tail=50

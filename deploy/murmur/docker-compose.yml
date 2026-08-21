@@ -1,0 +1,18 @@
+services:
+  mumble:
+    image: mumblevoip/mumble-server:v1.5.915
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    environment:
+      MUMBLE_CONFIG_WELCOMETEXT: "Gul dev"
+      MUMBLE_CONFIG_USERS: "64"
+      # Set explicitly, otherwise the server generates one and buries it in the logs.
+      MUMBLE_SUPERUSER_PASSWORD: "devsuperuser"
+    volumes:
+      # Owned by UID/GID 10000:10000 inside the container.
+      - mumble-data:/data
+
+volumes:
+  mumble-data: {}
