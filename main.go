@@ -131,8 +131,9 @@ func main() {
 		Send:    manager.SendVoice,
 		Log:     logger,
 		Callbacks: audio.Callbacks{
-			OnTalking: coreApp.HandleTalking,
-			OnLevels:  coreApp.HandleLevels,
+			OnTalking:    coreApp.HandleTalking,
+			OnLevels:     coreApp.HandleLevels,
+			OnDeviceLost: coreApp.HandleDeviceLost,
 		},
 	})
 	coreApp.SetVoice(&voiceAdapter{engine: engine})

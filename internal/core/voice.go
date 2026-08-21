@@ -97,6 +97,27 @@ func (a *App) SelectDevices(captureID, playbackID string) {
 	}
 }
 
+// HandleDeviceLost restarts the engine on the currently selected devices
+// after one of them stopped (unplug, backend error). Falls back to the
+// system defaults when the restart fails.
+func (a *App) HandleDeviceLost() {
+	v := a.voiceEngine()
+	if v == nil {
+		return
+	}
+	a.mu.Lock()
+	capID, pbID := a.captureID, a.playbackID
+	a.mu.Unlock()
+	a.log.Warn("audio device lost, restarting engine")
+	v.Stop()
+	if err := v.Start(capID, pbID); err != nil {
+		a.log.Error("engine restart on selected devices", "error", err)
+		if err := v.Start("", ""); err != nil {
+			a.log.Error("engine restart on default devices", "error", err)
+		}
+	}
+}
+
 // HandleTalking forwards a talking transition from the DSP goroutine to
 // the UI. Must stay fast.
 func (a *App) HandleTalking(session uint32, hash string, talking bool) {

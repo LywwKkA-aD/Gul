@@ -28,6 +28,9 @@ type Callbacks struct {
 	OnTalking func(session uint32, hash string, talking bool)
 	// OnLevels reports mic and output levels in dBFS every ~50 ms.
 	OnLevels func(micDB, outDB float64)
+	// OnDeviceLost fires once when a device stops underneath the engine
+	// (unplug, backend error); the owner restarts the engine.
+	OnDeviceLost func()
 }
 
 // Config wires the engine to the voice transport.
@@ -202,6 +205,7 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 	defer ticker.Stop()
 
 	tick := 0
+	deviceLost, lostReported := false, false
 	for {
 		select {
 		case <-stop:
@@ -220,7 +224,19 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 		}
 		if tick%100 == 0 {
 			if dev, ok := src.(interface{ Stats() miniaudio.Stats }); ok {
-				drift.Sample(dev.Stats().CallbackFrames, time.Now())
+				st := dev.Stats()
+				drift.Sample(st.CallbackFrames, time.Now())
+				deviceLost = deviceLost || st.Stopped
+			}
+			if dev, ok := sink.(interface{ Stats() miniaudio.Stats }); ok {
+				deviceLost = deviceLost || dev.Stats().Stopped
+			}
+			if deviceLost && !lostReported {
+				lostReported = true
+				e.cfg.Log.Warn("audio device stopped underneath the engine")
+				if cb := e.cfg.Callbacks.OnDeviceLost; cb != nil {
+					go cb()
+				}
 			}
 		}
 		if tick%1000 == 0 {
