@@ -1,121 +1,100 @@
-import { useState, useEffect, useRef } from 'react'
-import {Events, WML} from "@wailsio/runtime";
-import {GreetService} from "../bindings/gul";
+import { useState } from 'react';
+import { PlugsConnectedIcon, PlugsIcon } from '@phosphor-icons/react';
+import { ConnectionService } from '../bindings/gul/services';
 
-// Show the actual Wails version this project was generated against.
-const wailsVersion = "v3.0.0-beta.11";
-
+// M0 placeholder screen: connect to a server, watch the Go log for the
+// channel tree. The real Connect screen with design tokens lands in M1.
 function App() {
-  const [name, setName] = useState<string>('');
-  const [time, setTime] = useState<string>('Listening for Time event...');
+  const [address, setAddress] = useState('127.0.0.1:64738');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [state, setState] = useState('disconnected');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const titleNameRef = useRef<HTMLSpanElement | null>(null);
-  const toastRef = useRef<HTMLDivElement | null>(null);
-  const resultRef = useRef<HTMLSpanElement | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const refreshState = () => ConnectionService.State().then(setState).catch(console.error);
 
-  // Crossfade the framework word in the heading ("Wails + React") to the name
-  // the user entered ("Wails + <name>"): the old word fades out while the new one
-  // fades in over the same spot.
-  const swapTitleName = (name: string) => {
-    const titleNameElement = titleNameRef.current;
-    if (!titleNameElement) {
-      return;
+  const connect = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await ConnectionService.Connect(address, username, password);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+      void refreshState();
     }
-    const current = titleNameElement.querySelector('.title-name-text:not(.is-outgoing)');
-    if (!current || current.textContent === name) {
-      return;
-    }
-    const incoming = document.createElement('span');
-    incoming.className = 'title-name-text is-entering';
-    incoming.textContent = name;
-    current.classList.add('is-outgoing');
-    titleNameElement.appendChild(incoming);
-    // Force a reflow so the transitions run from the starting state.
-    void incoming.offsetWidth;
-    incoming.classList.remove('is-entering');
-    current.classList.add('is-leaving');
-    current.addEventListener('transitionend', () => current.remove(), {once: true});
   };
 
-  // Pop the toast with the message Go returned, then auto-dismiss it.
-  const showToast = (message: string) => {
-    if (resultRef.current) {
-      resultRef.current.innerText = message;
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await ConnectionService.Disconnect();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+      void refreshState();
     }
-    if (toastRef.current) {
-      toastRef.current.classList.add('is-visible');
-    }
-    clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => {
-      if (toastRef.current) {
-        toastRef.current.classList.remove('is-visible');
-      }
-    }, 4000);
   };
 
-  const doGreet = () => {
-    let n = name || 'anonymous';
-    swapTitleName(n);
-    GreetService.Greet(n).then(showToast).catch(console.error);
-  };
-
-  useEffect(() => {
-    Events.On('time', (timeValue: any) => {
-      // On a narrow screen the full RFC1123 stamp is too wide for the footer, so
-      // show just the clock time there (matching the CSS breakpoint).
-      const full = timeValue.data;
-      const compact = (full.match(/\d{1,2}:\d{2}:\d{2}/) || [full])[0];
-      setTime(window.matchMedia('(max-width: 640px)').matches ? compact : full);
-    });
-    // Reload WML so it picks up the wml tags
-    WML.Reload();
-  }, []);
+  const connected = state !== 'disconnected';
 
   return (
-    <>
-      <main className="container">
-        <header className="brand">
-          <a className="brand-mark" data-wml-openURL="https://v3.wails.io" aria-label="Wails website">
-            <img src="/wails.png" className="brand-logo" alt="Wails logo"/>
-          </a>
-          <a className="brand-badge" data-wml-openURL="https://reactjs.org" aria-label="React">
-            <img src="/react.svg" alt="React logo"/>
-          </a>
-        </header>
-
-        <h1 className="title"><span className="title-accent">Wails +</span> <span className="title-name" ref={titleNameRef}><span className="title-name-text">React</span></span></h1>
-        <p className="subtitle">Build beautiful cross-platform apps with Go and React.</p>
-
-        <div className="greet">
-          <div className="input-box">
-            <svg className="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <input aria-label="input" className="input" value={name} onChange={(e) => setName(e.target.value)} type="text" placeholder="Your name" autoComplete="off"/>
-            <button aria-label="greet-btn" className="btn" onClick={doGreet}>Greet
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-            </button>
-          </div>
-        </div>
-      </main>
-
-      <hr className="footer-divider"/>
-      <footer className="footer">
-        <span className="footer-version"><span>{wailsVersion}</span></span>
-        <span className="footer-time">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          <span>{time}</span>
-        </span>
-        <a className="footer-docs" data-wml-openURL="https://v3.wails.io" aria-label="Wails documentation">Docs
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
-        </a>
-      </footer>
-
-      <div className="toast" ref={toastRef} role="status" aria-live="polite">
-        <span className="toast-label">From Go</span>
-        <span aria-label="result" className="toast-msg" ref={resultRef}></span>
+    <main className="flex min-h-screen items-center justify-center bg-white text-slate-900">
+      <div className="w-80 space-y-3">
+        <h1 className="flex items-center gap-2 text-lg font-medium">
+          {connected ? <PlugsConnectedIcon size={20} weight="fill" /> : <PlugsIcon size={20} />}
+          Gul
+          <span className="ml-auto text-xs text-slate-500">{state}</span>
+        </h1>
+        <input
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="server:port"
+          disabled={busy || connected}
+        />
+        <input
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="nickname"
+          disabled={busy || connected}
+        />
+        <input
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="password (optional)"
+          disabled={busy || connected}
+        />
+        {connected ? (
+          <button
+            className="w-full rounded-lg bg-slate-200 py-2 text-sm font-medium disabled:opacity-50"
+            onClick={disconnect}
+            disabled={busy}
+          >
+            Disconnect
+          </button>
+        ) : (
+          <button
+            className="w-full rounded-lg bg-blue-700 py-2 text-sm font-medium text-white disabled:opacity-50"
+            onClick={connect}
+            disabled={busy || !username}
+          >
+            Connect
+          </button>
+        )}
+        {error && <p className="text-xs text-red-600">{error}</p>}
+        <p className="text-xs text-slate-400">
+          M0: channel tree is printed to the application log.
+        </p>
       </div>
-    </>
-  )
+    </main>
+  );
 }
 
-export default App
+export default App;

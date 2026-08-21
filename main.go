@@ -4,7 +4,6 @@ import (
 	"embed"
 	"log"
 	"log/slog"
-	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -17,10 +16,6 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
-
-func init() {
-	application.RegisterEvent[string]("time")
-}
 
 func main() {
 	cfgDir, err := config.Dir()
@@ -44,7 +39,6 @@ func main() {
 		Name:        "Gul",
 		Description: "Voice chat for friends on top of Mumble",
 		Services: []application.Service{
-			application.NewService(&GreetService{}),
 			application.NewService(services.NewConnectionService(coreApp)),
 		},
 		Assets: application.AssetOptions{
@@ -64,18 +58,9 @@ func main() {
 			Backdrop:                application.MacBackdropTranslucent,
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
-		BackgroundColour: application.NewRGB(6, 7, 15),
+		BackgroundColour: application.NewRGB(255, 255, 255),
 		URL:              "/",
 	})
-
-	// Template demo event; removed together with GreetService once the
-	// Connect screen lands.
-	go func() {
-		for {
-			app.Event.Emit("time", time.Now().Format(time.RFC1123))
-			time.Sleep(time.Second)
-		}
-	}()
 
 	logger.Info("gul starting", "config_dir", cfgDir)
 	if err := app.Run(); err != nil {
