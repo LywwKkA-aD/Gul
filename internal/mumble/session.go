@@ -40,6 +40,11 @@ type sessionHooks struct {
 	userChange       func(*gumble.UserChangeEvent)
 	textMessage      func(*gumble.TextMessageEvent)
 	permissionDenied func(*gumble.PermissionDeniedEvent)
+	// audio receives raw Opus streams. It is attached before Dial like every
+	// other listener, and unlike the hooks above it owns its own goroutines:
+	// gumble delivers stream packets over an unbuffered channel written from
+	// the read loop.
+	audio gumble.AudioListener
 }
 
 // Session wraps one live gumble connection. A gumble Client is dead once
@@ -67,11 +72,20 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	addr, host := normalizeAddress(cfg.Address)
 	s := &Session{log: log.With("server", addr), addr: addr, host: host}
 
+	// The stub codec must be in gumble's registry before Dial: the Authenticate
+	// packet advertises Opus only when codec id 4 is registered, and without
+	// that flag the server refuses to route our voice.
+	registerVoiceCodec()
+
 	// Config must be fully populated before Dial: Client and Config are
 	// thread-unsafe once the read loop is running.
 	gc := gumble.NewConfig()
 	gc.Username = cfg.Username
 	gc.Password = cfg.Password
+	// Voice runs in passthrough: gumble hands us raw Opus frames instead of
+	// decoding them, and one packet carries one 10ms frame.
+	gc.OpusPassthrough = true
+	gc.AudioInterval = gumble.AudioDefaultInterval
 	gc.Attach(gumbleutil.Listener{
 		Connect:          hooks.connect,
 		Disconnect:       hooks.disconnect,
@@ -80,6 +94,9 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		TextMessage:      hooks.textMessage,
 		PermissionDenied: hooks.permissionDenied,
 	})
+	if hooks.audio != nil {
+		gc.AttachAudio(hooks.audio)
+	}
 
 	tlsConfig := tofu.TLSConfig(host)
 	if cfg.Certificate != nil {

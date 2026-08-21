@@ -49,6 +49,10 @@ type Manager struct {
 	dialFn    func(DialConfig, sessionHooks) (*Session, error)
 	backoffFn func(int) time.Duration
 
+	// voice is the transport for raw Opus. It outlives sessions: the audio
+	// pipeline holds its channels while connections come and go.
+	voice *voiceIO
+
 	mu         sync.Mutex
 	status     domain.ConnectionStatus
 	client     *gumble.Client
@@ -82,6 +86,7 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		backoffFn: backoffDelay,
 		accept:    make(chan struct{}, 1),
 		status:    domain.ConnectionStatus{State: domain.StateDisconnected},
+		voice:     newVoiceIO(log),
 	}
 	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
 		return dial(cfg, m.tofu, hooks, m.log)
@@ -233,6 +238,8 @@ func (m *Manager) Close() {
 	m.closed = true
 	m.pending = nil
 	m.mu.Unlock()
+
+	m.voice.close()
 }
 
 // run is the connect/reconnect loop. Exactly one runs per Connect.
@@ -332,6 +339,8 @@ func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent
 		permissionDenied: func(e *gumble.PermissionDeniedEvent) {
 			m.log.Warn("permission denied", "type", int(e.Type), "reason", e.String)
 		},
+		// One listener per session; it feeds the manager-wide voice buffer.
+		audio: m.voice.newListener(),
 	}
 
 	cert := m.cert
@@ -530,6 +539,8 @@ func (m *Manager) setSession(session *Session) {
 	m.session = session
 	m.client = session.client
 	m.mu.Unlock()
+
+	m.voice.bind(session.client)
 }
 
 func (m *Manager) clearSession() {
@@ -537,6 +548,8 @@ func (m *Manager) clearSession() {
 	m.session = nil
 	m.client = nil
 	m.mu.Unlock()
+
+	m.voice.unbind()
 }
 
 func (m *Manager) currentClient() *gumble.Client {
