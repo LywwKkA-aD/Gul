@@ -1,1 +1,107 @@
+/* Gul stylesheet entry point.
+
+   Order matters:
+     1. tailwindcss   - declares the theme/base/components/utilities layers,
+                        preflight lands in @layer base;
+     2. fonts.css     - @font-face is layer-agnostic, kept unlayered;
+     3. tokens.css    - the :root block from the prototype, verbatim; unlayered
+                        so nothing can outrank the custom properties;
+     4. base.css      - our reset/focus/scrollbars/keyframes, pulled INTO
+                        @layer base on purpose.
+
+   base.css must be layered. Unlayered CSS outranks every layered rule no
+   matter the specificity, and base.css carries the prototype's
+   `button, input, select, textarea { font: inherit; color: inherit }` - left
+   unlayered it silently beats every Tailwind colour and font utility applied
+   to a button or an input. Inside @layer base it still overrides preflight
+   (same layer, declared later) while utilities keep the last word. */
+
 @import "tailwindcss";
+@import "./styles/fonts.css";
+@import "./styles/tokens.css";
+@import "./styles/base.css" layer(base);
+
+/* Map the design tokens onto Tailwind's theme namespaces.
+
+   `inline` is mandatory: without it Tailwind resolves each variable at the
+   point of declaration and freezes the value, which would break the whole
+   point of the system - overriding --accent at runtime (state/theme.ts writes
+   it onto document.documentElement) must re-tint every derived color.
+
+   Only base tokens live here. The color-mix derivatives (--accent-hover,
+   --accent-active, --accent-weak, --accent-line, --accent-text, --speak-halo,
+   --sb-active, --sb-danger, --danger-weak, --warning-weak) are deliberately
+   left out: they are already plain custom properties, so use them directly as
+   bg-[var(--accent-hover)] / shadow-[0_0_0_1px_var(--accent-line)] instead of
+   minting a utility class for each. */
+
+@theme inline {
+  /* ─── Light surfaces ─── */
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-bg-4: var(--bg-4);
+
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+
+  /* ─── Text on light ─── */
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+
+  /* ─── Dark sidebar scale ─── */
+  --color-sb-0: var(--sb-0);
+  --color-sb-1: var(--sb-1);
+  --color-sb-2: var(--sb-2);
+  --color-sb-3: var(--sb-3);
+  --color-sb-line: var(--sb-line);
+  --color-sb-text-1: var(--sb-text-1);
+  --color-sb-text-2: var(--sb-text-2);
+  --color-sb-text-3: var(--sb-text-3);
+
+  /* ─── Accent, speech, semantics ─── */
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-speak: var(--speak);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  /* ─── Typography ─── */
+  --font-display: var(--font-display);
+  --font-ui: var(--font-ui);
+  /* --font-mono is also a Tailwind default key, so the theme layer ends up
+     emitting `--font-mono: var(--font-mono)` into :root. Harmless only because
+     tokens.css stays unlayered and therefore outranks it - one more reason not
+     to wrap tokens.css in a layer. */
+  --font-mono: var(--font-mono);
+
+  /* text-ui / text-sm / text-xs; --fs-sm and --fs-xs intentionally override
+     Tailwind's own 0.875rem / 0.75rem with the prototype's 13px / 11px. */
+  --text-ui: var(--fs-ui);
+  --text-sm: var(--fs-sm);
+  --text-xs: var(--fs-xs);
+  /* Tailwind pairs every text-* size with a line-height; pin both to the
+     prototype's body rhythm (1.45), which is what its inline font-size
+     switches inherit. Without this they would keep Tailwind's own ratios. */
+  --text-sm--line-height: 1.45;
+  --text-xs--line-height: 1.45;
+
+  /* ─── Radii ─── */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-pill: var(--r-pill);
+
+  /* ─── Animations. The gul-* keyframes themselves live in base.css. ───
+     gul-in is used with --t-fast (tooltip) and --t-mid (menu, banner) in the
+     prototype; animate-in takes the --t-mid flavour, the faster one is a
+     one-liner arbitrary value where it is needed. */
+  --animate-halo: gul-halo var(--t-pulse) var(--e-out) infinite;
+  --animate-bar: gul-bar 620ms var(--e-in-out) infinite;
+  --animate-level: gul-level 2600ms var(--e-in-out) infinite;
+  --animate-in: gul-in var(--t-mid) var(--e-out);
+  --animate-modal: gul-modal var(--t-slow) var(--e-out);
+}
