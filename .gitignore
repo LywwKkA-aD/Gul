@@ -24,6 +24,9 @@ frontend/bindings/
 # Wails / Task generated
 .task/
 build/linux/appimage/build
+build/linux/appimage/gul
+build/linux/appimage/gul.desktop
+build/linux/appimage/gul.png
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 build/ios/xcode/overlay.json
 build/ios/xcode/gen/

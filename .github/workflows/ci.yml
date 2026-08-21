@@ -129,9 +129,31 @@ jobs:
       - name: Run tests with race detector
         run: go test -race ./...
 
-      - name: Build application (Linux)
+      - name: Build Linux amd64 test DEB
         if: runner.os == 'Linux'
-        run: go build .
+        env:
+          GOARCH: amd64
+          GIT_COMMITTER_NAME: Gul contributors
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          wails3 task linux:create:deb ARCH=amd64
+
+          test "$(dpkg-deb --field bin/gul.deb Package)" = "gul"
+          test "$(dpkg-deb --field bin/gul.deb Architecture)" = "amd64"
+          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.2.0-1"
+          test "$(dpkg-deb --field bin/gul.deb Section)" = "net"
+          test "$(dpkg-deb --field bin/gul.deb Priority)" = "optional"
+          package_dependencies="$(dpkg-deb --field bin/gul.deb Depends)"
+          grep -Fq 'libgtk-4-1' <<<"$package_dependencies"
+          grep -Fq 'libwebkitgtk-6.0-4' <<<"$package_dependencies"
+          grep -Fq 'libpulse0' <<<"$package_dependencies"
+          grep -Fq 'libasound2t64' <<<"$package_dependencies"
+          package_contents="$(dpkg-deb --contents bin/gul.deb)"
+          grep -Eq ' ./usr/bin/gul$' <<<"$package_contents"
+          grep -Eq '^-rw-r--r-- .* ./usr/share/applications/gul.desktop$' <<<"$package_contents"
+
+          (cd bin && sha256sum gul.deb > gul.deb.sha256)
 
       - name: Build Windows test executable
         if: runner.os == 'Windows'
@@ -160,6 +182,17 @@ jobs:
           path: |
             bin/gul.exe
             bin/gul.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Linux test build
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gul-linux-amd64-${{ github.sha }}
+          path: |
+            bin/gul.deb
+            bin/gul.deb.sha256
           if-no-files-found: error
           retention-days: 14
 

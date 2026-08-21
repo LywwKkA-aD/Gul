@@ -1,13 +1,12 @@
 [Desktop Entry]
-Version=1.0
-Name=Gul
-Comment=A desktop Mumble voice client for friends
-# The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/gul %u
-Terminal=false
 Type=Application
+Name=Gul
+Exec=gul
 Icon=gul
-Categories=Utility;
-StartupWMClass=gul
-
- 
+Categories=Network;AudioVideo;
+Comment=A desktop Mumble voice client for friends
+Terminal=false
+Keywords=Mumble;Voice;Chat;
+Version=1.0
+GenericName=Mumble voice client
+StartupNotify=true
