@@ -11,8 +11,12 @@ import { Composer } from './Composer';
 // Consecutive messages of one sender within this window collapse into a group.
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 
+// Stable empty history: a zustand selector must return the same reference for
+// the same state, otherwise useSyncExternalStore loops forever (white screen).
+const NO_MESSAGES: ChatMessage[] = [];
+
 export function Chat({ channel }: { channel: ChannelNode | null }) {
-  const messages = useGulStore((s) => (channel ? (s.messages[channel.id] ?? []) : []));
+  const messages = useGulStore((s) => (channel ? (s.messages[channel.id] ?? NO_MESSAGES) : NO_MESSAGES));
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
 
