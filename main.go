@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer closeLog()
+	defer func() { _ = closeLog() }()
 
 	tofu, err := mumble.NewTOFUStore(cfgDir)
 	if err != nil {

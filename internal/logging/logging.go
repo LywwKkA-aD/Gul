@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	logFileName   = "gul.log"
-	maxLogSize    = 5 << 20 // rotate when the previous run left more than 5 MiB
+	logFileName     = "gul.log"
+	maxLogSize      = 5 << 20 // rotate when the previous run left more than 5 MiB
 	keptGenerations = 3
 )
 
@@ -40,10 +40,11 @@ func rotate(path string) {
 	if err != nil || info.Size() < maxLogSize {
 		return
 	}
+	// Rotation is best-effort: a failed rename must not block startup.
 	for i := keptGenerations - 1; i >= 1; i-- {
-		os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
 	}
-	os.Rename(path, path+".1")
+	_ = os.Rename(path, path+".1")
 }
 
 // fanout duplicates records to every wrapped handler.
