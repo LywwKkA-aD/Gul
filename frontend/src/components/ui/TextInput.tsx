@@ -1,10 +1,12 @@
-import type { InputHTMLAttributes } from 'react';
+import type { InputHTMLAttributes, Ref } from 'react';
 import { cx } from './cx';
 
 export interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   /** Addresses, ports and other machine text use --font-mono at --fs-sm,
       exactly like the "Адрес сервера" field in the prototype. */
   mono?: boolean;
+  /** React 19 ref-as-prop; InputHTMLAttributes does not declare it. */
+  ref?: Ref<HTMLInputElement>;
 }
 
 /* Prototype inputBase: 34px tall, no border - the 1px edge is a box-shadow

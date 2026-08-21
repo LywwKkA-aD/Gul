@@ -1,8 +1,11 @@
 import { Events } from '@wailsio/runtime';
 import { useGulStore } from './store';
-import type { ChannelNode, ChatMessage, ConnectionStatus, TofuPrompt } from './types';
+import { normalizeTree } from './types';
+import type { ChatMessage, ConnectionStatus, TofuPrompt, WireChannelNode } from './types';
 
-// Event names mirror internal/domain/events.go.
+// Event names mirror internal/domain/events.go. The wails runtime types these
+// events from the generated bindings (eventdata.d.ts); payloads are cast to
+// our local structural twins (enum values are the same string literals).
 const CONNECTION_STATE = 'connection:state';
 const CHANNELS_TREE = 'channels:tree';
 const CHAT_MESSAGE = 'chat:message';
@@ -16,20 +19,16 @@ export function subscribeGulEvents(): void {
   if (subscribed) return;
   subscribed = true;
 
-  const store = useGulStore.getState();
-
-  Events.On(CONNECTION_STATE, (e: { data: ConnectionStatus }) => {
-    useGulStore.getState().setStatus(e.data);
+  Events.On(CONNECTION_STATE, (e) => {
+    useGulStore.getState().setStatus(e.data as unknown as ConnectionStatus);
   });
-  Events.On(CHANNELS_TREE, (e: { data: ChannelNode }) => {
-    useGulStore.getState().setTree(e.data);
+  Events.On(CHANNELS_TREE, (e) => {
+    useGulStore.getState().setTree(normalizeTree(e.data as unknown as WireChannelNode));
   });
-  Events.On(CHAT_MESSAGE, (e: { data: ChatMessage }) => {
-    useGulStore.getState().appendMessage(e.data);
+  Events.On(CHAT_MESSAGE, (e) => {
+    useGulStore.getState().appendMessage(e.data as unknown as ChatMessage);
   });
-  Events.On(TOFU_MISMATCH, (e: { data: TofuPrompt }) => {
-    useGulStore.getState().setTofu(e.data);
+  Events.On(TOFU_MISMATCH, (e) => {
+    useGulStore.getState().setTofu(e.data as unknown as TofuPrompt);
   });
-
-  void store; // initial state comes from the first pushed events
 }
