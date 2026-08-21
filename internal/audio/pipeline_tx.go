@@ -55,17 +55,22 @@ func (t *txPipeline) tick(src FrameSource, muted bool) {
 	}
 }
 
-// finish closes an active transmission with an empty terminator packet.
-// DECISION: the terminator carries no audio (the alternative - holding
-// every frame one tick to flag the last one - is a hidden 10 ms latency
-// the plan explicitly forbids). Interop with the official client is part
-// of the M2 DoD checks.
+// finish closes an active transmission with one encoded frame of silence
+// carrying the terminator flag. DECISION: murmur does not route empty
+// audio packets (verified against the live stand), and holding every
+// frame one tick to flag the last one would be the hidden 10 ms latency
+// the plan explicitly forbids - so the transmission tail is a single
+// silent frame instead.
 func (t *txPipeline) finish() {
 	if !t.talking {
 		return
 	}
 	t.talking = false
-	if err := t.send(nil, true); err != nil {
+	clear(t.frame)
+	data, err := t.enc.Encode(t.frame, t.packet)
+	if err != nil {
+		t.log.Warn("terminator encode", "error", err)
+	} else if err := t.send(append([]byte(nil), data...), true); err != nil {
 		t.log.Warn("voice terminator", "error", err)
 	}
 	if err := t.enc.Reset(); err != nil {
