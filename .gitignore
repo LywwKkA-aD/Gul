@@ -21,6 +21,15 @@ node_modules/
 frontend/dist/
 frontend/bindings/
 
+# Wails / Task generated
+.task/
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+build/ios/xcode/overlay.json
+build/ios/xcode/gen/
+build/android/overlay.json
+build/android/gen/
+
 # OS / editor
 .DS_Store
 Thumbs.db

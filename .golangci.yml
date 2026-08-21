@@ -1,0 +1,40 @@
+# golangci-lint configuration (schema v2, see .github/workflows/ci.yml for the
+# pinned linter version). Deliberately minimal: the standard set plus explicit
+# govet / staticcheck / errcheck. No opinionated style linters - formatting is
+# enforced separately by the gofmt step in CI.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+
+  exclusions:
+    # Do not report issues in code carrying a "Code generated ... DO NOT EDIT."
+    # marker (wails3 bindings, protobuf, cgo shims).
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    paths:
+      # Vendored C/C++ upstreams (PLAN.md section 2) and frontend assets are
+      # not ours to lint.
+      - third_party
+      - frontend
+    rules:
+      # Unchecked errors in test helpers are noise, not defects.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+issues:
+  # CI should surface every finding, not the first 50.
+  max-issues-per-linter: 0
+  max-same-issues: 0

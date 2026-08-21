@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Hard pins (PLAN.md section 2): @latest is forbidden for the toolchain.
+  WAILS3_VERSION: v3.0.0-beta.11
+  GOLANGCI_LINT_VERSION: v2.13.1
+  NODE_VERSION: '24'
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    defaults:
+      run:
+        # Every scripted step below uses POSIX syntax; on Windows this selects
+        # Git Bash instead of PowerShell so a single script works everywhere.
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          # Built-in cache: Go module cache + build cache, keyed on go.sum.
+          # Needed from day one: the vendored APM (~1650 .cc) lands in M3.
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux dependencies (GTK4 + WebKitGTK 6.0)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            libwayland-dev \
+            build-essential \
+            pkg-config
+
+      - name: Install wails3 CLI
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Prepare embedded assets directory
+        # main.go carries //go:embed all:frontend/dist, but frontend/dist is
+        # gitignored, so it is absent on a fresh checkout and every Go package
+        # load would fail. Seed a placeholder that satisfies the embed pattern;
+        # the real bundle overwrites it in "Build frontend" below.
+        run: |
+          set -euo pipefail
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
+
+      - name: Generate Wails bindings
+        # frontend/bindings is gitignored and the frontend imports from it,
+        # so bindings must exist before the frontend is type-checked or built.
+        # Flags mirror build/Taskfile.yml -> generate:bindings.
+        run: wails3 generate bindings -ts -i -clean=true
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        # Produces frontend/dist, which main.go embeds; must precede any
+        # go vet / lint / test / build step.
+        working-directory: frontend
+        run: npm run build
+
+      - name: Check gofmt
+        run: |
+          set -euo pipefail
+          files=$(find . -type f -name '*.go' \
+            -not -path './.*' \
+            -not -path './third_party/*' \
+            -not -path './frontend/*')
+          if [ -z "$files" ]; then
+            echo "No Go files found - unexpected repository layout." >&2
+            exit 1
+          fi
+          unformatted=$(gofmt -l $files)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+          echo "gofmt: clean"
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Run tests with race detector
+        run: go test -race ./...
+
+      - name: Build application
+        run: go build .
