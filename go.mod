@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c
 	github.com/wailsapp/wails/v3 v3.0.0-beta.11
+	golang.org/x/net v0.56.0
 )
 
 require (

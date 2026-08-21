@@ -1,6 +1,9 @@
 package services
 
-import "gul/internal/core"
+import (
+	"gul/internal/core"
+	"gul/internal/domain"
+)
 
 // ConnectionService is the thin Wails bridge for connection control.
 // No logic here: marshal and delegate to core (PLAN.md §10.4).
@@ -17,9 +20,21 @@ func (s *ConnectionService) Connect(address, username, password string) error {
 }
 
 func (s *ConnectionService) Disconnect() error {
-	return s.app.Disconnect()
+	s.app.Disconnect()
+	return nil
 }
 
+// State returns just the lifecycle phase; kept for the M0 binding signature.
 func (s *ConnectionService) State() string {
-	return s.app.State()
+	return string(s.app.Status().State)
+}
+
+// Status returns the full snapshot the UI needs on mount.
+func (s *ConnectionService) Status() domain.ConnectionStatus {
+	return s.app.Status()
+}
+
+// AcceptFingerprint confirms a pending TOFU mismatch.
+func (s *ConnectionService) AcceptFingerprint() {
+	s.app.AcceptFingerprint()
 }
