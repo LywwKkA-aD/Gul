@@ -2,7 +2,11 @@
 *.pem
 *.key
 *.crt
+*.pfx
 *.p12
+.env
+.env.*
+!.env.example
 config.json
 *.wav
 !testdata/**/*.wav
@@ -34,6 +38,7 @@ build/android/overlay.json
 build/android/gen/
 
 # OS / editor
+.claude/
 .DS_Store
 Thumbs.db
 .idea/
