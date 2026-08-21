@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -35,10 +36,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           # Built-in cache: Go module cache + build cache, keyed on go.sum.
@@ -47,7 +48,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -121,12 +122,54 @@ jobs:
         run: go vet ./...
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
       - name: Run tests with race detector
         run: go test -race ./...
 
-      - name: Build application
+      - name: Build application (Linux)
+        if: runner.os == 'Linux'
         run: go build .
+
+      - name: Build Windows test executable
+        if: runner.os == 'Windows'
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          wails3 task windows:build ARCH=amd64 CGO_ENABLED=1
+          (cd bin && sha256sum gul.exe > gul.exe.sha256)
+
+      - name: Build universal macOS test DMG
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          wails3 task darwin:package:universal
+          microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' bin/gul.app/Contents/Info.plist)
+          test -n "$microphone_usage"
+          wails3 task darwin:create:dmg
+          (cd bin && shasum -a 256 gul.dmg > gul.dmg.sha256)
+
+      - name: Upload Windows test build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gul-windows-amd64-${{ github.sha }}
+          path: |
+            bin/gul.exe
+            bin/gul.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS test build
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gul-macos-universal-${{ github.sha }}
+          path: |
+            bin/gul.dmg
+            bin/gul.dmg.sha256
+          if-no-files-found: error
+          retention-days: 14

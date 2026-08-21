@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "0.1.0"
+		"file_version": "0.2.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A gul application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"ProductVersion": "0.2.0",
+			"CompanyName": "Gul contributors",
+			"FileDescription": "A desktop Mumble voice client for friends",
+			"LegalCopyright": "© 2026 Gul contributors",
+			"ProductName": "Gul",
+			"Comments": "Private voice chat over Mumble"
 		}
 	}
 }

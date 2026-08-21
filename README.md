@@ -4,7 +4,9 @@
 Mumble-сервера. Wails v3 + Go (cgo DSP) + React/TypeScript.
 
 Главный документ — [PLAN.md](PLAN.md) (архитектура, милстоуны, правила).
-Журнал решений — [docs/DECISIONS.md](docs/DECISIONS.md). Статус: **M0 — каркас и стенд**.
+Журнал решений — [docs/DECISIONS.md](docs/DECISIONS.md). Статус: **M2 — голосовое ядро**:
+два Gul-клиента и официальный Mumble-клиент разговаривают в обе стороны (пока в наушниках,
+без AEC/шумодава из M3).
 
 ## Версии (пины жёсткие, `@latest` запрещён)
 
@@ -15,7 +17,7 @@ Mumble-сервера. Wails v3 + Go (cgo DSP) + React/TypeScript.
 | Node | ≥ 22 (разработка ведётся на 24) |
 | React / TypeScript | 19.2.x / 6.0.2 (не 7.x) |
 | Vite / Tailwind / zustand | 8.x / 4.x / 5.x |
-| gumble (форк stieneee) | v0.0.0-20240610021017-a3449ae7108c |
+| gumble (форк Gul) | v0.0.0-20260821213018-6f2e820432c0 |
 | mumble-server (стенд) | mumblevoip/mumble-server:v1.5.915 |
 | golangci-lint | v2.13.1 |
 
@@ -42,6 +44,19 @@ task package        # упаковка под текущую ОС
 ```
 
 Первый запуск: `task murmur:up`, затем `task dev`, в окне Connect указать
-`127.0.0.1:64738` и ник — дерево каналов сервера появится в логе приложения
-(файл `gul.log` в конфиг-папке ОС, например `~/Library/Application Support/gul/`
-на macOS). Отпечаток сертификата сервера пинится по TOFU при первом подключении.
+`127.0.0.1:64738` и ник. Отпечаток сертификата сервера пинится по TOFU при первом
+подключении. Лог приложения лежит в конфиг-папке ОС, например
+`~/Library/Application Support/gul/gul.log` на macOS и `%AppData%\gul\gul.log` на Windows.
+
+## Тестовые сборки
+
+Workflow `CI` можно запустить вручную во вкладке Actions. После успешного прогона он
+прикладывает два артефакта на 14 дней (в конце имени указан commit SHA):
+
+- `gul-windows-amd64-<sha>` — portable `gul.exe` и SHA-256;
+- `gul-macos-universal-<sha>` — DMG с ad-hoc signed приложением для Apple Silicon и Intel Mac
+  и SHA-256.
+
+Это тестовые неподписанные релизным сертификатом сборки: Windows покажет Unknown Publisher,
+а macOS — предупреждение Gatekeeper. Полноценные подписанные установщики остаются задачей M4.
+На Windows также нужен WebView2 Runtime (в Windows 11 он уже входит в систему).
