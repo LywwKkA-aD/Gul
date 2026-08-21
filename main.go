@@ -4,8 +4,10 @@ import (
 	"embed"
 	"log"
 	"log/slog"
+	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"gul/internal/config"
 	"gul/internal/core"
@@ -75,12 +77,13 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
+			// A voice client must survive its window: quitting is Cmd+Q.
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
 	emitter.app = app
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Gul",
 		Width:     1080,
 		Height:    680,
@@ -94,6 +97,25 @@ func main() {
 		BackgroundColour: application.NewRGB(238, 240, 244),
 		URL:              "/",
 	})
+
+	// macOS window conventions for a chat client: the close button hides the
+	// window while the app (and the connection) keeps living in the dock.
+	// Wails' built-in reopen handler shows hidden windows on a dock click;
+	// activation via Cmd+Tab is covered here. Cmd+Q terminates natively and
+	// never passes through WindowClosing, so it is not affected.
+	if runtime.GOOS == "darwin" {
+		win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			e.Cancel()
+			win.Hide()
+		})
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidBecomeActive, func(*application.ApplicationEvent) {
+			// Restore only a window hidden by the close button; a minimised
+			// one keeps native Cmd+M semantics.
+			if !win.IsVisible() && !win.IsMinimised() {
+				win.Show()
+			}
+		})
+	}
 
 	logger.Info("gul starting", "version", core.Version, "config_dir", cfgDir)
 	if err := app.Run(); err != nil {
