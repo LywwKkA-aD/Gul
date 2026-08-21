@@ -55,6 +55,47 @@ export interface TofuPrompt {
   newFingerprint: string;
 }
 
+/** Payload of user:talking - one gate transition of one session. */
+export interface TalkingEvent {
+  session: number;
+  hash?: string;
+  talking: boolean;
+}
+
+/** Payload of audio:levels - meters in dBFS, roughly every 50 ms. */
+export interface AudioLevels {
+  micDb: number;
+  outDb: number;
+}
+
+/** One selectable device; id "" means the system default. */
+export interface AudioDevice {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
+/** Meter floor: the engine reports about -96 dBFS on digital silence, and
+    that is also what we show while it is not running at all. */
+export const SILENT_DB = -96;
+
+/** Bottom of the visible meter range. Below -60 dBFS a mic is inaudible, so
+    the whole usable span maps onto the bar instead of a stub at its left. */
+export const METER_FLOOR_DB = -60;
+
+/** dBFS -> 0..100 % of the meter width. */
+export function meterPercent(db: number): number {
+  if (!Number.isFinite(db)) return 0;
+  const pct = ((db - METER_FLOOR_DB) / -METER_FLOOR_DB) * 100;
+  return Math.min(100, Math.max(0, pct));
+}
+
+/** Per-user gain bounds for the member-list slider (1.0 = unity). */
+export const VOLUME_MIN = 0;
+export const VOLUME_MAX = 2;
+export const VOLUME_STEP = 0.05;
+export const VOLUME_UNITY = 1;
+
 export function normalizeTree(node: WireChannelNode): ChannelNode {
   return {
     id: node.id,

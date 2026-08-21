@@ -4,11 +4,13 @@ import { subscribeGulEvents } from './state/events';
 import { ConnectScreen } from './app/ConnectScreen';
 import { MainScreen } from './app/MainScreen';
 import { TofuDialog } from './components/TofuDialog';
+import { Settings } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 function App() {
   const state = useGulStore((s) => s.status.state);
   const tofu = useGulStore((s) => s.tofu);
+  const settingsOpen = useGulStore((s) => s.settingsOpen);
 
   useEffect(() => {
     subscribeGulEvents();
@@ -22,6 +24,9 @@ function App() {
   return (
     <ErrorBoundary>
       {showMain ? <MainScreen /> : <ConnectScreen />}
+      {/* Modals live outside the screens: the main grid dims itself while
+          reconnecting, and a dialog must stay usable on top of that. */}
+      {settingsOpen && <Settings />}
       {tofu && <TofuDialog prompt={tofu} />}
     </ErrorBoundary>
   );

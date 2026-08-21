@@ -283,12 +283,12 @@ mic s16[480]  (из capture ring)
 - **Готово, когда:** два инстанса переписываются и ходят по каналам; убийство сервера → реконнект без рестарта; UI соответствует прототипу по чек-листу A/B/C.
 
 ### M2 — Голос без DSP (цель: «слышим друг друга»)
-- [ ] Вендор miniaudio + своя cgo-обёртка: два устройства s16/48k/480, C-ring'и, выбор устройств в Settings, watchdog смены устройств.
-- [ ] Вендор libopus 1.6.1 + internal/dsp/opus (encoder/decoder, conformance-тест с pion/opus как независимой проверкой декода).
-- [ ] Свой форк gumble с passthrough; регистрация stub-кодека; TX: mic → s16 → encode → `Conn.WriteAudio` (свой sequence, final); mute.
-- [ ] RX: неблокирующая обёртка приёма → per-user decode → repack 20мс→10мс → джиттер (адаптивный) → микшер → playback; deafen; per-user volume по User.Hash.
-- [ ] Оценка дрейфа (drift.go) — пока только метрика в лог.
-- [ ] Индикация речи (talking) в дереве; RMS-метры → «тест микрофона».
+- [x] Вендор miniaudio + своя cgo-обёртка: два устройства s16/48k/480, C-ring'и, выбор устройств в Settings, watchdog смены устройств.
+- [x] Вендор libopus 1.6.1 + internal/dsp/opus (encoder/decoder, conformance-тест с pion/opus как независимой проверкой декода).
+- [x] Свой форк gumble с passthrough; регистрация stub-кодека; TX: mic → s16 → encode → `Conn.WriteAudio` (свой sequence, final); mute.
+- [x] RX: неблокирующая обёртка приёма → per-user decode → repack 20мс→10мс → джиттер (адаптивный) → микшер → playback; deafen; per-user volume по User.Hash.
+- [x] Оценка дрейфа (drift.go) — пока только метрика в лог.
+- [x] Индикация речи (talking) в дереве; RMS-метры → «тест микрофона».
 - [ ] Замер mouth-to-ear через VoiceTargetLoopback (ID 31) — зафиксировать в docs.
 - **Готово, когда:** два клиента разговаривают через докер-murmur В НАУШНИКАХ (эха ещё нет); наш клиент разговаривает с ОФИЦИАЛЬНЫМ клиентом Mumble в обе стороны; собеседник вышел/зашёл — его громкость сохранилась; CPU в разговоре < ~5%.
 

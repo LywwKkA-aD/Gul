@@ -67,18 +67,25 @@ function ChannelRow({ channel, depth }: { channel: ChannelNode; depth: number })
 }
 
 function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index: number }) {
+  // A boolean selector: the Set itself is replaced on every transition, but
+  // this stays referentially stable, so the row only re-renders on its own
+  // gate. Never return the Set (or a derived array) from here.
+  const speaking = useGulStore((s) => s.talkingSessions.has(user.session));
+
   return (
     <li
       style={{ paddingLeft: `${12 + depth * 14 + 20}px`, height: 'var(--item-h)' }}
       className={cx(
-        'flex min-w-0 items-center gap-2 pr-2 text-sm',
-        user.isSelf ? 'text-sb-text-1' : 'text-sb-text-3',
+        'flex min-w-0 items-center gap-2 pr-2 text-sm transition-colors duration-[var(--t-fast)]',
+        // The prototype lifts a speaking name to the brightest sidebar text.
+        speaking || user.isSelf ? 'text-sb-text-1' : 'text-sb-text-3',
       )}
     >
       <Avatar
         size={20}
         tint={tintFor(user)}
         initials={initialsOf(user.name)}
+        speaking={speaking}
         muted={user.selfMute}
         deaf={user.selfDeaf}
         self={user.isSelf}

@@ -1,7 +1,14 @@
 import { Events } from '@wailsio/runtime';
 import { useGulStore } from './store';
 import { normalizeTree } from './types';
-import type { ChatMessage, ConnectionStatus, TofuPrompt, WireChannelNode } from './types';
+import type {
+  AudioLevels,
+  ChatMessage,
+  ConnectionStatus,
+  TalkingEvent,
+  TofuPrompt,
+  WireChannelNode,
+} from './types';
 
 // Event names mirror internal/domain/events.go. The wails runtime types these
 // events from the generated bindings (eventdata.d.ts); payloads are cast to
@@ -10,6 +17,8 @@ const CONNECTION_STATE = 'connection:state';
 const CHANNELS_TREE = 'channels:tree';
 const CHAT_MESSAGE = 'chat:message';
 const TOFU_MISMATCH = 'tofu:mismatch';
+const USER_TALKING = 'user:talking';
+const AUDIO_LEVELS = 'audio:levels';
 
 let subscribed = false;
 
@@ -30,5 +39,15 @@ export function subscribeGulEvents(): void {
   });
   Events.On(TOFU_MISMATCH, (e) => {
     useGulStore.getState().setTofu(e.data as unknown as TofuPrompt);
+  });
+  Events.On(USER_TALKING, (e) => {
+    const talk = e.data as unknown as TalkingEvent;
+    useGulStore.getState().setTalking(talk.session, talk.talking);
+  });
+  // Meters land here about every 50 ms while the engine runs. The store keeps
+  // them as two numbers, so a selector reading one of them stays cheap.
+  Events.On(AUDIO_LEVELS, (e) => {
+    const levels = e.data as unknown as AudioLevels;
+    useGulStore.getState().setLevels(levels.micDb, levels.outDb);
   });
 }
