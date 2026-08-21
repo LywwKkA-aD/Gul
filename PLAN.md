@@ -263,12 +263,12 @@ mic s16[480]  (из capture ring)
 Работать строго по порядку. Каждый милстоун = отдельная ветка `m<N>-<slug>` и PR. Вперёд не забегать.
 
 ### M0 — Каркас и стенд (цель: «пустое приложение видит сервер»)
-- [ ] `wails3 init -t react` (шаблона react-ts НЕ существует; react = TS-вариант). Сразу после: React 18→19, TypeScript 6.0.2, Tailwind v4, `npm run build` для проверки. Версии Wails/Go/Node зафиксировать в README.
-- [ ] `deploy/murmur/docker-compose.yml`: `mumblevoip/mumble-server:v1.5.915`, конфиг через `MUMBLE_CONFIG_*`, `MUMBLE_SUPERUSER_PASSWORD` задать явно; `task murmur:up`.
-- [ ] Подключить форк gumble (пин коммита): Connect-экран → соединение → дерево каналов и события в лог. TOFU-заготовка (сохранение отпечатка).
-- [ ] Смоук-тест против сервера v1.5.915: подключение, каналы, текст (голос — M2).
-- [ ] CI: матрица 3 ОС, gofmt+vet+golangci-lint, frontend lint (typescript-eslint на TS 6.0.2) + build, `go test -race`. Кэш Go build (APM появится в M3, но кэш нужен сразу).
-- [ ] Структурное логирование с уровнями + ротация в конфиг-папке (наблюдаемость с первого дня).
+- [x] `wails3 init -t react` (шаблона react-ts НЕ существует; react = TS-вариант). Сразу после: React 18→19, TypeScript 6.0.2, Tailwind v4, `npm run build` для проверки. Версии Wails/Go/Node зафиксировать в README.
+- [x] `deploy/murmur/docker-compose.yml`: `mumblevoip/mumble-server:v1.5.915`, конфиг через `MUMBLE_CONFIG_*`, `MUMBLE_SUPERUSER_PASSWORD` задать явно; `task murmur:up`.
+- [x] Подключить форк gumble (пин коммита): Connect-экран → соединение → дерево каналов и события в лог. TOFU-заготовка (сохранение отпечатка).
+- [x] Смоук-тест против сервера v1.5.915: подключение, каналы, текст (голос — M2).
+- [x] CI: матрица 3 ОС, gofmt+vet+golangci-lint, frontend lint (typescript-eslint на TS 6.0.2) + build, `go test -race`. Кэш Go build (APM появится в M3, но кэш нужен сразу).
+- [x] Структурное логирование с уровнями + ротация в конфиг-папке (наблюдаемость с первого дня).
 - **Готово, когда:** приложение собирается на 3 ОС в CI; локально коннектится к докер-murmur и печатает каналы/юзеров.
 
 ### M1 — Текст и навигация (цель: «полноценный текстовый клиент»)
