@@ -3,7 +3,7 @@ module gul
 go 1.25.0
 
 require (
-	github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c
+	github.com/LywwKkA-aD/gumble v0.0.0-20260821182552-e23f489376a8
 	github.com/wailsapp/wails/v3 v3.0.0-beta.11
 	golang.org/x/net v0.56.0
 )

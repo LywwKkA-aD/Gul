@@ -3,7 +3,7 @@ package mumble
 import (
 	"sort"
 
-	"github.com/stieneee/gumble/gumble"
+	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"gul/internal/domain"
 )

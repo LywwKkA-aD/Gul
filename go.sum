@@ -1,3 +1,5 @@
+github.com/LywwKkA-aD/gumble v0.0.0-20260821182552-e23f489376a8 h1:0yLi6kc7aBPVDYnvCo4PoaoH0u8gxllzaEtpKqEZmnE=
+github.com/LywwKkA-aD/gumble v0.0.0-20260821182552-e23f489376a8/go.mod h1:6RKYoODABXwmTm3bYZZUMQ9KMuhm9D7UjwrUTqMu2ds=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9g=
@@ -22,8 +24,6 @@ github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWE
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c h1:xDFXk/q55qdUVEbIYDIxeorDOsgfQnuRaKsIf3WStgg=
-github.com/stieneee/gumble v0.0.0-20240610021017-a3449ae7108c/go.mod h1:VSTG68FvzgzONwOlOj2fr++KG1cSxkGwcO1iekQfMQs=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/wailsapp/wails/v3 v3.0.0-beta.11 h1:+DA9+DjHq/zV1Wkrg637WD0nSKly20w6jYbe/4LCwk4=

@@ -3,7 +3,7 @@ package mumble
 import (
 	"testing"
 
-	"github.com/stieneee/gumble/gumble"
+	"github.com/LywwKkA-aD/gumble/gumble"
 )
 
 // newChannel builds a detached gumble channel. Every field the snapshot reads

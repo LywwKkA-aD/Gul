@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stieneee/gumble/gumble"
+	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"gul/internal/domain"
 )

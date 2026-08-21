@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stieneee/gumble/gumble"
-	"github.com/stieneee/gumble/gumbleutil"
+	"github.com/LywwKkA-aD/gumble/gumble"
+	"github.com/LywwKkA-aD/gumble/gumbleutil"
 )
 
 // dialTimeout bounds one attempt end to end: gumble.DialWithDialer only returns
