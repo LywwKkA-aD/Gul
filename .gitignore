@@ -1,0 +1,33 @@
+# Secrets and local artifacts (PLAN.md §10.7)
+*.pem
+*.key
+*.crt
+*.p12
+config.json
+*.wav
+!testdata/**/*.wav
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# Wails build output (build/ configs stay tracked)
+build/bin/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/bindings/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Debug / temp
+*.log
+*.pprof
