@@ -10,6 +10,9 @@ services:
       MUMBLE_CONFIG_USERS: "64"
       # Set explicitly, otherwise the server generates one and buries it in the logs.
       MUMBLE_SUPERUSER_PASSWORD: "devsuperuser"
+      # Dev stand only: smoke tests reconnect rapidly and trip the default
+      # autoban (10 attempts / 120s -> 300s global ban). Keep enabled in prod.
+      MUMBLE_CONFIG_AUTOBANATTEMPTS: "0"
     volumes:
       # Owned by UID/GID 10000:10000 inside the container.
       - mumble-data:/data

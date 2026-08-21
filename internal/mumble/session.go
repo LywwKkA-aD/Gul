@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/stieneee/gumble/gumble"
@@ -49,6 +50,10 @@ type Session struct {
 	log    *slog.Logger
 	addr   string
 	host   string
+	// closeOnce funnels every Disconnect into one actual client call:
+	// gumble's Client.Disconnect writes its state without a lock, and both the
+	// reconnect loop and stopRun legitimately try to close the same session.
+	closeOnce sync.Once
 }
 
 // Dial opens a session with plain logging hooks. It is the M0 entry point kept
@@ -90,16 +95,21 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	return s, nil
 }
 
-// Disconnect closes the connection. gumble reports "already disconnected" as an
-// error, which is not interesting to the caller here.
+// Disconnect closes the connection exactly once; later calls are no-ops.
+// gumble reports "already disconnected" as an error, which is not interesting
+// to any caller here.
 func (s *Session) Disconnect() error {
 	if s == nil || s.client == nil {
 		return nil
 	}
-	if s.client.State() == gumble.StateDisconnected {
-		return nil
-	}
-	return s.client.Disconnect()
+	var err error
+	s.closeOnce.Do(func() {
+		if s.client.State() == gumble.StateDisconnected {
+			return
+		}
+		err = s.client.Disconnect()
+	})
+	return err
 }
 
 func (s *Session) State() string {
