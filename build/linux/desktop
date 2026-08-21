@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=My Product
+Comment=A gul application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/gul %u
+Terminal=false
+Type=Application
+Icon=gul
+Categories=Utility;
+StartupWMClass=gul
+
+ 
