@@ -45,7 +45,10 @@ export function Chat({ channel }: { channel: ChannelNode | null }) {
 
   return (
     <>
-      <header className="flex h-12 shrink-0 items-center gap-2 px-4 shadow-[0_1px_0_var(--line)]">
+      <header
+        className="flex h-12 shrink-0 items-center gap-2 px-4 shadow-[0_1px_0_var(--line)]"
+        style={{ '--wails-draggable': 'drag' } as React.CSSProperties}
+      >
         <HashIcon size={16} className="text-text-3" />
         <h2 className="min-w-0 truncate text-sm font-medium">{channel?.name ?? '…'}</h2>
       </header>

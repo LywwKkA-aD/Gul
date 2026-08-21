@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import { ChatService } from '../../bindings/gul/services';
 import { findChannel, selfUser, useGulStore } from '../state/store';
 import type { ChatMessage } from '../state/types';
@@ -7,6 +7,10 @@ import { Chat } from '../components/Chat';
 import { MemberList } from '../components/MemberList';
 import { BottomBar } from '../components/BottomBar';
 import { ReconnectBanner } from '../components/ReconnectBanner';
+
+const IS_MAC = navigator.userAgent.includes('Mac');
+// Wails: elements with this CSS property act as the window drag handle.
+const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
 
 export function MainScreen() {
   const status = useGulStore((s) => s.status);
@@ -45,8 +49,17 @@ export function MainScreen() {
         }
       >
         <aside data-sidebar className="flex min-h-0 flex-col bg-sb-1 text-sb-text-1">
-          <header className="flex h-12 shrink-0 items-center px-4 shadow-[0_1px_0_var(--sb-line)]">
-            <span className="font-display text-[13px] tracking-wide">{status.server || 'СЕРВЕР'}</span>
+          <header
+            className={
+              'flex h-12 shrink-0 items-center shadow-[0_1px_0_var(--sb-line)] ' +
+              // Hidden-inset titlebar on macOS: keep clear of the traffic lights.
+              (IS_MAC ? 'pl-[78px] pr-4' : 'px-4')
+            }
+            style={DRAG_REGION}
+          >
+            <span className="min-w-0 truncate font-display text-[13px] tracking-wide">
+              {status.server || 'СЕРВЕР'}
+            </span>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto py-2">
             <ChannelTree />
