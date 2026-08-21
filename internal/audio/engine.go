@@ -1,0 +1,232 @@
+package audio
+
+import (
+	"log/slog"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"gul/internal/audio/miniaudio"
+	"gul/internal/mumble"
+)
+
+// FrameSource and FrameSink abstract the audio devices so the whole
+// pipeline runs in tests on synthetic frames (PLAN.md 4.6).
+type FrameSource interface {
+	ReadFrame(dst []int16) bool
+}
+
+type FrameSink interface {
+	WriteFrame(src []int16) bool
+}
+
+// Callbacks are invoked from the DSP goroutine and must return quickly
+// (hand off to a channel or an atomic, never block).
+type Callbacks struct {
+	// OnTalking reports a remote stream starting or stopping.
+	OnTalking func(session uint32, hash string, talking bool)
+	// OnLevels reports mic and output levels in dBFS every ~50 ms.
+	OnLevels func(micDB, outDB float64)
+}
+
+// Config wires the engine to the voice transport.
+type Config struct {
+	// Packets delivers incoming raw Opus packets (mumble passthrough).
+	Packets <-chan mumble.VoicePacket
+	// Send transmits one encoded frame; it takes ownership of the bytes.
+	Send func(opus []byte, final bool) error
+	// Bitrate is the encoder target (server MaxBitrate already clamped).
+	Bitrate int
+
+	Log       *slog.Logger
+	Callbacks Callbacks
+}
+
+// Engine runs the M2 voice pipeline: capture -> opus -> transport and
+// transport -> jitter -> mixer -> playback. DSP state lives on one locked
+// goroutine; the public methods only flip atomics or queue intents.
+type Engine struct {
+	cfg Config
+
+	mu       sync.Mutex
+	ctx      *miniaudio.Context
+	capture  *miniaudio.Capture
+	playback *miniaudio.Playback
+	stop     chan struct{}
+	done     chan struct{}
+
+	state engineState
+}
+
+// engineState is the cross-goroutine control surface of the DSP loop.
+type engineState struct {
+	muted    atomic.Bool
+	deafened atomic.Bool
+	volumes  sync.Map // user hash -> float32
+}
+
+// NewEngine builds an engine over the given transport config.
+func NewEngine(cfg Config) *Engine {
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
+	if cfg.Bitrate <= 0 {
+		cfg.Bitrate = 40000
+	}
+	return &Engine{cfg: cfg}
+}
+
+// Devices enumerates playback and capture devices for the settings UI.
+func (e *Engine) Devices() (playback, capture []miniaudio.DeviceInfo, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ctx != nil {
+		return e.ctx.Devices()
+	}
+	ctx, err := miniaudio.NewContext()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = ctx.Close() }()
+	return ctx.Devices()
+}
+
+// Start opens the devices (nil ids = system defaults) and launches the DSP
+// goroutine. The engine runs until Stop.
+func (e *Engine) Start(captureID, playbackID *miniaudio.DeviceID) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.done != nil {
+		return nil // already running
+	}
+	ctx, err := miniaudio.NewContext()
+	if err != nil {
+		return err
+	}
+	const ringFrames = 16 // 160 ms of slack between callback and DSP tick
+	capDev, err := ctx.OpenCapture(captureID, ringFrames)
+	if err != nil {
+		_ = ctx.Close()
+		return err
+	}
+	pbDev, err := ctx.OpenPlayback(playbackID, ringFrames)
+	if err != nil {
+		capDev.Close()
+		_ = ctx.Close()
+		return err
+	}
+	if err := capDev.Start(); err != nil {
+		e.closeDevicesLocked(ctx, capDev, pbDev)
+		return err
+	}
+	if err := pbDev.Start(); err != nil {
+		e.closeDevicesLocked(ctx, capDev, pbDev)
+		return err
+	}
+	if rate := capDev.InternalSampleRate(); rate != SampleRate {
+		e.cfg.Log.Warn("capture resampled by miniaudio", "device_rate", rate)
+	}
+	if rate := pbDev.InternalSampleRate(); rate != SampleRate {
+		e.cfg.Log.Warn("playback resampled by miniaudio", "device_rate", rate)
+	}
+
+	e.ctx, e.capture, e.playback = ctx, capDev, pbDev
+	e.stop = make(chan struct{})
+	e.done = make(chan struct{})
+	go e.run(capDev, pbDev, e.stop, e.done)
+	e.cfg.Log.Info("voice engine started")
+	return nil
+}
+
+func (e *Engine) closeDevicesLocked(ctx *miniaudio.Context, devs ...interface{ Close() }) {
+	for _, d := range devs {
+		d.Close()
+	}
+	_ = ctx.Close()
+}
+
+// Stop terminates the DSP goroutine and releases the devices.
+func (e *Engine) Stop() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.done == nil {
+		return
+	}
+	close(e.stop)
+	<-e.done
+	e.capture.Close()
+	e.playback.Close()
+	_ = e.ctx.Close()
+	e.ctx, e.capture, e.playback = nil, nil, nil
+	e.stop, e.done = nil, nil
+	e.cfg.Log.Info("voice engine stopped")
+}
+
+// SetMute stops sending mic frames (a terminator closes the transmission).
+func (e *Engine) SetMute(muted bool) { e.state.muted.Store(muted) }
+
+// SetDeafen stops mixing remote streams (silence keeps flowing to the
+// device so the ring stays warm).
+func (e *Engine) SetDeafen(deafened bool) { e.state.deafened.Store(deafened) }
+
+// SetUserVolume sets a per-user gain (1.0 = unity) keyed by the stable
+// certificate hash; survives the peer reconnecting.
+func (e *Engine) SetUserVolume(hash string, volume float32) {
+	if volume < 0 {
+		volume = 0
+	}
+	if volume > 4 {
+		volume = 4
+	}
+	e.state.volumes.Store(hash, volume)
+}
+
+// run is the DSP goroutine (PLAN.md 4.3-4.4, M2 shape: no APM/RNNoise yet).
+func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	tx, err := newTxPipeline(e.cfg)
+	if err != nil {
+		e.cfg.Log.Error("tx pipeline", "error", err)
+		return
+	}
+	defer tx.close()
+	rx := newRxPipeline(e.cfg)
+	defer rx.close()
+
+	drift := NewDrift()
+	ticker := time.NewTicker(FrameMs * time.Millisecond)
+	defer ticker.Stop()
+
+	tick := 0
+	for {
+		select {
+		case <-stop:
+			tx.finish()
+			return
+		case <-ticker.C:
+		}
+		tick++
+
+		rx.drain(e.cfg.Packets)
+		tx.tick(src, e.state.muted.Load())
+		rx.tick(sink, e.state.deafened.Load(), &e.state.volumes)
+
+		if tick%5 == 0 && e.cfg.Callbacks.OnLevels != nil {
+			e.cfg.Callbacks.OnLevels(DBFS(tx.micRMS), DBFS(rx.outRMS))
+		}
+		if tick%100 == 0 {
+			if dev, ok := src.(interface{ Stats() miniaudio.Stats }); ok {
+				drift.Sample(dev.Stats().CallbackFrames, time.Now())
+			}
+		}
+		if tick%1000 == 0 {
+			if ppm, ok := drift.PPM(); ok {
+				e.cfg.Log.Debug("capture clock drift", "ppm", int(ppm))
+			}
+		}
+	}
+}
