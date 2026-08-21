@@ -98,7 +98,11 @@ exec zig cc -fno-sanitize=all -target x86_64-macos-none -isysroot /opt/macos-sdk
 ZIGWRAP
 RUN chmod +x /usr/local/bin/zcc-darwin-amd64
 
-# Windows amd64 - uses Zig's bundled mingw
+# Windows uses Zig's bundled mingw. In this cgo pipeline Zig 0.14's default
+# C safety checks introduce UBSan runtime references, while -mwindows and
+# -mconsole do not reach the final PE subsystem. Disable the sanitizer and
+# translate the Go linker's intent explicitly.
+# Windows amd64
 COPY <<'ZIGWRAP' /usr/local/bin/zcc-windows-amd64
 #!/bin/sh
 ARGS=""
@@ -110,11 +114,13 @@ for arg in "$@"; do
     fi
     case "$arg" in
         -target) SKIP_NEXT=1 ;;
+        -mwindows) ARGS="$ARGS -Wl,/subsystem:windows" ;;
+        -mconsole) ARGS="$ARGS -Wl,/subsystem:console" ;;
         -Wl,*) ;;
         *) ARGS="$ARGS $arg" ;;
     esac
 done
-exec zig cc -target x86_64-windows-gnu $ARGS
+exec zig cc -fno-sanitize=all -target x86_64-windows-gnu $ARGS
 ZIGWRAP
 RUN chmod +x /usr/local/bin/zcc-windows-amd64
 
@@ -130,11 +136,13 @@ for arg in "$@"; do
     fi
     case "$arg" in
         -target) SKIP_NEXT=1 ;;
+        -mwindows) ARGS="$ARGS -Wl,/subsystem:windows" ;;
+        -mconsole) ARGS="$ARGS -Wl,/subsystem:console" ;;
         -Wl,*) ;;
         *) ARGS="$ARGS $arg" ;;
     esac
 done
-exec zig cc -target aarch64-windows-gnu $ARGS
+exec zig cc -fno-sanitize=all -target aarch64-windows-gnu $ARGS
 ZIGWRAP
 RUN chmod +x /usr/local/bin/zcc-windows-arm64
 
