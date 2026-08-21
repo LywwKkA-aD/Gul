@@ -1,0 +1,7 @@
+miniaudio 0.11.25
+source: https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/{miniaudio.h,miniaudio.c,LICENSE}
+sha256 (pristine, before patches):
+  miniaudio.h ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89
+  miniaudio.c ab1984bb9804ffd7b0303813595d0b345a8a86c34da1daffc353a14b34102a65
+patches: patches/*.patch (applied on top by this script)
+update: scripts/vendor-miniaudio.sh
