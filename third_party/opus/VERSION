@@ -1,0 +1,5 @@
+opus 1.6.1
+tarball: https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz
+sha256: 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
+subset: include/ celt/ silk/ src/ COPYING *.mk (float build, no dnn/)
+update: scripts/vendor-opus.sh
