@@ -50,12 +50,13 @@ type App struct {
 
 	notifyMu sync.Mutex
 
-	mu      sync.Mutex
-	ctrl    mumble.Controller
-	status  domain.ConnectionStatus
-	tree    domain.ChannelNode
-	history map[uint32][]domain.ChatMessage
-	seq     uint64
+	mu       sync.Mutex
+	ctrl     mumble.Controller
+	status   domain.ConnectionStatus
+	tree     domain.ChannelNode
+	history  map[uint32][]domain.ChatMessage
+	seq      uint64
+	username string
 }
 
 // New builds the application core. The Mumble controller is injected later
@@ -130,6 +131,7 @@ func (a *App) Connect(address, username, password string) error {
 	// Reconnects do not pass through here and keep their history.
 	a.mu.Lock()
 	a.history = make(map[uint32][]domain.ChatMessage)
+	a.username = username
 	a.mu.Unlock()
 
 	a.log.Info("connect requested", "address", address, "username", username)
@@ -170,7 +172,22 @@ func (a *App) SendMessage(channelID uint32, text string) error {
 	if err != nil {
 		return err
 	}
-	return ctrl.SendMessage(channelID, text)
+	if err := ctrl.SendMessage(channelID, text); err != nil {
+		return err
+	}
+
+	// Local echo: Mumble servers deliver a text message to the other channel
+	// members only, never back to the sender - without this our own messages
+	// would exist for everyone except us.
+	a.mu.Lock()
+	sender := a.username
+	a.mu.Unlock()
+	a.HandleMessage(mumble.RawMessage{
+		ChannelID: channelID,
+		Sender:    sender,
+		HTML:      EscapePlain(text),
+	})
+	return nil
 }
 
 // AcceptFingerprint confirms a pending TOFU mismatch and retries the connection.

@@ -155,9 +155,16 @@ func TestChatServiceDelegates(t *testing.T) {
 		t.Fatalf("blank send err = %v, want %v", err, core.ErrEmptyMessage)
 	}
 
-	app.HandleMessage(mumble.RawMessage{ChannelID: 3, Sender: "bob", HTML: "<b>hi</b><script>x</script>"})
+	// A successful send is echoed into local history (the server never sends
+	// our own text back), a rejected one is not.
 	hist := svc.History(3)
-	if len(hist) != 1 || hist[0].HTML != "<b>hi</b>" {
+	if len(hist) != 1 || hist[0].HTML != "hello" {
+		t.Fatalf("History after send = %+v, want local echo [hello]", hist)
+	}
+
+	app.HandleMessage(mumble.RawMessage{ChannelID: 3, Sender: "bob", HTML: "<b>hi</b><script>x</script>"})
+	hist = svc.History(3)
+	if len(hist) != 2 || hist[1].HTML != "<b>hi</b>" {
 		t.Fatalf("History = %+v", hist)
 	}
 	if got := svc.History(99); len(got) != 0 {
