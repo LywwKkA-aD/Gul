@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // sineSource produces a 440 Hz tone at 0.3 FS paced to the wall clock the

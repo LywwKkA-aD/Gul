@@ -10,9 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gul/internal/config"
-	"gul/internal/domain"
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/config"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // Version is the application version reported in diagnostics and the about

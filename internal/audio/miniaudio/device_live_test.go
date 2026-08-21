@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gul/internal/audio/miniaudio"
+	"github.com/LywwKkA-aD/Gul/internal/audio/miniaudio"
 )
 
 func TestLiveDevices(t *testing.T) {

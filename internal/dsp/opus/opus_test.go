@@ -9,7 +9,7 @@ import (
 
 	pion "github.com/pion/opus"
 
-	"gul/internal/dsp/opus"
+	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
 )
 
 // fillSine writes a 440 Hz tone at ~0.3 of full scale, keeping the phase

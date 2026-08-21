@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gul/internal/audio/miniaudio"
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/audio/miniaudio"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // FrameSource and FrameSink abstract the audio devices so the whole

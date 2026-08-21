@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"gul/internal/domain"
-	"gul/internal/dsp/opus"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
 )
 
 // TestTwoManagersVoice is the M2 DoD smoke at the transport layer: client A

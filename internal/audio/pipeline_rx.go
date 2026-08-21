@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"gul/internal/dsp/opus"
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // streamIdleTimeout drops the per-user decoder and jitter state after this

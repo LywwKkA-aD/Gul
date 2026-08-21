@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // TestTwoManagersChat is the M1 DoD smoke at the protocol layer: two client

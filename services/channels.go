@@ -1,8 +1,8 @@
 package services
 
 import (
-	"gul/internal/core"
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/core"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // ChannelsService is the thin Wails bridge for channel navigation.

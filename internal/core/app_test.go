@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"gul/internal/domain"
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // ---------------------------------------------------------------------------

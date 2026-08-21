@@ -13,7 +13,7 @@ import (
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // ErrNotConnected is returned by actions that need a live session.

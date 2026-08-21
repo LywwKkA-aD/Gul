@@ -8,7 +8,7 @@ import (
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 func TestSelfStatsChangePublishesLatencyWithoutRebuildingTree(t *testing.T) {

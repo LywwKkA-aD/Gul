@@ -1,6 +1,6 @@
 package mumble
 
-import "gul/internal/domain"
+import "github.com/LywwKkA-aD/Gul/internal/domain"
 
 // RawMessage is an incoming chat message before sanitization. The HTML field
 // is untrusted server/user input: core sanitizes it before it reaches the UI.

@@ -1,6 +1,6 @@
 package core
 
-import "gul/internal/domain"
+import "github.com/LywwKkA-aD/Gul/internal/domain"
 
 // VoiceEngine is what core needs from the audio engine; the adapter in
 // main.go binds it to internal/audio and the device layer. Device IDs are

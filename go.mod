@@ -1,4 +1,4 @@
-module gul
+module github.com/LywwKkA-aD/Gul
 
 go 1.25.0
 

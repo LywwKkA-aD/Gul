@@ -11,14 +11,14 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
-	"gul/internal/audio"
-	"gul/internal/audio/miniaudio"
-	"gul/internal/config"
-	"gul/internal/core"
-	"gul/internal/domain"
-	"gul/internal/logging"
-	"gul/internal/mumble"
-	"gul/services"
+	"github.com/LywwKkA-aD/Gul/internal/audio"
+	"github.com/LywwKkA-aD/Gul/internal/audio/miniaudio"
+	"github.com/LywwKkA-aD/Gul/internal/config"
+	"github.com/LywwKkA-aD/Gul/internal/core"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/logging"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/services"
 )
 
 //go:embed all:frontend/dist

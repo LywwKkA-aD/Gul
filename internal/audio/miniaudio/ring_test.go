@@ -3,7 +3,7 @@ package miniaudio_test
 import (
 	"testing"
 
-	"gul/internal/audio/miniaudio"
+	"github.com/LywwKkA-aD/Gul/internal/audio/miniaudio"
 )
 
 // pattern fills a frame with a per-frame recognizable sequence.

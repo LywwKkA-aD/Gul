@@ -10,7 +10,7 @@ import (
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // statusSink collects OnStatus callbacks. The buffer is generous because a

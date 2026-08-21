@@ -5,9 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	"gul/internal/core"
-	"gul/internal/domain"
-	"gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/core"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
 // The services layer must stay a pass-through (PLAN.md §10.4). These tests

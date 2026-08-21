@@ -1,8 +1,8 @@
 package services
 
 import (
-	"gul/internal/core"
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/core"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // AudioService bridges the UI to the voice engine through core: mute and

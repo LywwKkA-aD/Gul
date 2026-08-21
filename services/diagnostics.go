@@ -1,6 +1,6 @@
 package services
 
-import "gul/internal/core"
+import "github.com/LywwKkA-aD/Gul/internal/core"
 
 // DiagnosticsService is the thin Wails bridge for the support bundle.
 // No logic here: marshal and delegate to core (PLAN.md §10.4).

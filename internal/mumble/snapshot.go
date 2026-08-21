@@ -5,7 +5,7 @@ import (
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 
-	"gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
 // maxTreeDepth bounds the recursion. Mumble enforces a nesting limit server

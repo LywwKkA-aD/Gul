@@ -3,7 +3,7 @@ package audio
 import (
 	"log/slog"
 
-	"gul/internal/dsp/opus"
+	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
 )
 
 // txPipeline is the M2 outgoing path: mic s16 frame -> opus -> transport.
