@@ -24,7 +24,7 @@ Mumble-сервера. Wails v3 + Go (cgo DSP) + React/TypeScript.
 ## Подготовка окружения
 
 ```sh
-go install github.com/go-task/task/v3/cmd/task@latest
+go install github.com/go-task/task/v3/cmd/task@v3.53.1
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.11
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ```
@@ -47,6 +47,18 @@ task package        # упаковка под текущую ОС
 `127.0.0.1:64738` и ник. Отпечаток сертификата сервера пинится по TOFU при первом
 подключении. Лог приложения лежит в конфиг-папке ОС, например
 `~/Library/Application Support/gul/gul.log` на macOS и `%AppData%\gul\gul.log` на Windows.
+
+По умолчанию dev-сервер доступен только с этого компьютера. Для теста в доверенной
+локальной сети запустите его так:
+
+```sh
+MUMBLE_BIND_ADDRESS=0.0.0.0 \
+MUMBLE_SUPERUSER_PASSWORD='замените-на-длинный-пароль' \
+task murmur:up
+```
+
+Второй клиент подключается к `<LAN-IP-хоста>:64738`. Этот dev-стенд отключает autoban,
+поэтому не выставляйте его напрямую в интернет.
 
 ## Тестовые сборки
 

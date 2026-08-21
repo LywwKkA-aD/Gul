@@ -3,13 +3,15 @@ services:
     image: mumblevoip/mumble-server:v1.5.915
     restart: unless-stopped
     ports:
-      - "64738:64738/tcp"
-      - "64738:64738/udp"
+      # Loopback by default. Set MUMBLE_BIND_ADDRESS=0.0.0.0 only for a
+      # trusted LAN and use a strong superuser password in that case.
+      - "${MUMBLE_BIND_ADDRESS:-127.0.0.1}:64738:64738/tcp"
+      - "${MUMBLE_BIND_ADDRESS:-127.0.0.1}:64738:64738/udp"
     environment:
       MUMBLE_CONFIG_WELCOMETEXT: "Gul dev"
       MUMBLE_CONFIG_USERS: "64"
       # Set explicitly, otherwise the server generates one and buries it in the logs.
-      MUMBLE_SUPERUSER_PASSWORD: "devsuperuser"
+      MUMBLE_SUPERUSER_PASSWORD: "${MUMBLE_SUPERUSER_PASSWORD:-devsuperuser}"
       # Dev stand only: smoke tests reconnect rapidly and trip the default
       # autoban (10 attempts / 120s -> 300s global ban). Keep enabled in prod.
       MUMBLE_CONFIG_AUTOBANATTEMPTS: "0"
