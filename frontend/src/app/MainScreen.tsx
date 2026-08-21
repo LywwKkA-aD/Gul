@@ -12,6 +12,14 @@ const IS_MAC = navigator.userAgent.includes('Mac');
 // Wails: elements with this CSS property act as the window drag handle.
 const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
 
+// A registered Mumble server carries its name in the root channel; a default
+// install leaves the literal "Root", which is not a name. Fall back to the
+// address, hiding the default-port noise.
+function serverLabel(address: string, rootName?: string): string {
+  if (rootName && rootName !== 'Root') return rootName;
+  return address.replace(/:64738$/, '');
+}
+
 export function MainScreen() {
   const status = useGulStore((s) => s.status);
   const tree = useGulStore((s) => s.tree);
@@ -57,8 +65,11 @@ export function MainScreen() {
             }
             style={DRAG_REGION}
           >
-            <span className="min-w-0 truncate font-display text-[13px] tracking-wide">
-              {status.server || 'СЕРВЕР'}
+            <span
+              className="min-w-0 truncate font-display text-[13px] tracking-wide"
+              title={status.server}
+            >
+              {serverLabel(status.server, tree?.name) || 'СЕРВЕР'}
             </span>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto py-2">
