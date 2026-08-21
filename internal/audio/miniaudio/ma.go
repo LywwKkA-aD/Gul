@@ -6,7 +6,7 @@
 package miniaudio
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../third_party/miniaudio
+#cgo CFLAGS: -O2 -I${SRCDIR}/../../../third_party/miniaudio
 #cgo darwin CFLAGS: -mmacosx-version-min=11.0
 #cgo LDFLAGS: -lpthread -lm
 #cgo linux LDFLAGS: -ldl

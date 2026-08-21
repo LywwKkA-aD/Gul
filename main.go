@@ -2,6 +2,8 @@ package main
 
 import (
 	"embed"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"log/slog"
 	"runtime"
@@ -9,6 +11,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	"gul/internal/audio"
+	"gul/internal/audio/miniaudio"
 	"gul/internal/config"
 	"gul/internal/core"
 	"gul/internal/domain"
@@ -25,6 +29,66 @@ func init() {
 	application.RegisterEvent[domain.ChannelNode](domain.EventChannelsTree)
 	application.RegisterEvent[domain.ChatMessage](domain.EventChatMessage)
 	application.RegisterEvent[domain.TofuPrompt](domain.EventTofuMismatch)
+	application.RegisterEvent[domain.TalkingEvent](domain.EventUserTalking)
+	application.RegisterEvent[domain.AudioLevels](domain.EventAudioLevels)
+}
+
+// voiceAdapter binds core.VoiceEngine to the audio engine, translating the
+// opaque hex device ids of the UI layer into miniaudio ones.
+type voiceAdapter struct {
+	engine *audio.Engine
+}
+
+func decodeDeviceID(hexID string) (*miniaudio.DeviceID, error) {
+	if hexID == "" {
+		return nil, nil
+	}
+	raw, err := hex.DecodeString(hexID)
+	var id miniaudio.DeviceID
+	if err != nil || len(raw) != len(id) {
+		return nil, fmt.Errorf("malformed device id %q", hexID)
+	}
+	copy(id[:], raw)
+	return &id, nil
+}
+
+func (v *voiceAdapter) Start(captureID, playbackID string) error {
+	capID, err := decodeDeviceID(captureID)
+	if err != nil {
+		return err
+	}
+	pbID, err := decodeDeviceID(playbackID)
+	if err != nil {
+		return err
+	}
+	return v.engine.Start(capID, pbID)
+}
+
+func (v *voiceAdapter) Stop()                   { v.engine.Stop() }
+func (v *voiceAdapter) SetMute(muted bool)      { v.engine.SetMute(muted) }
+func (v *voiceAdapter) SetDeafen(deafened bool) { v.engine.SetDeafen(deafened) }
+func (v *voiceAdapter) SetUserVolume(hash string, volume float32) {
+	v.engine.SetUserVolume(hash, volume)
+}
+
+func (v *voiceAdapter) Devices() (playback, capture []domain.AudioDevice, err error) {
+	pb, cap, err := v.engine.Devices()
+	if err != nil {
+		return nil, nil, err
+	}
+	return convertDevices(pb), convertDevices(cap), nil
+}
+
+func convertDevices(infos []miniaudio.DeviceInfo) []domain.AudioDevice {
+	out := make([]domain.AudioDevice, 0, len(infos))
+	for _, d := range infos {
+		out = append(out, domain.AudioDevice{
+			ID:        hex.EncodeToString(d.ID[:]),
+			Name:      d.Name,
+			IsDefault: d.IsDefault,
+		})
+	}
+	return out
 }
 
 // wailsEmitter adapts application.App events to domain.Emitter. Events fired
@@ -62,6 +126,17 @@ func main() {
 	defer manager.Close()
 	coreApp.SetController(manager)
 
+	engine := audio.NewEngine(audio.Config{
+		Packets: manager.VoicePackets(),
+		Send:    manager.SendVoice,
+		Log:     logger,
+		Callbacks: audio.Callbacks{
+			OnTalking: coreApp.HandleTalking,
+			OnLevels:  coreApp.HandleLevels,
+		},
+	})
+	coreApp.SetVoice(&voiceAdapter{engine: engine})
+
 	app := application.New(application.Options{
 		Name:        "Gul",
 		Description: "Voice chat for friends on top of Mumble",
@@ -72,6 +147,7 @@ func main() {
 			application.NewService(services.NewChannelsService(coreApp)),
 			application.NewService(services.NewChatService(coreApp)),
 			application.NewService(services.NewDiagnosticsService(coreApp)),
+			application.NewService(services.NewAudioService(coreApp)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

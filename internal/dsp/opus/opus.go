@@ -11,7 +11,7 @@
 package opus
 
 /*
-#cgo CFLAGS: -DHAVE_CONFIG_H -I${SRCDIR} -I${SRCDIR}/../../../third_party/opus/include -I${SRCDIR}/../../../third_party/opus/celt -I${SRCDIR}/../../../third_party/opus/silk -I${SRCDIR}/../../../third_party/opus/silk/float -I${SRCDIR}/../../../third_party/opus/src
+#cgo CFLAGS: -O2 -DHAVE_CONFIG_H -I${SRCDIR} -I${SRCDIR}/../../../third_party/opus/include -I${SRCDIR}/../../../third_party/opus/celt -I${SRCDIR}/../../../third_party/opus/silk -I${SRCDIR}/../../../third_party/opus/silk/float -I${SRCDIR}/../../../third_party/opus/src
 #cgo darwin CFLAGS: -mmacosx-version-min=11.0
 #include <opus.h>
 */

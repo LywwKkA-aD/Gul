@@ -57,6 +57,9 @@ type App struct {
 	history  map[uint32][]domain.ChatMessage
 	seq      uint64
 	username string
+
+	voice                 VoiceEngine
+	captureID, playbackID string
 }
 
 // New builds the application core. The Mumble controller is injected later
@@ -239,11 +242,21 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	defer a.notifyMu.Unlock()
 
 	a.mu.Lock()
+	prev := a.status.State
 	a.status = s
 	a.mu.Unlock()
 
 	a.log.Debug("connection state", "state", string(s.State), "server", s.Server, "error", s.Error)
 	a.emit(domain.EventConnectionState, s)
+
+	// The voice engine lives while the session does; reconnects keep it
+	// running (the transport channel survives them).
+	switch {
+	case s.State == domain.StateConnected && prev != domain.StateReconnecting:
+		a.startVoice()
+	case s.State == domain.StateDisconnected:
+		a.stopVoice()
+	}
 }
 
 // HandleTree records a channel tree snapshot and pushes it to the UI.
