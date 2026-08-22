@@ -207,10 +207,20 @@ func BenchmarkProcessFrame(b *testing.B) {
 	}
 	defer d.Close()
 
+	// The input must be refreshed every iteration. Processing the previous
+	// output in place lets the signal decay until the internal silence
+	// detector short-circuits the network, and the benchmark then reports
+	// the cost of skipping the DNN - roughly ten times below the real
+	// per-frame cost (0.047 ms against 0.44 ms measured on an M4).
+	const frames = 100
+	src := make([]float32, frames*rnnoise.FrameSamples)
+	fillSine(src, 0, 0.3*32768)
 	frame := make([]float32, rnnoise.FrameSamples)
-	fillSine(frame, 0, 0.3*32768)
+	i := 0
 	b.ResetTimer()
 	for b.Loop() {
+		copy(frame, src[i*rnnoise.FrameSamples:(i+1)*rnnoise.FrameSamples])
+		i = (i + 1) % frames
 		if _, err := d.Process(frame); err != nil {
 			b.Fatalf("Process: %v", err)
 		}
