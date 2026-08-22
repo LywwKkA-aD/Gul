@@ -157,8 +157,11 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "Gul",
 		Description: "Voice chat for friends on top of Mumble",
-		Logger:      logger,
-		LogLevel:    slog.LevelWarn,
+		// Wails logs binding arguments and results at DEBUG. Those may contain
+		// join passwords and chat text, so keep framework logs at WARN while
+		// retaining Gul's own DEBUG diagnostics.
+		Logger:   logging.WithMinimumLevel(logger, slog.LevelWarn),
+		LogLevel: slog.LevelWarn,
 		Services: []application.Service{
 			application.NewService(services.NewConnectionService(coreApp)),
 			application.NewService(services.NewChannelsService(coreApp)),

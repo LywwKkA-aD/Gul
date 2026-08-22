@@ -2,6 +2,8 @@ package core
 
 import (
 	"archive/zip"
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +20,11 @@ const logGlob = "gul.log*"
 // diagnosticsPrefix names the bundles; it must not match logGlob, otherwise a
 // bundle would try to archive its predecessors.
 const diagnosticsPrefix = "gul-diagnostics-"
+
+const (
+	redactedConfigInfo = "<redacted>"
+	redactedConfigLog  = "<config-dir>"
+)
 
 // Collect bundles the log files and a short environment report into a zip
 // inside cfgDir and returns the path of the archive.
@@ -37,7 +44,7 @@ func Collect(cfgDir string) (string, error) {
 	}
 	zw := zip.NewWriter(f)
 
-	if err := writeInfo(zw, cfgDir, now); err != nil {
+	if err := writeInfo(zw, now); err != nil {
 		closeAll(zw, f)
 		_ = os.Remove(path)
 		return "", err
@@ -60,14 +67,14 @@ func Collect(cfgDir string) (string, error) {
 	return path, nil
 }
 
-func writeInfo(zw *zip.Writer, cfgDir string, now time.Time) error {
+func writeInfo(zw *zip.Writer, now time.Time) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "app:        Gul %s\n", Version)
 	fmt.Fprintf(&b, "collected:  %s\n", now.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&b, "os/arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(&b, "go:         %s\n", runtime.Version())
 	fmt.Fprintf(&b, "cpus:       %d\n", runtime.NumCPU())
-	fmt.Fprintf(&b, "config_dir: %s\n", cfgDir)
+	fmt.Fprintf(&b, "config_dir: %s\n", redactedConfigInfo)
 
 	w, err := zw.Create("info.txt")
 	if err != nil {
@@ -90,14 +97,14 @@ func writeLogs(zw *zip.Writer, cfgDir string) error {
 			// A log rotated away between Glob and Stat is not an error.
 			continue
 		}
-		if err := copyInto(zw, src, "logs/"+filepath.Base(src)); err != nil {
+		if err := copyLogInto(zw, src, "logs/"+filepath.Base(src), cfgDir); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func copyInto(zw *zip.Writer, src, name string) error {
+func copyLogInto(zw *zip.Writer, src, name, cfgDir string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("diagnostics: open %s: %w", filepath.Base(src), err)
@@ -108,10 +115,59 @@ func copyInto(zw *zip.Writer, src, name string) error {
 	if err != nil {
 		return fmt.Errorf("diagnostics: create %s: %w", name, err)
 	}
-	if _, err := io.Copy(w, in); err != nil {
-		return fmt.Errorf("diagnostics: copy %s: %w", name, err)
+
+	reader := bufio.NewReader(in)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if line != "" && !isSensitiveLogRecord(line) {
+			if _, err := io.WriteString(w, redactConfigPath(line, cfgDir)); err != nil {
+				return fmt.Errorf("diagnostics: copy %s: %w", name, err)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return fmt.Errorf("diagnostics: copy %s: %w", name, readErr)
+		}
 	}
 	return nil
+}
+
+// Wails' debug binding completion record contains every method argument and
+// the return value. That includes join passwords, chat text and opaque device
+// IDs, so these framework traces must never enter a shareable support bundle.
+// Runtime-call traces are excluded for the same reason: their args may contain
+// clipboard or dialog payloads. Older Gul builds also attached the raw server
+// address and username to "connect requested", so that lifecycle record is
+// dropped too. Matching fixed messages as a fallback covers text handlers and
+// malformed JSON records.
+func isSensitiveLogRecord(line string) bool {
+	var record struct {
+		Message string `json:"msg"`
+	}
+	if json.Unmarshal([]byte(line), &record) == nil {
+		if strings.HasPrefix(record.Message, "Binding call ") || record.Message == "Runtime call:" ||
+			record.Message == "connect requested" {
+			return true
+		}
+	}
+	return strings.Contains(line, "Binding call ") || strings.Contains(line, "Runtime call:") ||
+		strings.Contains(line, `msg="connect requested"`)
+}
+
+// redactConfigPath handles both text logs and JSON logs. encoding/json escapes
+// Windows separators (and a few path characters), therefore both the literal
+// and JSON-encoded spellings are replaced.
+func redactConfigPath(line, cfgDir string) string {
+	redacted := strings.ReplaceAll(line, cfgDir, redactedConfigLog)
+	if slashPath := filepath.ToSlash(cfgDir); slashPath != cfgDir {
+		redacted = strings.ReplaceAll(redacted, slashPath, redactedConfigLog)
+	}
+	if encoded, err := json.Marshal(cfgDir); err == nil && len(encoded) >= 2 {
+		redacted = strings.ReplaceAll(redacted, string(encoded[1:len(encoded)-1]), redactedConfigLog)
+	}
+	return redacted
 }
 
 func closeAll(zw *zip.Writer, f *os.File) {
