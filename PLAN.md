@@ -293,10 +293,10 @@ mic s16[480]  (из capture ring)
 - **Готово, когда:** два клиента разговаривают через докер-murmur В НАУШНИКАХ (эха ещё нет); наш клиент разговаривает с ОФИЦИАЛЬНЫМ клиентом Mumble в обе стороны; собеседник вышел/зашёл — его громкость сохранилась; CPU в разговоре < ~5%.
 
 ### M3 — DSP: AEC3 + шумодав + VAD (цель: «звук как у больших»)
-- [ ] Вендор webrtc-audio-processing v2.1 + срез abseil + C-шим (referens: livekit apm.cpp); конфиг: echo_canceller on, HPF on, gain_controller2 adaptive on, NS soft; ProcessStream/ProcessReverseStream/set_stream_delay_ms в пайплайн по §4.3–4.4.
-- [ ] Вендор RNNoise (main) + weights blob + go:embed; Denoiser-интерфейс; юнит-тест масштаба (синус 0.3 FS → vad_prob > 0).
-- [ ] Gate: VAD (гистерезис + hangover, настройка в UI) и Push-to-talk (пока при фокусе окна).
-- [ ] Дрейф-коррекция reference-тракта (drop/dup кадра) по метрике из M2.
+- [x] Вендор webrtc-audio-processing v2.1 + срез abseil + C-шим (референс livekit apm.cpp); конфиг: echo_canceller on, HPF on, gain_controller2 adaptive on, NS soft; ProcessStream/ProcessReverseStream/set_stream_delay_ms в пайплайне по §4.3–4.4. ERLE-смоук 23.9 дБ, 64 мкс/кадр, 0 аллокаций.
+- [x] Вендор RNNoise (main) + weights blob + go:embed; Denoiser-интерфейс; юнит-тест масштаба (синус 0.3 FS → vad_prob 0.99; нормализованный вход — 0, ловушка запинена тестом). 43 мкс/кадр.
+- [ ] Gate: VAD (гистерезис + hangover, настройка в UI) и Push-to-talk (пока при фокусе окна). Движковая часть готова (gate + SetPTT/SetGateMode/SetVADTuning); осталась настройка в UI.
+- [x] Дрейф-коррекция reference-тракта — по событиям кольца вместо ppm (точнее: reference = ровно принятое к воспроизведению; underruns докармливаются тишиной; см. DECISIONS 2026-08-22).
 - [ ] Golden-тесты DSP на WAV-фикстурах (ERLE, снижение шума); бенчмарк кадра.
 - [ ] Слепой A/B на своих записях: APM+RNNoise (NS soft) vs APM-only (NS high) — итог зафиксировать в DECISIONS.md.
 - **Готово, когда:** разговор на колонках без наушников не даёт слышимого эха собеседнику (в т.ч. с USB-микрофоном и раздельными устройствами); шум клавиатуры ощутимо подавлен; VAD не режет начала слов; замер mouth-to-ear не деградировал против M2 больше чем на бюджет RNNoise.

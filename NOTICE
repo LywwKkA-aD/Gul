@@ -1,0 +1,30 @@
+Gul bundles the following third-party software. Full license texts live in
+the referenced files, which are preserved verbatim from upstream; exact
+versions and provenance are recorded in each third_party/<name>/VERSION.
+
+libopus (third_party/opus)
+  Copyright (c) Xiph.Org Foundation and contributors
+  License: BSD-3-Clause - third_party/opus/COPYING
+
+miniaudio (third_party/miniaudio)
+  Copyright (c) David Reid
+  License: MIT-0 / public domain (dual) - third_party/miniaudio/LICENSE
+
+WebRTC audio processing (third_party/webrtc-apm)
+  Copyright (c) The WebRTC project authors
+  License: BSD-3-Clause - third_party/webrtc-apm/COPYING
+  Additional IP rights grant: third_party/webrtc-apm/PATENTS
+
+abseil-cpp (third_party/webrtc-apm/abseil)
+  Copyright (c) The Abseil Authors
+  License: Apache-2.0 - third_party/webrtc-apm/absl-LICENSE
+
+RNNoise (third_party/rnnoise, model weights in
+internal/dsp/rnnoise/weights_blob.bin)
+  Copyright (c) Jean-Marc Valin, Amazon, Mozilla, Xiph.Org Foundation,
+  Mark Borgerding and contributors - third_party/rnnoise/AUTHORS
+  License: BSD-3-Clause - third_party/rnnoise/COPYING
+
+The Mumble protocol implementation is the project's public fork of gumble
+(github.com/LywwKkA-aD/gumble, upstream layeh/gumble via stieneee/gumble),
+licensed MPL-2.0; it is consumed as a Go module, not vendored here.
