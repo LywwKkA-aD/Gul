@@ -1,0 +1,6 @@
+diff --git a/webrtc/modules/audio_processing/aec3/multi_channel_content_detector.h b/webrtc/modules/audio_processing/aec3/multi_channel_content_detector.h
+index 2b2f3b8..243b8ed 100644
+--- a/webrtc/modules/audio_processing/aec3/multi_channel_content_detector.h
++++ b/webrtc/modules/audio_processing/aec3/multi_channel_content_detector.h
+@@ -15,0 +16 @@
++#include <cstdint>

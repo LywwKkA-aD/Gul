@@ -14,3 +14,6 @@ Local patches:
 - `0001-trace-event-include-cstdint.patch` makes `trace_event.h` self-contained.
   GCC 15.2/MinGW does not obtain the global `uint8_t` typedef transitively
   through `<string>`, so the unpatched header fails native Windows builds.
+- `0002-multi-channel-content-detector-include-cstdint.patch` makes
+  `multi_channel_content_detector.h` self-contained. GCC 15.2/MinGW likewise
+  requires the defining header for its two `int64_t` members.
