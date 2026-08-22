@@ -49,3 +49,5 @@ Thumbs.db
 # Debug / temp
 *.log
 *.pprof
+# Personal voice recordings and A/B listening material.
+voice/
