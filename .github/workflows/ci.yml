@@ -258,7 +258,7 @@ jobs:
 
           test "$(dpkg-deb --field bin/gul.deb Package)" = "gul"
           test "$(dpkg-deb --field bin/gul.deb Architecture)" = "amd64"
-          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.3.0~alpha1-1"
+          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.3.0~alpha2-1"
           test "$(dpkg-deb --field bin/gul.deb Section)" = "net"
           test "$(dpkg-deb --field bin/gul.deb Priority)" = "optional"
           package_dependencies="$(dpkg-deb --field bin/gul.deb Depends)"

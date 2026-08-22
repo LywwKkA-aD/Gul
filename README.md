@@ -8,7 +8,7 @@ Mumble-сервера. Wails v3 + Go (cgo DSP) + React/TypeScript.
 двусторонний голос с Gul и официальным Mumble-клиентом, WebRTC AEC3, шумоподавление,
 RNNoise, VAD и Push-to-talk при фокусе окна.
 
-Первую публичную alpha-сборку можно скачать во вкладке
+Актуальную публичную alpha-сборку можно скачать во вкладке
 [Releases](https://github.com/LywwKkA-aD/Gul/releases). Это prerelease для тестов,
 а не окончательно подписанный установщик.
 
