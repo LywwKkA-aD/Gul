@@ -6,7 +6,7 @@ import { Button, Field, Spinner, TextInput } from '../components/ui';
 
 export function ConnectScreen() {
   const status = useGulStore((s) => s.status);
-  const [address, setAddress] = useState('127.0.0.1:64738');
+  const [address, setAddress] = useState('wss://murmur.gulvox.com/mumble');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -34,7 +34,7 @@ export function ConnectScreen() {
               mono
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="host:64738"
+              placeholder="host:64738 или wss://host/mumble"
               disabled={connecting}
             />
           </Field>
@@ -47,7 +47,7 @@ export function ConnectScreen() {
               onKeyDown={(e) => e.key === 'Enter' && username && connect()}
             />
           </Field>
-          <Field label="Пароль (не обязателен)">
+          <Field label="Пароль сервера (для WSS обязателен)">
             <TextInput
               type="password"
               value={password}

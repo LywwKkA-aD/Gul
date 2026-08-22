@@ -1,0 +1,14 @@
+FROM scratch
+
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="Gul WSS relay" \
+      org.opencontainers.image.description="Authenticated opaque WSS to local Murmur relay" \
+      org.opencontainers.image.source="https://github.com/LywwKkA-aD/Gul" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="MIT"
+
+COPY --chown=10000:10000 gul-relay /usr/local/bin/gul-relay
+COPY --chown=10000:10000 legal /usr/share/licenses/gul
+
+USER 10000:10000
+ENTRYPOINT ["/usr/local/bin/gul-relay"]

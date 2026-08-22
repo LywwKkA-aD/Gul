@@ -66,7 +66,44 @@ func NewTOFUStore(configDir string) (*TOFUStore, error) {
 	if err := json.Unmarshal(data, &s.known); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", tofuFileName, err)
 	}
+	canonical, changed, err := canonicalizeKnownServers(s.known)
+	if err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", tofuFileName, err)
+	}
+	if changed {
+		if err := s.saveKnown(canonical); err != nil {
+			return nil, fmt.Errorf("migrate %s: %w", tofuFileName, err)
+		}
+	}
+	s.known = canonical
 	return s, nil
+}
+
+// canonicalizeKnownServers preserves pins created before endpoint host
+// canonicalization was introduced. Equivalent legacy spellings must collapse
+// to one key; conflicting fingerprints fail closed so an upgrade can never
+// turn an existing pin into a fresh first-use trust decision.
+func canonicalizeKnownServers(known map[string]string) (map[string]string, bool, error) {
+	canonical := make(map[string]string, len(known))
+	changed := false
+	for host, fingerprint := range known {
+		canonicalName, err := canonicalHost(host)
+		if err != nil {
+			return nil, false, errors.New("contains a server host that cannot be canonicalized")
+		}
+		if pinned, ok := canonical[canonicalName]; ok {
+			if pinned != fingerprint {
+				return nil, false, errors.New("contains conflicting pins for an equivalent server host")
+			}
+			changed = true
+			continue
+		}
+		canonical[canonicalName] = fingerprint
+		if canonicalName != host {
+			changed = true
+		}
+	}
+	return canonical, changed, nil
 }
 
 // TLSConfig returns a tls.Config that accepts the pinned certificate for host
@@ -92,9 +129,13 @@ func (s *TOFUStore) verify(host, fingerprint string) error {
 
 	pinned, ok := s.known[host]
 	if !ok {
-		s.known[host] = fingerprint
+		candidate := knownWithPin(s.known, host, fingerprint)
+		if err := s.saveKnown(candidate); err != nil {
+			return err
+		}
+		s.known = candidate
 		delete(s.pending, host)
-		return s.save()
+		return nil
 	}
 	if pinned != fingerprint {
 		// Remember the candidate so the prompt survives an error value that
@@ -130,13 +171,26 @@ func (s *TOFUStore) Pending(host string) (string, bool) {
 func (s *TOFUStore) Replace(host, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.known[host] = fingerprint
+	candidate := knownWithPin(s.known, host, fingerprint)
+	if err := s.saveKnown(candidate); err != nil {
+		return err
+	}
+	s.known = candidate
 	delete(s.pending, host)
-	return s.save()
+	return nil
 }
 
-func (s *TOFUStore) save() error {
-	data, err := json.MarshalIndent(s.known, "", "  ")
+func knownWithPin(known map[string]string, host, fingerprint string) map[string]string {
+	candidate := make(map[string]string, len(known)+1)
+	for existingHost, existingFingerprint := range known {
+		candidate[existingHost] = existingFingerprint
+	}
+	candidate[host] = fingerprint
+	return candidate
+}
+
+func (s *TOFUStore) saveKnown(known map[string]string) error {
+	data, err := json.MarshalIndent(known, "", "  ")
 	if err != nil {
 		return err
 	}

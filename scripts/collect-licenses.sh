@@ -96,6 +96,7 @@ printf '  Go toolchain: %s\n' "$(go version)" >>"$manifest"
 go_modules=(
   github.com/LywwKkA-aD/gumble
   github.com/adrg/xdg
+  github.com/coder/websocket
   github.com/godbus/dbus/v5
   github.com/go-ole/go-ole
   github.com/mattn/go-colorable

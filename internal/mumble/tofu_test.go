@@ -1,7 +1,12 @@
 package mumble
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -141,5 +146,167 @@ func TestTOFUFingerprintReportsPin(t *testing.T) {
 	fp, ok := s.Fingerprint("host")
 	if !ok || fp != "abcd" {
 		t.Fatalf("Fingerprint = (%q, %v), want (abcd, true)", fp, ok)
+	}
+}
+
+func TestTOFUCanonicalizesLegacyHostKeysAndPersistsMigration(t *testing.T) {
+	dir := t.TempDir()
+	writeKnownServers(t, dir, map[string]string{
+		"MURMUR.EXAMPLE.COM.":    "dns-pin",
+		"2001:0db8:0:0:0:0:0:1":  "ipv6-pin",
+		"same-pin.example.test":  "shared-pin",
+		"SAME-PIN.EXAMPLE.TEST.": "shared-pin",
+	})
+
+	store, err := NewTOFUStore(dir)
+	if err != nil {
+		t.Fatalf("load legacy pins: %v", err)
+	}
+	want := map[string]string{
+		"murmur.example.com":    "dns-pin",
+		"2001:db8::1":           "ipv6-pin",
+		"same-pin.example.test": "shared-pin",
+	}
+	if !reflect.DeepEqual(store.known, want) {
+		t.Fatalf("migrated pins = %#v, want %#v", store.known, want)
+	}
+
+	persisted := readKnownServers(t, dir)
+	if !reflect.DeepEqual(persisted, want) {
+		t.Fatalf("persisted pins = %#v, want %#v", persisted, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, tofuFileName+".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("migration left temporary file behind: %v", err)
+	}
+}
+
+func TestTOFURejectsConflictingCanonicalLegacyPinsWithoutRewrite(t *testing.T) {
+	dir := t.TempDir()
+	legacy := map[string]string{
+		"MURMUR.EXAMPLE.COM.": "first-pin",
+		"murmur.example.com":  "different-pin",
+	}
+	writeKnownServers(t, dir, legacy)
+	path := filepath.Join(dir, tofuFileName)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read legacy pins before migration: %v", err)
+	}
+
+	_, err = NewTOFUStore(dir)
+	if err == nil {
+		t.Fatal("conflicting equivalent host pins were accepted")
+	}
+	if !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("conflict error = %q, want an actionable explanation", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read legacy pins after rejected migration: %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Fatal("rejected migration rewrote the original TOFU database")
+	}
+}
+
+func TestTOFUFirstUseSaveFailureDoesNotPublishPinInMemory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTOFUStore(dir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	unblock := blockTOFUSave(t, dir)
+
+	if err := store.verify("murmur.example.test", "new-pin"); err == nil {
+		t.Fatal("first use unexpectedly succeeded while persistence was blocked")
+	}
+	if fingerprint, ok := store.Fingerprint("murmur.example.test"); ok {
+		t.Fatalf("failed first-use save published pin %q in memory", fingerprint)
+	}
+	if _, ok := store.Pending("murmur.example.test"); ok {
+		t.Fatal("failed first-use save created a pending replacement")
+	}
+
+	unblock()
+	if err := store.verify("murmur.example.test", "new-pin"); err != nil {
+		t.Fatalf("first use after persistence recovered: %v", err)
+	}
+}
+
+func TestTOFUReplaceSaveFailureRetainsOldPinAndPendingCandidate(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTOFUStore(dir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if err := store.verify("murmur.example.test", "old-pin"); err != nil {
+		t.Fatalf("pin old fingerprint: %v", err)
+	}
+	if err := store.verify("murmur.example.test", "new-pin"); !errors.Is(err, ErrFingerprintChanged) {
+		t.Fatalf("create pending replacement: %v", err)
+	}
+	unblock := blockTOFUSave(t, dir)
+
+	if err := store.Replace("murmur.example.test", "new-pin"); err == nil {
+		t.Fatal("replacement unexpectedly succeeded while persistence was blocked")
+	}
+	if fingerprint, ok := store.Fingerprint("murmur.example.test"); !ok || fingerprint != "old-pin" {
+		t.Fatalf("pin after failed replacement = (%q, %v), want (old-pin, true)", fingerprint, ok)
+	}
+	if pending, ok := store.Pending("murmur.example.test"); !ok || pending != "new-pin" {
+		t.Fatalf("pending after failed replacement = (%q, %v), want (new-pin, true)", pending, ok)
+	}
+
+	unblock()
+	if err := store.Replace("murmur.example.test", "new-pin"); err != nil {
+		t.Fatalf("replace after persistence recovered: %v", err)
+	}
+}
+
+func writeKnownServers(t *testing.T, dir string, known map[string]string) {
+	t.Helper()
+	data, err := json.MarshalIndent(known, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal known servers: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, tofuFileName), data, 0o600); err != nil {
+		t.Fatalf("write known servers: %v", err)
+	}
+}
+
+func readKnownServers(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, tofuFileName))
+	if err != nil {
+		t.Fatalf("read known servers: %v", err)
+	}
+	var known map[string]string
+	if err := json.Unmarshal(data, &known); err != nil {
+		t.Fatalf("parse known servers: %v", err)
+	}
+	return known
+}
+
+func blockTOFUSave(t *testing.T, dir string) func() {
+	t.Helper()
+	path := filepath.Join(dir, tofuFileName+".tmp")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("block TOFU save: %v", err)
+	}
+	blocked := true
+	t.Cleanup(func() {
+		if blocked {
+			_ = os.Remove(path)
+		}
+	})
+	return func() {
+		t.Helper()
+		if !blocked {
+			return
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("unblock TOFU save: %v", err)
+		}
+		blocked = false
 	}
 }

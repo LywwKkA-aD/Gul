@@ -32,16 +32,17 @@ PFFFT, FFT and RNNoise components. Their upstream license files and WebRTC's
 PATENTS grant are included in THIRD_PARTY_LICENSES.
 
 The Mumble protocol implementation is the project's public fork of gumble,
-version v0.0.0-20260821213018-6f2e820432c0, licensed MPL-2.0. The exact source
+version v0.0.0-20260822211756-970c56146e90, licensed MPL-2.0. The exact source
 for the binary form is available at:
-https://github.com/LywwKkA-aD/gumble/commit/6f2e820432c0b3d3557b35ecb049bc0992701e19
+https://github.com/LywwKkA-aD/gumble/commit/970c56146e90615deb4d112aed42d5473c7ba626
 Generated Mumble protocol bindings within gumble retain the Mumble Developers'
 BSD-3-Clause license in the generated bundle.
 
 Other Go runtime dependencies include the Go standard library, Wails v3,
-adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty, golang.org/x/net,
-golang.org/x/sys and google.golang.org/protobuf. Their versions and complete
-license texts are included in the generated bundle. Wails also contains
+coder/websocket, adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty,
+golang.org/x/net, golang.org/x/sys and google.golang.org/protobuf. Their
+versions and complete license texts are included in the generated bundle.
+Wails also contains
 attributed runtime code derived from ringqueue, atotto/clipboard and
 fyne-io/systray, plus a screen manager inspired by Chromium; the corresponding
 licenses, notices and licensed source are preserved. Wails' Windows layer also

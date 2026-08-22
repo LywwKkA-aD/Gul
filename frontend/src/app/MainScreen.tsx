@@ -17,6 +17,12 @@ const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
 // address, hiding the default-port noise.
 function serverLabel(address: string, rootName?: string): string {
   if (rootName && rootName !== 'Root') return rootName;
+  try {
+    const url = new URL(address);
+    if (url.protocol === 'wss:') return url.hostname;
+  } catch {
+    // Direct Mumble addresses are not URLs and use the legacy fallback.
+  }
   return address.replace(/:64738$/, '');
 }
 

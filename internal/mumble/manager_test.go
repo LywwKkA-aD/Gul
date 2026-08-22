@@ -84,6 +84,50 @@ func TestManagerRejectsMissingUsername(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsUnsafeRelayURLBeforeDial(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		t.Error("dial must not be attempted for an unsafe relay URL")
+		return nil, errors.New("unreachable")
+	}
+
+	m.Connect("ws://murmur.example.test/mumble", "gul", "secret")
+
+	status := sink.expect(t, domain.StateDisconnected)
+	if status.Error == "" {
+		t.Fatal("the rejection must explain itself")
+	}
+}
+
+func TestManagerPreservesNormalizedRelayURL(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	configs := make(chan DialConfig, 1)
+	m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
+		configs <- cfg
+		return nil, errors.New("stop")
+	}
+
+	m.Connect("wss://murmur.example.test", "gul", "secret")
+	sink.expect(t, domain.StateConnecting)
+	status := sink.expect(t, domain.StateDisconnected)
+	if status.Server != "wss://murmur.example.test/mumble" {
+		t.Fatalf("server = %q", status.Server)
+	}
+	if cfg := <-configs; cfg.Address != status.Server {
+		t.Fatalf("dial address = %q, want %q", cfg.Address, status.Server)
+	}
+}
+
+func TestRelayAuthenticationErrorsAreTerminal(t *testing.T) {
+	for _, err := range []error{ErrRelayPasswordRequired, ErrRelayAuthentication} {
+		if !isTerminalDialError(err) {
+			t.Errorf("%v was not terminal", err)
+		}
+	}
+}
+
 func TestManagerFirstAttemptFailureIsTerminal(t *testing.T) {
 	sink := newStatusSink()
 	m := newTestManager(t, Callbacks{OnStatus: sink.record})

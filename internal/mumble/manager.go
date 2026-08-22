@@ -105,14 +105,14 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 // Connect starts an asynchronous connection attempt, replacing any session or
 // reconnect loop already in flight.
 func (m *Manager) Connect(address, username, password string) {
-	addr, _ := normalizeAddress(address)
-
-	if strings.TrimSpace(address) == "" {
+	ep, err := parseEndpoint(address)
+	if err != nil {
 		m.emitStatus(domain.ConnectionStatus{
-			State: domain.StateDisconnected, Error: "server address is required",
+			State: domain.StateDisconnected, Error: err.Error(),
 		})
 		return
 	}
+	addr := ep.address
 	if strings.TrimSpace(username) == "" {
 		m.emitStatus(domain.ConnectionStatus{
 			State: domain.StateDisconnected, Server: addr, Error: "username is required",
@@ -724,6 +724,9 @@ func joinReason(prefix, detail string) string {
 // first is the common race where the server has not yet reaped our previous
 // session after a drop, the second clears on its own.
 func isTerminalDialError(err error) bool {
+	if errors.Is(err, ErrRelayPasswordRequired) || errors.Is(err, ErrRelayAuthentication) {
+		return true
+	}
 	var reject *gumble.RejectError
 	if !errors.As(err, &reject) {
 		return false
