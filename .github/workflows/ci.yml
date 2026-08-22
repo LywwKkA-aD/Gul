@@ -283,10 +283,12 @@ jobs:
           mkdir -p bin/gul-windows-amd64
           cp bin/gul.exe bin/gul-windows-amd64/gul.exe
           cp -R bin/legal/. bin/gul-windows-amd64/
-          powershell -NoProfile -Command "Compress-Archive -Path 'bin/gul-windows-amd64' -DestinationPath 'bin/gul-windows-amd64.zip' -Force"
-          archive_contents="$(tar -tf bin/gul-windows-amd64.zip)"
-          grep -Eq 'gul-windows-amd64[/\\]gul\.exe$' <<<"$archive_contents"
-          grep -Eq 'gul-windows-amd64[/\\]NOTICE$' <<<"$archive_contents"
+          powershell -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; Compress-Archive -Path "bin/gul-windows-amd64" -DestinationPath "bin/gul-windows-amd64.zip" -Force'
+          powershell -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; $out = "bin/archive-check"; if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }; Expand-Archive -LiteralPath "bin/gul-windows-amd64.zip" -DestinationPath $out'
+          test -f bin/archive-check/gul-windows-amd64/gul.exe
+          test -f bin/archive-check/gul-windows-amd64/LICENSE
+          test -f bin/archive-check/gul-windows-amd64/NOTICE
+          test -f bin/archive-check/gul-windows-amd64/THIRD_PARTY_MANIFEST.txt
           (cd bin && sha256sum gul-windows-amd64.zip > gul-windows-amd64.zip.sha256)
 
       - name: Build universal macOS test DMG
