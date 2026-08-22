@@ -1,11 +1,11 @@
 package mumble
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -20,7 +20,7 @@ const dialTimeout = 10 * time.Second
 
 // DialConfig carries everything needed to establish one Mumble session.
 type DialConfig struct {
-	Address  string // host:port; port defaults to 64738 when missing
+	Address  string // host[:port] or wss://host[:port]/mumble
 	Username string
 	Password string
 	// Certificate is the persistent client identity. When nil the server sees
@@ -69,8 +69,11 @@ func Dial(cfg DialConfig, tofu *TOFUStore, log *slog.Logger) (*Session, error) {
 }
 
 func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger) (*Session, error) {
-	addr, host := normalizeAddress(cfg.Address)
-	s := &Session{log: log.With("server", addr), addr: addr, host: host}
+	ep, err := parseEndpoint(cfg.Address)
+	if err != nil {
+		return nil, err
+	}
+	s := &Session{log: log.With("server", ep.address), addr: ep.address, host: ep.host}
 
 	// The stub codec must be in gumble's registry before Dial: the Authenticate
 	// packet advertises Opus only when codec id 4 is registered, and without
@@ -98,15 +101,25 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		gc.AttachAudio(hooks.audio)
 	}
 
-	tlsConfig := tofu.TLSConfig(host)
-	if cfg.Certificate != nil {
-		tlsConfig.Certificates = []tls.Certificate{*cfg.Certificate}
+	var client *gumble.Client
+	if ep.kind == endpointWSS {
+		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		defer cancel()
+		conn, dialErr := dialWSSMumbleTLS(ctx, ep, cfg.Password, tofu, cfg.Certificate, nil)
+		if dialErr != nil {
+			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
+		}
+		client, err = gumble.DialWithConn(ctx, conn, gc)
+	} else {
+		tlsConfig := tofu.TLSConfig(ep.host)
+		if cfg.Certificate != nil {
+			tlsConfig.Certificates = []tls.Certificate{*cfg.Certificate}
+		}
+		dialer := &net.Dialer{Timeout: dialTimeout}
+		client, err = gumble.DialWithDialer(dialer, ep.address, gc, tlsConfig)
 	}
-
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	client, err := gumble.DialWithDialer(dialer, addr, gc, tlsConfig)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", addr, err)
+		return nil, fmt.Errorf("dial %s: %w", ep.address, err)
 	}
 	s.client = client
 	return s, nil
@@ -141,20 +154,6 @@ func (s *Session) State() string {
 	default:
 		return "disconnected"
 	}
-}
-
-// normalizeAddress appends the default Mumble port when the caller omitted it
-// and returns the dial address plus the bare host used as the TOFU pin key.
-func normalizeAddress(address string) (addr, host string) {
-	addr = address
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, strconv.Itoa(gumble.DefaultPort))
-	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	return addr, host
 }
 
 // loggingHooks keep the M0 behaviour: lifecycle visible in the log, no tree

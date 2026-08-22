@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -320,6 +321,30 @@ func TestConnectTrimsAndDelegates(t *testing.T) {
 	want := connectCall{"localhost:64738", "bob", "secret"}
 	if got[0] != want {
 		t.Fatalf("connect = %+v, want %+v", got[0], want)
+	}
+}
+
+func TestConnectLogDoesNotContainUserInput(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	app := New(logger, &fakeEmitter{})
+	app.SetController(&fakeController{})
+
+	const addressMarker = "address-secret-marker"
+	const usernameMarker = "username-private-marker"
+	if err := app.Connect("wss://user:"+addressMarker+"@example.test/mumble", usernameMarker, "password-secret-marker"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	got := output.String()
+	for _, forbidden := range []string{addressMarker, usernameMarker, "password-secret-marker"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("connect log contains user input %q", forbidden)
+		}
+	}
+	if !strings.Contains(got, "connect requested") {
+		t.Fatal("connect lifecycle event was not logged")
 	}
 }
 

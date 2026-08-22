@@ -1,0 +1,49 @@
+[Unit]
+Description=Gul authenticated WSS relay
+Requires=gul-murmur.service
+After=network-online.target gul-murmur.service
+PartOf=gul-murmur.service
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+
+[Container]
+ContainerName=gul-wss-relay
+Image=localhost/gul-wss-relay@sha256:REPLACE_WITH_IMAGE_DIGEST
+Pull=never
+# Share only Murmur's rootless pasta namespace. The owner Quadlet publishes
+# host port 8443; the relay does not gain access to unrelated host loopback.
+Network=gul-murmur.container
+User=10000:10000
+
+# The Murmur ACME image owns this volume. The relay sees only a read-only
+# mount and reads the deployed leaf chain and key from its acme subdirectory.
+Mount=type=volume,source=gul-murmur-data.volume,destination=/run/relay-tls,subpath=acme,ro=true
+Secret=GUL_RELAY_BEARER,type=mount,target=GUL_RELAY_BEARER,uid=10000,gid=10000,mode=0400
+
+Exec=--listen 0.0.0.0:8443 --host murmur.gulvox.com --cert /run/relay-tls/mumble.crt --key /run/relay-tls/mumble.key --credential-file /run/secrets/GUL_RELAY_BEARER
+
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+PidsLimit=128
+Memory=128M
+LogDriver=journald
+# Exec form is required because the scratch image intentionally has no shell.
+HealthCmd=["/usr/local/bin/gul-relay","healthcheck"]
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=15s
+HealthOnFailure=kill
+StopTimeout=15
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=2min
+TimeoutStopSec=30s
+LimitNOFILE=4096
+TasksMax=128
+
+[Install]
+WantedBy=default.target

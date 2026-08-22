@@ -35,6 +35,35 @@ func Setup(dir string, level slog.Level) (*slog.Logger, func() error, error) {
 	return logger, f.Close, nil
 }
 
+// WithMinimumLevel returns a logger that keeps the original destinations and
+// attributes but rejects records below min. This is useful when a dependency
+// accepts a logger but does not apply its separate level option to that custom
+// logger.
+func WithMinimumLevel(logger *slog.Logger, min slog.Level) *slog.Logger {
+	return slog.New(minimumLevelHandler{next: logger.Handler(), min: min})
+}
+
+type minimumLevelHandler struct {
+	next slog.Handler
+	min  slog.Level
+}
+
+func (h minimumLevelHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= h.min && h.next.Enabled(ctx, level)
+}
+
+func (h minimumLevelHandler) Handle(ctx context.Context, record slog.Record) error {
+	return h.next.Handle(ctx, record)
+}
+
+func (h minimumLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return minimumLevelHandler{next: h.next.WithAttrs(attrs), min: h.min}
+}
+
+func (h minimumLevelHandler) WithGroup(name string) slog.Handler {
+	return minimumLevelHandler{next: h.next.WithGroup(name), min: h.min}
+}
+
 func rotate(path string) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() < maxLogSize {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -81,6 +82,99 @@ func TestCollectWritesInfoAndLogs(t *testing.T) {
 		} else if got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestCollectRemovesBindingPayloadsAndConfigPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	secretMarker := "test-binding-secret-marker"
+
+	records := []map[string]any{
+		{
+			"time":   "2026-08-22T17:08:00Z",
+			"level":  "DEBUG",
+			"msg":    "Binding call complete:",
+			"method": "ConnectionService.Connect",
+			"args":   `["example.invalid:64738","alice","` + secretMarker + `"]`,
+			"result": "null",
+		},
+		{
+			"time":  "2026-08-22T17:08:01Z",
+			"level": "DEBUG",
+			"msg":   "Runtime call:",
+			"args":  secretMarker,
+		},
+		{
+			"time":     "2026-08-22T17:08:01Z",
+			"level":    "INFO",
+			"msg":      "connect requested",
+			"address":  "wss://user:" + secretMarker + "@example.invalid/mumble",
+			"username": secretMarker,
+		},
+		{
+			"time":       "2026-08-22T17:08:02Z",
+			"level":      "INFO",
+			"msg":        "gul starting",
+			"config_dir": dir,
+		},
+		{
+			"time":  "2026-08-22T17:08:03Z",
+			"level": "WARN",
+			"msg":   "ordinary diagnostic",
+			"error": "failed to open " + filepath.Join(dir, "state.json"),
+		},
+	}
+
+	var log strings.Builder
+	for _, record := range records {
+		line, err := json.Marshal(record)
+		if err != nil {
+			t.Fatalf("marshal record: %v", err)
+		}
+		log.Write(line)
+		log.WriteByte('\n')
+	}
+	// Older/plain-text handlers must be filtered too. This line deliberately
+	// covers the old core connect record; the final binding line deliberately
+	// has no trailing newline to exercise the final partial record.
+	log.WriteString(`time=2026-08-22T17:08:04Z level=INFO msg="connect requested" address=` + secretMarker + "\n")
+	log.WriteString(`time=2026-08-22T17:08:05Z level=DEBUG msg="Binding call complete:" args=` + secretMarker)
+	if err := os.WriteFile(filepath.Join(dir, "gul.log"), []byte(log.String()), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	path, err := Collect(dir)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	files := readZip(t, path)
+	bundle := files["info.txt"] + files["logs/gul.log"]
+
+	for label, forbidden := range map[string]string{
+		"binding argument": secretMarker,
+		"binding trace":    "Binding call complete:",
+		"runtime trace":    "Runtime call:",
+		"config path":      dir,
+	} {
+		if strings.Contains(bundle, forbidden) {
+			t.Errorf("bundle still contains %s", label)
+		}
+	}
+	if encodedDir, err := json.Marshal(dir); err != nil {
+		t.Fatalf("marshal config path: %v", err)
+	} else if strings.Contains(bundle, string(encodedDir[1:len(encodedDir)-1])) {
+		t.Error("bundle still contains the JSON-encoded config path")
+	}
+	if !strings.Contains(files["info.txt"], "config_dir: <redacted>") {
+		t.Error("info.txt does not mark the config directory as redacted")
+	}
+	if !strings.Contains(files["logs/gul.log"], "ordinary diagnostic") {
+		t.Error("ordinary diagnostic line was removed")
+	}
+	if !strings.Contains(files["logs/gul.log"], "<config-dir>") ||
+		!strings.Contains(files["logs/gul.log"], "state.json") {
+		t.Error("config path inside an ordinary log record was not redacted")
 	}
 }
 

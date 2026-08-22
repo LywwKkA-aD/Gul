@@ -18,7 +18,7 @@ import (
 // Version is the application version reported in diagnostics and the about
 // screen. Its numeric base must match build/config.yml; platform metadata omits
 // the prerelease suffix where the native format requires numeric components.
-const Version = "0.3.0-alpha.1"
+const Version = "0.3.0-alpha.2"
 
 const (
 	// historyPerChannel caps the in-memory session transcript per channel.
@@ -139,7 +139,9 @@ func (a *App) Connect(address, username, password string) error {
 	a.username = username
 	a.mu.Unlock()
 
-	a.log.Info("connect requested", "address", address, "username", username)
+	// Address and username are deliberately omitted: malformed WSS URLs may
+	// contain credentials, and diagnostics logs are intended to be shareable.
+	a.log.Info("connect requested")
 	ctrl.Connect(address, username, password)
 	return nil
 }
