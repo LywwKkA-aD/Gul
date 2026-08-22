@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useGulStore } from './state/store';
 import { subscribeGulEvents } from './state/events';
+import { usePushToTalk } from './state/ptt';
 import { ConnectScreen } from './app/ConnectScreen';
 import { MainScreen } from './app/MainScreen';
 import { TofuDialog } from './components/TofuDialog';
@@ -15,6 +16,10 @@ function App() {
   useEffect(() => {
     subscribeGulEvents();
   }, []);
+
+  // Window-level, so the key works from any screen - including while a modal
+  // is open - and not only when the main screen holds focus.
+  usePushToTalk();
 
   // The Go state machine decides what we show: an unexpected drop keeps the
   // session in 'reconnecting' (main screen, locked); terminal failures land

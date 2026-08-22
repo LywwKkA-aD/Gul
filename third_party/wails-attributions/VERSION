@@ -1,0 +1,19 @@
+Wails v3.0.0-beta.11 contains a ScreenManager implementation inspired by
+Chromium and preserves this attribution in pkg/application/screenmanager.go.
+
+Chromium license source:
+https://chromium.googlesource.com/chromium/src/+/HEAD/LICENSE
+Blob at collection time:
+2249a28657f86c645f8978b75babc1bd52aca318
+
+Wails' pkg/w32 implementation retains copyrights from the winc and w32
+projects. License sources and Git blob hashes at collection time:
+https://github.com/tadvi/winc/blob/master/LICENSE
+a063a43707489b6ce0934ae3416e0983628390e0
+https://github.com/AllenDang/w32/blob/master/LICENSE
+9f36608c8782edf032e30a9c30b63f9e5925d809
+
+Wails' Windows clipboard code is based on atotto/clipboard v0.1.4. The
+upstream module checksum pinned by Wails is:
+h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
+https://github.com/atotto/clipboard/blob/v0.1.4/LICENSE

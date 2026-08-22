@@ -41,6 +41,9 @@ type Config struct {
 	Send func(opus []byte, final bool) error
 	// Bitrate is the encoder target (server MaxBitrate already clamped).
 	Bitrate int
+	// DSP selects the processing shape; nil means DefaultDSP. Changing the
+	// shape means restarting the engine - DSP states are not hot-swapped.
+	DSP *DSPOptions
 
 	Log       *slog.Logger
 	Callbacks Callbacks
@@ -66,7 +69,20 @@ type Engine struct {
 type engineState struct {
 	muted    atomic.Bool
 	deafened atomic.Bool
+	ptt      atomic.Bool
 	volumes  sync.Map // user hash -> float32
+
+	gateMu sync.Mutex
+	gate   gateSettings
+}
+
+// gateSettings is the UI-facing gate configuration, applied to the Gate on
+// every tick (the setters are cheap and idempotent).
+type gateSettings struct {
+	mode       GateMode
+	open       float32
+	close      float32
+	hangoverMs int
 }
 
 // NewEngine builds an engine over the given transport config.
@@ -77,7 +93,14 @@ func NewEngine(cfg Config) *Engine {
 	if cfg.Bitrate <= 0 {
 		cfg.Bitrate = 40000
 	}
-	return &Engine{cfg: cfg}
+	e := &Engine{cfg: cfg}
+	e.state.gate = gateSettings{
+		mode:       GateVAD,
+		open:       gateOpenDefault,
+		close:      gateCloseDefault,
+		hangoverMs: gateHangoverDefaultMs,
+	}
+	return e
 }
 
 // Devices enumerates playback and capture devices for the settings UI.
@@ -185,19 +208,71 @@ func (e *Engine) SetUserVolume(hash string, volume float32) {
 	e.state.volumes.Store(hash, volume)
 }
 
-// run is the DSP goroutine (PLAN.md 4.3-4.4, M2 shape: no APM/RNNoise yet).
+// SetPTT reports whether the push-to-talk key is currently held. Only
+// relevant while the gate runs in GatePTT mode.
+func (e *Engine) SetPTT(held bool) { e.state.ptt.Store(held) }
+
+// SetGateMode switches the transmit gate between VAD and push-to-talk.
+func (e *Engine) SetGateMode(m GateMode) {
+	if m != GateVAD && m != GatePTT {
+		return
+	}
+	e.state.gateMu.Lock()
+	e.state.gate.mode = m
+	e.state.gateMu.Unlock()
+}
+
+// SetVADTuning sets the gate hysteresis band and hangover. Values are
+// validated by the Gate itself on apply.
+func (e *Engine) SetVADTuning(open, close float32, hangoverMs int) {
+	e.state.gateMu.Lock()
+	e.state.gate.open, e.state.gate.close = open, close
+	e.state.gate.hangoverMs = hangoverMs
+	e.state.gateMu.Unlock()
+}
+
+// applyGateSettings pushes the UI-facing configuration onto the gate; runs
+// on the DSP goroutine every tick.
+func (e *Engine) applyGateSettings(g *Gate) {
+	e.state.gateMu.Lock()
+	s := e.state.gate
+	e.state.gateMu.Unlock()
+	g.SetMode(s.mode)
+	g.SetThresholds(s.open, s.close)
+	g.SetHangoverMs(s.hangoverMs)
+}
+
+// run is the DSP goroutine (PLAN.md 4.3-4.4).
 func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	tx, err := newTxPipeline(e.cfg)
+	opts := DefaultDSP()
+	if e.cfg.DSP != nil {
+		opts = *e.cfg.DSP
+	}
+	chain, err := newDSPChain(opts, e.cfg.Log)
+	if err != nil {
+		e.cfg.Log.Error("dsp chain", "error", err)
+		return
+	}
+	defer chain.close()
+	// Standing estimate of the playback path (device period plus typical
+	// ring occupancy); AEC3 refines the true delay from the signals.
+	chain.delayHint(40)
+
+	var gate *Gate
+	if opts.Gate {
+		gate = NewGate()
+	}
+	tx, err := newTxPipeline(e.cfg, chain, gate)
 	if err != nil {
 		e.cfg.Log.Error("tx pipeline", "error", err)
 		return
 	}
 	defer tx.close()
-	rx := newRxPipeline(e.cfg)
+	rx := newRxPipeline(e.cfg, chain)
 	defer rx.close()
 
 	drift := NewDrift()
@@ -206,6 +281,8 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 
 	tick := 0
 	deviceLost, lostReported := false, false
+	var lastUnderruns uint64
+	pendingSilence := 0
 	for {
 		select {
 		case <-stop:
@@ -215,9 +292,20 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 		}
 		tick++
 
+		if gate != nil {
+			e.applyGateSettings(gate)
+		}
+
 		rx.drain(e.cfg.Packets)
-		tx.tick(src, e.state.muted.Load())
-		rx.tick(sink, e.state.deafened.Load(), &e.state.volumes)
+		tx.tick(src, e.state.muted.Load(), e.state.ptt.Load())
+		// Underrun padding is replayed into the AEC reference one frame per
+		// tick, so a burst of them cannot stall the loop.
+		extraSilence := 0
+		if pendingSilence > 0 {
+			extraSilence = 1
+			pendingSilence--
+		}
+		rx.tick(sink, e.state.deafened.Load(), &e.state.volumes, extraSilence)
 
 		if tick%5 == 0 && e.cfg.Callbacks.OnLevels != nil {
 			e.cfg.Callbacks.OnLevels(DBFS(tx.micRMS), DBFS(rx.outRMS))
@@ -229,7 +317,14 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 				deviceLost = deviceLost || st.Stopped
 			}
 			if dev, ok := sink.(interface{ Stats() miniaudio.Stats }); ok {
-				deviceLost = deviceLost || dev.Stats().Stopped
+				st := dev.Stats()
+				deviceLost = deviceLost || st.Stopped
+				if st.Underruns > lastUnderruns {
+					// Cap the backlog: after a long stall AEC3 re-converges
+					// anyway, replaying seconds of silence buys nothing.
+					pendingSilence = min(pendingSilence+int(st.Underruns-lastUnderruns), 30)
+					lastUnderruns = st.Underruns
+				}
 			}
 			if deviceLost && !lostReported {
 				lostReported = true

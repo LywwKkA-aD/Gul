@@ -336,6 +336,26 @@ func TestManagerSendVoiceRejectsEmptyNonFinalFrame(t *testing.T) {
 	}
 }
 
+func TestManagerSetVoiceTargetValidatesAndSticks(t *testing.T) {
+	m := newTestManager(t, Callbacks{})
+
+	if got := byte(m.voice.target.Load()); got != VoiceTargetNormal {
+		t.Fatalf("initial voice target = %d, want %d", got, VoiceTargetNormal)
+	}
+	if err := m.SetVoiceTarget(VoiceTargetLoopback); err != nil {
+		t.Fatalf("SetVoiceTarget(loopback) = %v", err)
+	}
+	if got := byte(m.voice.target.Load()); got != VoiceTargetLoopback {
+		t.Fatalf("voice target = %d, want %d", got, VoiceTargetLoopback)
+	}
+	if err := m.SetVoiceTarget(VoiceTargetLoopback + 1); !errors.Is(err, ErrInvalidVoiceTarget) {
+		t.Fatalf("SetVoiceTarget(32) = %v, want %v", err, ErrInvalidVoiceTarget)
+	}
+	if got := byte(m.voice.target.Load()); got != VoiceTargetLoopback {
+		t.Fatalf("rejected target must not change state, got %d", got)
+	}
+}
+
 func TestManagerSendVoiceOfflineDropsSilently(t *testing.T) {
 	m := newTestManager(t, Callbacks{})
 

@@ -1,0 +1,37 @@
+Windows release toolchain runtime notices
+
+Distribution: niXman/mingw-builds-binaries
+Release: 15.2.0-rt_v13-rev1
+Release tag commit: 5dc51e3bbb4faa6496db49d5c4a86f10f091c2fa
+Asset: x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev1.7z
+Asset SHA-256: 029bd02b5bce7c10fd9476165b3fe178239fe1838ad62516b5c3e0921bb283cf
+Release URL: https://github.com/niXman/mingw-builds-binaries/releases/tag/15.2.0-rt_v13-rev1
+
+Compiler: GCC 15.2.0
+MinGW-w64 runtime: v13
+Thread model: POSIX (winpthreads)
+Exception model: SEH
+C runtime: UCRT
+
+The license files in this directory were copied from the matching paths in
+the release asset above. Line endings were normalized to LF and trailing
+whitespace was removed for this source repository. The GitHub Actions release
+workflow asserts GCC 15.2.0 and
+compares these normalized notices with the runner's installed copies so a
+toolchain license change cannot silently invalidate the release bundle.
+
+Included paths:
+  mingw64/licenses/gcc/COPYING3
+    archive SHA-256: 0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b
+  mingw64/licenses/gcc/COPYING.RUNTIME
+    archive SHA-256: 90077ba306ee9d8ed966cab1b4abd69b6e728acf08777283cc50283cd9503fa6
+  mingw64/licenses/mingw-w64/COPYING.MinGW-w64-runtime.txt
+    archive SHA-256: e7a33fd8d164abd188ee629bbe3b07912419b29192a6bbfdce29de0ad4f0e7fb
+  mingw-w64 v13.0.0 authoritative runtime notice
+    file: mingw-w64/COPYING.MinGW-w64-runtime-upstream-v13.txt
+    source: https://github.com/mingw-w64/mingw-w64/blob/v13.0.0/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt
+    SHA-256: e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd
+    note: the niXman asset copy omits later years from its overall copyright
+      line; both the exact asset notice and authoritative v13 notice are kept
+  mingw64/licenses/winpthreads/COPYING
+    archive SHA-256: 1c8d23063c3772b9435831410b31b51fef3d9cf2138a442dc367ef5d72239f67

@@ -9,7 +9,8 @@
 !.env.example
 config.json
 *.wav
-!testdata/**/*.wav
+!**/testdata/*.wav
+!**/testdata/**/*.wav
 
 # Go
 bin/
@@ -48,3 +49,5 @@ Thumbs.db
 # Debug / temp
 *.log
 *.pprof
+# Personal voice recordings and A/B listening material.
+voice/

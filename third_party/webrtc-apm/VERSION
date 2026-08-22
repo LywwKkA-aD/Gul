@@ -1,0 +1,21 @@
+webrtc-audio-processing 2.1 (WebRTC M131, AEC3 + HPF + NS + AGC2)
+tarball: https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing/-/archive/v2.1/webrtc-audio-processing-v2.1.tar.gz
+sha256: 2358883a8551711f3b6169f6799c003dc1a6efd37bdb24a135a015cc9e3d7713  (trust-on-first-use: GitLab regenerates archives)
+
+abseil-cpp 20240722.0
+tarball: https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz
+sha256: f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3
+
+subset:
+  webrtc/        full upstream tree minus *.S, *mips*, *_avx2.cc, test helpers
+  abseil/absl/   transitive closure of the absl headers webrtc includes
+  meson.build and webrtc/**/meson.build are kept: they are the authoritative
+  source lists the cgo stubs are generated from
+
+include roots for the compiler: webrtc/ and abseil/. absl sits one level down
+rather than at the root because the root holds a file named VERSION, and on a
+case-insensitive filesystem that shadows the C++ standard header <version>.
+licenses: COPYING (BSD-3-Clause), PATENTS (WebRTC grant), absl-LICENSE
+  (Apache-2.0), plus the per-directory notices inside webrtc/
+patches: patches/*.patch (applied on top by this script)
+update: scripts/vendor-webrtc-apm.sh

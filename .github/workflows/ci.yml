@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -17,35 +18,53 @@ env:
   # Hard pins (PLAN.md section 2): @latest is forbidden for the toolchain.
   WAILS3_VERSION: v3.0.0-beta.11
   GOLANGCI_LINT_VERSION: v2.13.1
+  GOVULNCHECK_VERSION: v1.7.0
   NODE_VERSION: '24'
+  MINGW_GCC_VERSION: '15.2.0'
 
 jobs:
   build-test:
     name: build-test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-2025, macos-latest]
     defaults:
       run:
         # Every scripted step below uses POSIX syntax; on Windows this selects
         # Git Bash instead of PowerShell so a single script works everywhere.
         shell: bash
+    env:
+      CGO_ENABLED: '1'
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          app_version="$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' internal/core/app.go)"
+          test -n "$app_version"
+          test "$GITHUB_REF_NAME" = "v$app_version"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          # Built-in cache: Go module cache + build cache, keyed on go.sum.
-          # Needed from day one: the vendored APM (~1650 .cc) lands in M3.
+          # Include vendored native sources in the immutable cache key. M3 did
+          # not change go.sum but added hundreds of C/C++ translation units.
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            internal/audio/miniaudio/**/*
+            internal/dsp/**/*
+            third_party/**/*
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -64,7 +83,61 @@ jobs:
             libwebkitgtk-6.0-dev \
             libwayland-dev \
             build-essential \
+            g++ \
             pkg-config
+
+      - name: Verify native compiler toolchain
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.26.7"
+          go env GOOS GOARCH CC CXX CGO_ENABLED
+          "$(go env CXX)" --version
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cxx="$(go env CXX)"
+            cxx_path="$(command -v "$cxx")"
+            case "$cxx_path" in
+              /c/mingw64/bin/*) ;;
+              *) echo "unexpected CXX: $cxx_path" >&2; exit 1 ;;
+            esac
+            test "$("$cxx" -dumpfullversion -dumpversion)" = "$MINGW_GCC_VERSION"
+            test "$("$cxx" -dumpmachine)" = "x86_64-w64-mingw32"
+
+            build_info=/c/mingw64/build-info.txt
+            test -f "$build_info"
+            build_args="$(sed -n 's/\r$//; s/^args[[:space:]]*:[[:space:]]*//p' "$build_info" | sed -n '1p')"
+            expected_options=(
+              "--mode=gcc-$MINGW_GCC_VERSION"
+              --rev=1
+              --with-default-msvcrt=ucrt
+              --rt-version=v13
+              --threads=posix
+              --exceptions=seh
+              --arch=x86_64
+            )
+            for expected_option in "${expected_options[@]}"; do
+              case " $build_args " in
+                *" $expected_option "*) ;;
+                *) echo "unexpected MinGW build args: missing $expected_option" >&2; exit 1 ;;
+              esac
+            done
+
+            normalize_license() {
+              sed 's/\r$//; s/[[:blank:]]*$//' "$1" | awk '
+                { lines[NR] = $0; if ($0 != "") last = NR }
+                END { for (i = 1; i <= last; i++) print lines[i] }
+              '
+            }
+            while IFS='|' read -r installed vendored; do
+              test -f "$installed"
+              diff -u <(normalize_license "$installed") <(normalize_license "$vendored")
+            done <<'LICENSES'
+          /c/mingw64/licenses/gcc/COPYING3|third_party/toolchain-runtime/gcc/COPYING3
+          /c/mingw64/licenses/gcc/COPYING.RUNTIME|third_party/toolchain-runtime/gcc/COPYING.RUNTIME
+          /c/mingw64/licenses/mingw-w64/COPYING.MinGW-w64-runtime.txt|third_party/toolchain-runtime/mingw-w64/COPYING.MinGW-w64-runtime.txt
+          /c/mingw64/licenses/winpthreads/COPYING|third_party/toolchain-runtime/winpthreads/COPYING
+          LICENSES
+          fi
+          bash scripts/check-native-headers.sh
 
       - name: Install wails3 CLI
         run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"
@@ -72,6 +145,11 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Audit frontend dependencies
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        run: npm audit --audit-level=high
 
       - name: Prepare embedded assets directory
         # main.go carries //go:embed all:frontend/dist, but frontend/dist is
@@ -104,13 +182,19 @@ jobs:
           set -euo pipefail
           files=$(find . -type f -name '*.go' \
             -not -path './.*' \
+            -not -path './bin/*' \
             -not -path './third_party/*' \
             -not -path './frontend/*')
           if [ -z "$files" ]; then
             echo "No Go files found - unexpected repository layout." >&2
             exit 1
           fi
-          unformatted=$(gofmt -l $files)
+          unformatted=$(find . -type f -name '*.go' \
+            -not -path './.*' \
+            -not -path './bin/*' \
+            -not -path './third_party/*' \
+            -not -path './frontend/*' \
+            -exec gofmt -l {} +)
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-formatted:" >&2
             echo "$unformatted" >&2
@@ -119,15 +203,28 @@ jobs:
           echo "gofmt: clean"
 
       - name: Run go vet
-        run: go vet ./...
+        run: go vet . ./cmd/... ./internal/... ./services/...
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=10m . ./cmd/... ./internal/... ./services/...
 
       - name: Run tests with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 . ./cmd/... ./internal/... ./services/...
+
+      - name: Scan reachable Go vulnerabilities
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          govulncheck . ./cmd/... ./internal/... ./services/...
+
+      - name: Verify embedded RNNoise model
+        run: |
+          node -e 'const crypto=require("node:crypto");const fs=require("node:fs");const want="1b99898350e75656c77d068162fea402afe51eff15dc751989b1e9f53b98bf91";const got=crypto.createHash("sha256").update(fs.readFileSync("internal/dsp/rnnoise/weights_blob.bin")).digest("hex");if(got!==want){throw new Error(`RNNoise model SHA-256 mismatch: ${got}`)}'
+
+      - name: Verify release license bundle
+        run: bash scripts/collect-licenses_test.sh
 
       - name: Build Linux amd64 test DEB
         if: runner.os == 'Linux'
@@ -141,7 +238,7 @@ jobs:
 
           test "$(dpkg-deb --field bin/gul.deb Package)" = "gul"
           test "$(dpkg-deb --field bin/gul.deb Architecture)" = "amd64"
-          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.2.0-1"
+          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.3.0~alpha1-1"
           test "$(dpkg-deb --field bin/gul.deb Section)" = "net"
           test "$(dpkg-deb --field bin/gul.deb Priority)" = "optional"
           package_dependencies="$(dpkg-deb --field bin/gul.deb Depends)"
@@ -149,30 +246,74 @@ jobs:
           grep -Fq 'libwebkitgtk-6.0-4' <<<"$package_dependencies"
           grep -Fq 'libpulse0' <<<"$package_dependencies"
           grep -Fq 'libasound2t64' <<<"$package_dependencies"
+          grep -Fq 'libstdc++6' <<<"$package_dependencies"
+          grep -Fq 'libgcc-s1' <<<"$package_dependencies"
           package_contents="$(dpkg-deb --contents bin/gul.deb)"
           grep -Eq ' ./usr/bin/gul$' <<<"$package_contents"
           grep -Eq '^-rw-r--r-- .* ./usr/share/applications/gul.desktop$' <<<"$package_contents"
+          grep -Eq '^-rw-r--r-- .* ./usr/share/doc/gul/NOTICE$' <<<"$package_contents"
+          grep -Eq '^-rw-r--r-- .* ./usr/share/doc/gul/LICENSE$' <<<"$package_contents"
+          grep -Eq '^-rw-r--r-- .* ./usr/share/doc/gul/copyright$' <<<"$package_contents"
 
-          (cd bin && sha256sum gul.deb > gul.deb.sha256)
+          linked_libraries="$(ldd bin/gul)"
+          grep -Fq 'libstdc++.so.6' <<<"$linked_libraries"
+          grep -Fq 'libgcc_s.so.1' <<<"$linked_libraries"
+
+          mv bin/gul.deb bin/gul-linux-amd64.deb
+          (cd bin && sha256sum gul-linux-amd64.deb > gul-linux-amd64.deb.sha256)
 
       - name: Build Windows test executable
         if: runner.os == 'Windows'
-        env:
-          CGO_ENABLED: '1'
         run: |
           set -euo pipefail
           wails3 task windows:build ARCH=amd64 CGO_ENABLED=1
-          (cd bin && sha256sum gul.exe > gul.exe.sha256)
+
+          pe_header="$(objdump -p bin/gul.exe)"
+          grep -Eq 'Subsystem[[:space:]]+00000002' <<<"$pe_header"
+          grep -Fq 'DYNAMIC_BASE' <<<"$pe_header"
+          grep -Fq 'NX_COMPAT' <<<"$pe_header"
+          pe_imports="$(sed -n 's/.*DLL Name: //p' <<<"$pe_header")"
+          echo "$pe_imports"
+          if grep -Eqi 'libstdc\+\+|libgcc_s|libwinpthread' <<<"$pe_imports"; then
+            echo "Windows build imports a non-system compiler runtime DLL." >&2
+            exit 1
+          fi
+
+          wails3 task common:collect:licenses
+          mkdir -p bin/gul-windows-amd64
+          cp bin/gul.exe bin/gul-windows-amd64/gul.exe
+          cp -R bin/legal/. bin/gul-windows-amd64/
+          powershell -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; Compress-Archive -Path "bin/gul-windows-amd64" -DestinationPath "bin/gul-windows-amd64.zip" -Force'
+          powershell -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; $out = "bin/archive-check"; if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }; Expand-Archive -LiteralPath "bin/gul-windows-amd64.zip" -DestinationPath $out'
+          test -f bin/archive-check/gul-windows-amd64/gul.exe
+          test -f bin/archive-check/gul-windows-amd64/LICENSE
+          test -f bin/archive-check/gul-windows-amd64/NOTICE
+          test -f bin/archive-check/gul-windows-amd64/THIRD_PARTY_MANIFEST.txt
+          (cd bin && sha256sum gul-windows-amd64.zip > gul-windows-amd64.zip.sha256)
 
       - name: Build universal macOS test DMG
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           wails3 task darwin:package:universal
+          architectures="$(lipo -archs bin/gul)"
+          grep -Fq 'arm64' <<<"$architectures"
+          grep -Fq 'x86_64' <<<"$architectures"
+          linked_libraries="$(otool -L bin/gul)"
+          grep -Fq '/usr/lib/libc++.1.dylib' <<<"$linked_libraries"
+          if grep -Eq '/opt/homebrew|/usr/local' <<<"$linked_libraries"; then
+            echo "macOS build links a non-system library." >&2
+            exit 1
+          fi
           microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' bin/gul.app/Contents/Info.plist)
           test -n "$microphone_usage"
+          test -f bin/gul.app/Contents/Resources/Legal/NOTICE
+          test -f bin/gul.app/Contents/Resources/Legal/LICENSE
+          codesign --verify --deep --strict --verbose=2 bin/gul.app
           wails3 task darwin:create:dmg
-          (cd bin && shasum -a 256 gul.dmg > gul.dmg.sha256)
+          hdiutil verify bin/gul.dmg
+          mv bin/gul.dmg bin/gul-macos-universal.dmg
+          (cd bin && shasum -a 256 gul-macos-universal.dmg > gul-macos-universal.dmg.sha256)
 
       - name: Upload Windows test build
         if: runner.os == 'Windows'
@@ -180,8 +321,8 @@ jobs:
         with:
           name: gul-windows-amd64-${{ github.sha }}
           path: |
-            bin/gul.exe
-            bin/gul.exe.sha256
+            bin/gul-windows-amd64.zip
+            bin/gul-windows-amd64.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -191,8 +332,8 @@ jobs:
         with:
           name: gul-linux-amd64-${{ github.sha }}
           path: |
-            bin/gul.deb
-            bin/gul.deb.sha256
+            bin/gul-linux-amd64.deb
+            bin/gul-linux-amd64.deb.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -202,7 +343,77 @@ jobs:
         with:
           name: gul-macos-universal-${{ github.sha }}
           path: |
-            bin/gul.dmg
-            bin/gul.dmg.sha256
+            bin/gul-macos-universal.dmg
+            bin/gul-macos-universal.dmg.sha256
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: gul-*-${{ github.sha }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release artifacts
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum --check ./*.sha256
+          cat ./*.sha256 | sort -k2 > SHA256SUMS.txt
+          test "$(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.dmg' \) | wc -l)" -eq 3
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          notes_file=".github/release-notes/$tag.md"
+          test -f "$notes_file"
+
+          title="Gul $tag"
+          if [[ "$tag" == "v0.3.0-alpha.1" ]]; then
+            title="$title — first public alpha (M3 DSP)"
+          fi
+
+          release_flags=(--title "$title" --notes-file "$notes_file")
+          if [[ "$tag" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          release_assets=(
+            release-assets/gul-windows-amd64.zip
+            release-assets/gul-windows-amd64.zip.sha256
+            release-assets/gul-linux-amd64.deb
+            release-assets/gul-linux-amd64.deb.sha256
+            release-assets/gul-macos-universal.dmg
+            release-assets/gul-macos-universal.dmg.sha256
+            release-assets/SHA256SUMS.txt
+            LICENSE
+            NOTICE
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" "${release_flags[@]}"
+            gh release upload "$tag" --clobber "${release_assets[@]}"
+          else
+            # gh creates a draft internally, uploads every asset, then
+            # publishes it, so users never see an empty new release.
+            gh release create "$tag" "${release_assets[@]}" \
+              --verify-tag "${release_flags[@]}"
+          fi

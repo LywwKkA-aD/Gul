@@ -1,6 +1,6 @@
 module github.com/LywwKkA-aD/Gul
 
-go 1.25.0
+go 1.26.7
 
 require (
 	github.com/LywwKkA-aD/gumble v0.0.0-20260821213018-6f2e820432c0

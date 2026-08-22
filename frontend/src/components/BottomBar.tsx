@@ -20,6 +20,9 @@ export function BottomBar() {
   const setSettingsOpen = useGulStore((s) => s.setSettingsOpen);
   const self = selfUser(tree);
   const selfSpeaking = useGulStore((s) => (self ? s.talkingSessions.has(self.user.session) : false));
+  // Push-to-talk gives no other feedback that the key actually reached the
+  // gate, so the mic button carries it: filled and lit while the key is held.
+  const transmitting = useGulStore((s) => s.gateMode === 'ptt' && s.pttHeld && !s.muted);
   const [diagPath, setDiagPath] = useState<string | null>(null);
 
   const connected = status.state === 'connected';
@@ -89,10 +92,26 @@ export function BottomBar() {
             tone="danger"
             active={muted}
             onClick={toggleMic}
-            title={muted ? 'Включить микрофон' : 'Выключить микрофон'}
+            title={
+              muted
+                ? 'Включить микрофон'
+                : transmitting
+                  ? 'Идёт передача, клавиша PTT зажата'
+                  : 'Выключить микрофон'
+            }
             aria-label={muted ? 'Включить микрофон' : 'Выключить микрофон'}
           >
-            {muted ? <MicrophoneSlashIcon size={16} weight="fill" /> : <MicrophoneIcon size={16} />}
+            {muted ? (
+              <MicrophoneSlashIcon size={16} weight="fill" />
+            ) : (
+              // The colour sits on the icon itself: a text utility on the
+              // button would only compete with the IconButton's own class.
+              <MicrophoneIcon
+                size={16}
+                weight={transmitting ? 'fill' : 'regular'}
+                className={transmitting ? 'text-[var(--speak)]' : undefined}
+              />
+            )}
           </IconButton>
           <IconButton
             surface="sidebar"

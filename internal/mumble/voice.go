@@ -41,6 +41,18 @@ const (
 // audio nor a terminator: nothing to put on the wire.
 var ErrEmptyVoiceFrame = errors.New("mumble: empty voice frame")
 
+// ErrInvalidVoiceTarget is returned by SetVoiceTarget for an id outside the
+// 5-bit wire field.
+var ErrInvalidVoiceTarget = errors.New("mumble: voice target out of range")
+
+// Voice targets on the wire: 0 routes to the current channel, 31 makes the
+// server return our own audio (latency diagnostics). 1-30 are whisper targets
+// and would need registration first, which this layer does not do yet.
+const (
+	VoiceTargetNormal   byte = 0
+	VoiceTargetLoopback byte = 31
+)
+
 // VoicePacket is one incoming raw Opus packet (passthrough mode).
 type VoicePacket struct {
 	Session  uint32 // sender session id
@@ -93,6 +105,16 @@ func (m *Manager) SendVoice(opus []byte, final bool) error {
 		return ErrEmptyVoiceFrame
 	}
 	m.voice.tx.push(voiceFrame{opus: opus, final: final})
+	return nil
+}
+
+// SetVoiceTarget selects the wire target for outgoing frames, taking effect
+// from the next frame sent. The default is VoiceTargetNormal.
+func (m *Manager) SetVoiceTarget(target byte) error {
+	if target > VoiceTargetLoopback {
+		return ErrInvalidVoiceTarget
+	}
+	m.voice.target.Store(uint32(target))
 	return nil
 }
 
@@ -373,6 +395,10 @@ type voiceIO struct {
 	proto    bool
 	listener *voiceListener
 
+	// target is the wire voice target of outgoing frames (see SetVoiceTarget).
+	// Stored as uint32 only because atomics have no byte flavor.
+	target atomic.Uint32
+
 	txOffline atomic.Uint64
 	txErrors  atomic.Uint64
 
@@ -421,7 +447,8 @@ func (v *voiceIO) sendLoop() {
 			// Conn.WriteAudio serializes on the Conn mutex, so writing from
 			// here is safe next to the read loop and to Client.Do.
 			err := client.Conn.WriteAudio(
-				voiceCodecOpus, 0, seq.step(frame.final), frame.final,
+				voiceCodecOpus, byte(v.target.Load()),
+				seq.step(frame.final), frame.final,
 				frame.opus, nil, nil, nil, proto,
 			)
 			if err != nil {

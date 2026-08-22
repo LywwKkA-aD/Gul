@@ -10,6 +10,11 @@ tasks:
     cmds:
       - go mod tidy
 
+  collect:licenses:
+    summary: Collects project and third-party license texts for binary packages
+    cmds:
+      - bash scripts/collect-licenses.sh "{{.BIN_DIR}}/legal"
+
   install:frontend:deps:
     summary: Install frontend dependencies
     run: once

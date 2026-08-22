@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -169,6 +170,105 @@ func TestChatServiceDelegates(t *testing.T) {
 	}
 	if got := svc.History(99); len(got) != 0 {
 		t.Fatalf("History(99) = %+v, want empty", got)
+	}
+}
+
+// voiceRecorder is the engine end of the audio plumbing: it records what core
+// forwards, so the service tests can prove the call arrived unchanged.
+type voiceRecorder struct {
+	mu      sync.Mutex
+	modes   []core.GateMode
+	tunings []string
+	ptt     []bool
+}
+
+func (v *voiceRecorder) Start(string, string) error { return nil }
+func (v *voiceRecorder) Stop()                      {}
+func (v *voiceRecorder) SetMute(bool)               {}
+func (v *voiceRecorder) SetDeafen(bool)             {}
+func (v *voiceRecorder) SetUserVolume(string, float32) {
+}
+
+func (v *voiceRecorder) SetGateMode(mode core.GateMode) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.modes = append(v.modes, mode)
+}
+
+func (v *voiceRecorder) SetVADTuning(open, close float32, hangoverMs int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.tunings = append(v.tunings, fmt.Sprintf("%g|%g|%d", open, close, hangoverMs))
+}
+
+func (v *voiceRecorder) SetPTT(held bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.ptt = append(v.ptt, held)
+}
+
+func (v *voiceRecorder) Devices() (playback, capture []domain.AudioDevice, err error) {
+	return nil, nil, nil
+}
+
+var _ core.VoiceEngine = (*voiceRecorder)(nil)
+
+func newAudioApp(t *testing.T) (*core.App, *voiceRecorder) {
+	t.Helper()
+	app, _ := newApp(t)
+	voice := &voiceRecorder{}
+	app.SetVoice(voice)
+	return app, voice
+}
+
+func TestAudioServiceGateControlsDelegate(t *testing.T) {
+	t.Parallel()
+	app, voice := newAudioApp(t)
+	svc := NewAudioService(app)
+
+	if err := svc.SetGateMode("ptt"); err != nil {
+		t.Fatalf("SetGateMode: %v", err)
+	}
+	// float64 in, float32 at the engine: the values must survive the narrowing.
+	if err := svc.SetVADTuning(0.75, 0.55, 250); err != nil {
+		t.Fatalf("SetVADTuning: %v", err)
+	}
+	if err := svc.SetPTT(true); err != nil {
+		t.Fatalf("SetPTT(true): %v", err)
+	}
+	if err := svc.SetPTT(false); err != nil {
+		t.Fatalf("SetPTT(false): %v", err)
+	}
+
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.modes) != 1 || voice.modes[0] != core.GateModePTT {
+		t.Errorf("modes = %v, want [%v]", voice.modes, core.GateModePTT)
+	}
+	if len(voice.tunings) != 1 || voice.tunings[0] != "0.75|0.55|250" {
+		t.Errorf("tunings = %v, want [0.75|0.55|250]", voice.tunings)
+	}
+	if len(voice.ptt) != 2 || !voice.ptt[0] || voice.ptt[1] {
+		t.Errorf("ptt = %v, want [true false]", voice.ptt)
+	}
+}
+
+func TestAudioServicePropagatesValidationErrors(t *testing.T) {
+	t.Parallel()
+	app, voice := newAudioApp(t)
+	svc := NewAudioService(app)
+
+	if err := svc.SetGateMode("whisper"); !errors.Is(err, core.ErrUnknownGateMode) {
+		t.Errorf("SetGateMode err = %v, want %v", err, core.ErrUnknownGateMode)
+	}
+	if err := svc.SetVADTuning(0.3, 0.9, 300); !errors.Is(err, core.ErrInvalidVADTuning) {
+		t.Errorf("SetVADTuning err = %v, want %v", err, core.ErrInvalidVADTuning)
+	}
+
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.modes) != 0 || len(voice.tunings) != 0 {
+		t.Fatalf("engine reached despite invalid input: modes=%v tunings=%v", voice.modes, voice.tunings)
 	}
 }
 

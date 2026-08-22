@@ -157,6 +157,8 @@ tasks:
 
   create:app:bundle:
     summary: Creates an `.app` bundle
+    deps:
+      - task: common:collect:licenses
     cmds:
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
@@ -167,6 +169,9 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/Legal"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/Legal"
+      - cp -R "{{.BIN_DIR}}/legal/." "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/Legal/"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:

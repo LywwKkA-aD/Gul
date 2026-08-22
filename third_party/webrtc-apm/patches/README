@@ -1,0 +1,19 @@
+Patches applied on top of the pristine upstream tarball by
+scripts/vendor-webrtc-apm.sh, in filename order.
+
+The upstream patches/ directory of webrtc-audio-processing (MinGW fixes,
+MSVC winsock2/XMM fixes, BSD support) is a record of deltas that are already
+applied in the v2.1 release tree. Verified against v2.1:
+rtc_base/system/file_wrapper.cc and rtc_base/logging.cc already include
+<windows.h> in lower case with <winsock2.h> first, and
+rtc_base/platform_thread_types.cc already guards the structured-exception
+thread naming with #ifndef __MINGW32__.
+
+Local patches:
+
+- `0001-trace-event-include-cstdint.patch` makes `trace_event.h` self-contained.
+  GCC 15.2/MinGW does not obtain the global `uint8_t` typedef transitively
+  through `<string>`, so the unpatched header fails native Windows builds.
+- `0002-multi-channel-content-detector-include-cstdint.patch` makes
+  `multi_channel_content_detector.h` self-contained. GCC 15.2/MinGW likewise
+  requires the defining header for its two `int64_t` members.

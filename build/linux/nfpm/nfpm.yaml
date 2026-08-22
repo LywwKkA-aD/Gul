@@ -6,7 +6,7 @@
 name: "gul"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.2.0"
+version: "0.3.0~alpha1"
 section: "net"
 priority: "optional"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
@@ -25,6 +25,9 @@ contents:
     dst: "/usr/share/applications/gul.desktop"
     file_info:
       mode: 0644
+  - src: "./bin/legal"
+    dst: "/usr/share/doc/gul"
+    type: tree
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:
@@ -34,6 +37,8 @@ depends:
   # cannot infer them from the binary.
   - libpulse0
   - libasound2t64
+  - libstdc++6
+  - libgcc-s1
 
 # Distribution-specific overrides for different package formats
 overrides:
@@ -42,12 +47,15 @@ overrides:
     depends:
       - gtk4
       - webkitgtk6.0
+      - libstdc++
+      - libgcc
 
   # Arch Linux packages
   archlinux:
     depends:
       - gtk4
       - webkitgtk-6.0
+      - gcc-libs
 
 # scripts section to ensure desktop database is updated after install
 scripts:
