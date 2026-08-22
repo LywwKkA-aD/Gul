@@ -24,26 +24,31 @@ type rxStream struct {
 	lastPacket time.Time
 }
 
-// rxPipeline is the M2 incoming path: passthrough packets -> per-user
-// decode -> repack to 10 ms -> jitter -> mixer -> playback frame.
+// rxPipeline is the incoming path (PLAN.md 4.4): passthrough packets ->
+// per-user decode -> repack to 10 ms -> jitter -> mixer -> reference for
+// AEC3 -> playback frame.
 type rxPipeline struct {
 	cfg     Config
 	log     *slog.Logger
+	chain   *dspChain
 	streams map[uint32]*rxStream
 	mixer   *Mixer
 	mix     []int16
 	frame   []int16
+	silence []int16
 	outRMS  float64
 }
 
-func newRxPipeline(cfg Config) *rxPipeline {
+func newRxPipeline(cfg Config, chain *dspChain) *rxPipeline {
 	return &rxPipeline{
 		cfg:     cfg,
 		log:     cfg.Log,
+		chain:   chain,
 		streams: make(map[uint32]*rxStream),
 		mixer:   NewMixer(),
 		mix:     make([]int16, FrameSamples),
 		frame:   make([]int16, FrameSamples),
+		silence: make([]int16, FrameSamples),
 	}
 }
 
@@ -107,7 +112,12 @@ func (r *rxPipeline) ingest(p mumble.VoicePacket) {
 }
 
 // tick produces exactly one playback frame from all active streams.
-func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map) {
+//
+// extraSilence is the number of silent frames the playback device padded in
+// since the last tick (underruns): the speaker really played them, so the
+// echo canceller has to see them too, or its reference timeline slips one
+// frame behind reality per underrun.
+func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map, extraSilence int) {
 	now := time.Now()
 	for session, s := range r.streams {
 		switch s.jit.Pop(r.frame) {
@@ -139,7 +149,22 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map) {
 
 	r.mixer.Mix(r.mix)
 	r.outRMS = RMS(r.mix)
-	sink.WriteFrame(r.mix)
+
+	// Reference discipline (PLAN.md 4.4, refined): AEC3 must see exactly
+	// what the speaker plays. Underrun padding is replayed as silence, and
+	// a frame the full ring rejected never reaches the canceller at all -
+	// so clock drift between the tick and the device surfaces as matching
+	// reference corrections instead of a growing misalignment. Feeding
+	// after the successful write is safe: the ring guarantees the frame
+	// reaches the speaker at least one period later, so the reference
+	// still precedes its echo.
+	for range extraSilence {
+		clear(r.silence)
+		r.chain.reverse(r.silence)
+	}
+	if sink.WriteFrame(r.mix) {
+		r.chain.reverse(r.mix)
+	}
 }
 
 func (r *rxPipeline) setTalking(s *rxStream, talking bool) {

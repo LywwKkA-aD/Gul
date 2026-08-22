@@ -6,10 +6,14 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
 )
 
-// txPipeline is the M2 outgoing path: mic s16 frame -> opus -> transport.
-// APM and RNNoise slot in front of the encoder in M3.
+// txPipeline is the outgoing path (PLAN.md 4.3): mic s16 frame -> APM ->
+// RNNoise -> gate -> opus -> transport. The chain always runs, muted or
+// not, so the DSP states stay warm and the mic meter shows the processed
+// level; muted and gate-closed frames simply never reach the encoder.
 type txPipeline struct {
 	enc     *opus.Encoder
+	chain   *dspChain
+	gate    *Gate // nil when the DSP options disable gating
 	send    func(opus []byte, final bool) error
 	log     *slog.Logger
 	frame   []int16
@@ -18,13 +22,15 @@ type txPipeline struct {
 	micRMS  float64
 }
 
-func newTxPipeline(cfg Config) (*txPipeline, error) {
+func newTxPipeline(cfg Config, chain *dspChain, gate *Gate) (*txPipeline, error) {
 	enc, err := opus.NewEncoder(cfg.Bitrate)
 	if err != nil {
 		return nil, err
 	}
 	return &txPipeline{
 		enc:    enc,
+		chain:  chain,
+		gate:   gate,
 		send:   cfg.Send,
 		log:    cfg.Log,
 		frame:  make([]int16, FrameSamples),
@@ -32,12 +38,17 @@ func newTxPipeline(cfg Config) (*txPipeline, error) {
 	}, nil
 }
 
-// tick drains every frame the capture ring has accumulated. Without a gate
-// (PTT/VAD are M3) an unmuted mic transmits continuously.
-func (t *txPipeline) tick(src FrameSource, muted bool) {
+// tick drains every frame the capture ring has accumulated.
+func (t *txPipeline) tick(src FrameSource, muted, ptt bool) {
 	for src.ReadFrame(t.frame) {
+		vad := t.chain.tx(t.frame)
 		t.micRMS = RMS(t.frame)
-		if muted {
+
+		transmit := !muted
+		if transmit && t.gate != nil {
+			transmit = t.gate.Update(vad, ptt)
+		}
+		if !transmit {
 			t.finish()
 			continue
 		}

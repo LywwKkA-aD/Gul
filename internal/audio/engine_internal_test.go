@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LywwKkA-aD/Gul/internal/dsp/apm"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
@@ -87,10 +88,14 @@ func TestEngineLoopback(t *testing.T) {
 	}
 
 	var talkingOn, talkingOff atomic.Int64
+	// The M3 TX shape minus AEC3: in a loopback test the returned stream IS
+	// the echo reference, so a working canceller would (correctly) erase it.
+	dsp := DSPOptions{EchoCancel: false, NS: apm.NSLow, RNNoise: true, Gate: true}
 	e := NewEngine(Config{
 		Packets: packets,
 		Send:    send,
 		Bitrate: 40000,
+		DSP:     &dsp,
 		Log:     slog.Default(),
 		Callbacks: Callbacks{
 			OnTalking: func(session uint32, hash string, talking bool) {
@@ -136,6 +141,80 @@ func TestEngineLoopback(t *testing.T) {
 	}
 }
 
+// burstSource plays a tone for toneFrames frames, then silence, paced to
+// the wall clock like a real capture ring.
+type burstSource struct {
+	start      time.Time
+	offset     int
+	toneFrames int
+}
+
+func (s *burstSource) ReadFrame(dst []int16) bool {
+	if s.start.IsZero() {
+		s.start = time.Now()
+	}
+	produced := s.offset / FrameSamples
+	if int(time.Since(s.start)/(FrameMs*time.Millisecond)) <= produced {
+		return false
+	}
+	if produced >= s.toneFrames {
+		clear(dst)
+		s.offset += len(dst)
+		return true
+	}
+	const amp = 0.3 * 32767
+	for i := range dst {
+		tm := float64(s.offset+i) / SampleRate
+		dst[i] = int16(amp * math.Sin(2*math.Pi*440*tm))
+	}
+	s.offset += len(dst)
+	return true
+}
+
+// TestEngineGateClosesOnSilence drives the M3 gate end to end: the VAD
+// opens on the tone, the hangover carries over the first quiet frames, and
+// the transmission then closes with exactly one terminator - without any
+// mute involved.
+func TestEngineGateClosesOnSilence(t *testing.T) {
+	var sent, finals atomic.Int64
+	send := func(opus []byte, final bool) error {
+		if final {
+			finals.Add(1)
+		} else {
+			sent.Add(1)
+		}
+		return nil
+	}
+	dsp := DSPOptions{EchoCancel: false, NS: apm.NSLow, RNNoise: true, Gate: true}
+	e := NewEngine(Config{Send: send, DSP: &dsp, Log: slog.Default()})
+
+	const toneFrames = 60
+	src := &burstSource{toneFrames: toneFrames}
+	sink := &collectSink{}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go e.run(src, sink, stop, done)
+
+	// Tone 600 ms, then a second of silence: enough for the 300 ms
+	// hangover to expire and the terminator to go out.
+	time.Sleep(1600 * time.Millisecond)
+	close(stop)
+	<-done
+
+	if got := finals.Load(); got != 1 {
+		t.Fatalf("terminators = %d, want exactly 1", got)
+	}
+	got := sent.Load()
+	if got < toneFrames/2 {
+		t.Fatalf("sent only %d voice frames during the tone", got)
+	}
+	// The tail may carry the full hangover plus the VAD's own inertia, but
+	// a gate that never closes would keep transmitting the whole second.
+	if max := int64(toneFrames + 30 + 20); got > max {
+		t.Fatalf("sent %d frames, want at most %d - the gate did not close", got, max)
+	}
+}
+
 // TestEngineDeafenSilencesOutput checks that deafen keeps frames flowing
 // to the sink but silent.
 func TestEngineDeafenSilencesOutput(t *testing.T) {
@@ -151,7 +230,9 @@ func TestEngineDeafenSilencesOutput(t *testing.T) {
 		}
 		return nil
 	}
-	e := NewEngine(Config{Packets: packets, Send: send, Log: slog.Default()})
+	// The bare M2 shape pins the passthrough path: no APM, no RNNoise, no
+	// gate - deafen semantics must not depend on the DSP chain.
+	e := NewEngine(Config{Packets: packets, Send: send, DSP: &DSPOptions{}, Log: slog.Default()})
 	e.SetDeafen(true)
 
 	src := &sineSource{}
