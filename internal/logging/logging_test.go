@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,11 @@ func TestSetupWritesJSONAndRotatesExistingLogs(t *testing.T) {
 	}
 	if info, err := os.Stat(current); err != nil {
 		t.Fatalf("stat current log: %v", err)
-	} else if got := info.Mode().Perm(); got != 0o600 {
+	} else if !info.Mode().IsRegular() {
+		t.Fatalf("current log mode = %v, want a regular file", info.Mode())
+	} else if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
+		// Windows reports synthesized POSIX bits; privacy there comes from the
+		// per-user ACL inherited from os.UserConfigDir rather than chmod bits.
 		t.Fatalf("current log permissions = %o, want 600", got)
 	}
 }
