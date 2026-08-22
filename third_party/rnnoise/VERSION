@@ -1,0 +1,30 @@
+rnnoise 70f1d256acd4b34a572f999a05c87bf00b67730d (branch main, 2025-02-22)
+repo: https://github.com/xiph/rnnoise.git
+subset: include/rnnoise.h COPYING AUTHORS + Makefile.am RNNOISE_SOURCES and
+  noinst_HEADERS
+model: https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
+  sha256: 0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37 (= model_version at this commit)
+  taken from it: src/rnnoise_data.h and src/rnnoise_data.c reduced to what a
+  -DUSE_WEIGHTS_FILE build compiles (78 MB of weight arrays dropped)
+weights: internal/dsp/rnnoise/weights_blob.bin, 14751424 bytes
+  sha256: 1b99898350e75656c77d068162fea402afe51eff15dc751989b1e9f53b98bf91
+  built by dump_weights_blob (src/write_weights.c -DDUMP_BINARY_WEIGHTS);
+  the library is compiled with -DUSE_WEIGHTS_FILE, so this blob is the only
+  copy of the model in the binary
+  it carries every array upstream ships: float32 weights for every layer
+  (11509888 bytes) plus int8 copies for the seven layers that have them
+  (2802112 bytes: conv2 and gru{1,2,3} input/recurrent). compute_linear
+  prefers the float copy when present, so this blob runs bit-for-bit the
+  model an upstream default build runs. There is NO safe reduction here:
+  conv1, dense_out and vad_dense exist only as float (init_rnnoise passes
+  NULL for their int8 names), and a record missing from the blob is silently
+  NULL - linear_init still succeeds and compute_linear zero-fills that
+  layer's output, so a stripped blob produces a garbage model (vad_prob
+  included) with no error anywhere. Slimming the model means editing
+  init_rnnoise - a quality change for the M3 A/B, not for this script.
+x86 builds: nnet.h emits '#warning "Only SSE and SSE2 are available..."'
+  once per translation unit on amd64. Deliberate: run-time SIMD dispatch
+  needs RNN_ENABLE_X86_RTCD plus per-file -mavx2, which cgo cannot express.
+  The warning is expected and harmless - do not "fix" it by defining that
+  macro.
+update: scripts/vendor-rnnoise.sh
