@@ -4,6 +4,11 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/LywwKkA-aD/Gul/internal/dsp/rnnoise"
@@ -147,6 +152,64 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 	if _, err := d.Process(make([]float32, rnnoise.FrameSamples)); !errors.Is(err, rnnoise.ErrClosed) {
 		t.Fatalf("Process after Close: %v, want ErrClosed", err)
+	}
+}
+
+// TestModelFromBufferInitializesFile pins a vendored RNNoise lifetime fix.
+// Upstream's buffer constructor used to leave RNNModel.file uninitialised,
+// while rnnoise_model_free treated any non-NULL value as a FILE*. On Linux,
+// closing a denoiser could consequently pass allocator garbage to fclose.
+func TestModelFromBufferInitializesFile(t *testing.T) {
+	t.Parallel()
+
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller could not locate the test source")
+	}
+	path := filepath.Join(filepath.Dir(testFile), "..", "..", "..", "third_party", "rnnoise", "src", "denoise.c")
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read vendored denoise.c: %v", err)
+	}
+	const signature = "RNNModel *rnnoise_model_from_buffer(const void *ptr, int len) {"
+	start := strings.Index(string(source), signature)
+	if start < 0 {
+		t.Fatalf("vendored denoise.c does not contain %q", signature)
+	}
+	end := strings.Index(string(source[start:]), "\n}")
+	if end < 0 {
+		t.Fatal("cannot find the end of rnnoise_model_from_buffer")
+	}
+	body := string(source[start : start+end])
+	if !strings.Contains(body, "model->file = NULL;") {
+		t.Fatal("rnnoise_model_from_buffer does not initialise model->file before the model can be freed")
+	}
+}
+
+// TestCloseWithPoisonedAllocator exercises the same bug at the public Go API.
+// MALLOC_PERTURB_ makes otherwise-indeterminate malloc bytes non-zero, and
+// disabling glibc's tcache keeps that poisoning deterministic in the child.
+func TestCloseWithPoisonedAllocator(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("glibc allocator regression test")
+	}
+	const childEnv = "GUL_RNNOISE_POISONED_ALLOCATOR_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		d := newDenoiser(t)
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCloseWithPoisonedAllocator$")
+	cmd.Env = append(os.Environ(),
+		childEnv+"=1",
+		"MALLOC_PERTURB_=165",
+		"GLIBC_TUNABLES=glibc.malloc.tcache_count=0",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("denoiser child failed with poisoned allocator: %v\n%s", err, output)
 	}
 }
 

@@ -75,6 +75,7 @@ tasks:
         -not -path './third_party/*'
         -not -path './frontend/*'
         -exec gofmt -l {} +)"
+      - bash scripts/check-native-headers.sh
       - go vet {{.GO_PACKAGES}}
       - golangci-lint run {{.GO_PACKAGES}}
       - cd frontend && npm run lint

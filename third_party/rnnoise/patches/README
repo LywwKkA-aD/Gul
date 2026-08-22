@@ -1,0 +1,10 @@
+Patches applied on top of the pinned upstream RNNoise commit by
+scripts/vendor-rnnoise.sh, in filename order.
+
+Local patches:
+
+- `0001-initialize-buffer-model-file.patch` initialises the `file` member in
+  `rnnoise_model_from_buffer`. Upstream leaves it as allocator garbage, but
+  `rnnoise_model_free` calls `fclose` whenever that member is non-NULL. This
+  caused intermittent Linux crashes while closing independently created
+  denoisers.

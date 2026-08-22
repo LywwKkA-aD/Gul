@@ -137,6 +137,7 @@ jobs:
           /c/mingw64/licenses/winpthreads/COPYING|third_party/toolchain-runtime/winpthreads/COPYING
           LICENSES
           fi
+          bash scripts/check-native-headers.sh
 
       - name: Install wails3 CLI
         run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"

@@ -107,7 +107,33 @@ go_modules=(
 )
 
 for module_path in "${go_modules[@]}"; do
-  module_info=$(cd "$repo_root" && go list -m -f '{{.Version}}|{{.Dir}}' "$module_path")
+  # `go list -m` can report an empty .Dir for a selected module that is only
+  # used on another platform. Download the exact selected version instead;
+  # the Go command verifies its module and go.mod checksums against go.sum.
+  module_info=$(
+    cd "$repo_root"
+    go mod download -json "$module_path" |
+      GUL_LICENSE_MODULE_PATH="$module_path" node -e '
+        const fs = require("node:fs");
+        const metadata = JSON.parse(fs.readFileSync(0, "utf8"));
+        const expectedPath = process.env.GUL_LICENSE_MODULE_PATH;
+
+        if (metadata.Error) {
+          throw new Error(`failed to download ${expectedPath}: ${metadata.Error}`);
+        }
+        if (metadata.Path !== expectedPath) {
+          throw new Error(`downloaded unexpected Go module: ${metadata.Path}`);
+        }
+        if (!metadata.Version || !metadata.Dir) {
+          throw new Error(`download metadata is incomplete for ${expectedPath}`);
+        }
+        if (!metadata.Sum || !metadata.GoModSum) {
+          throw new Error(`download checksums are missing for ${expectedPath}`);
+        }
+
+        process.stdout.write(`${metadata.Version}|${metadata.Dir}`);
+      '
+  )
   IFS='|' read -r module_version module_dir <<<"$module_info"
   if [[ -z "$module_dir" || ! -d "$module_dir" ]]; then
     echo "Go module is not downloaded: $module_path@$module_version" >&2

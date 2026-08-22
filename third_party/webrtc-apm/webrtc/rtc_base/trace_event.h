@@ -27,6 +27,7 @@
 // IWYU pragma: end_exports
 
 #if !defined(RTC_USE_PERFETTO)
+#include <cstdint>
 #include <string>
 
 #include "rtc_base/event_tracer.h"

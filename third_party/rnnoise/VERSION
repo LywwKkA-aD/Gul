@@ -27,4 +27,5 @@ x86 builds: nnet.h emits '#warning "Only SSE and SSE2 are available..."'
   needs RNN_ENABLE_X86_RTCD plus per-file -mavx2, which cgo cannot express.
   The warning is expected and harmless - do not "fix" it by defining that
   macro.
+patches: patches/*.patch (applied on top by this script)
 update: scripts/vendor-rnnoise.sh

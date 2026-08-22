@@ -1,0 +1,6 @@
+diff --git a/src/denoise.c b/src/denoise.c
+index b6fc3d4..45b40b0 100644
+--- a/src/denoise.c
++++ b/src/denoise.c
+@@ -240,0 +241 @@ RNNModel *rnnoise_model_from_buffer(const void *ptr, int len) {
++  model->file = NULL;

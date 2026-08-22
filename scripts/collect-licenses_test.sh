@@ -26,6 +26,40 @@ test -f "$output_dir/foreign-sentinel"
 rm "$output_dir/foreign-sentinel"
 rmdir "$output_dir"
 
+fake_go_bin="$test_root/fake-go-bin"
+download_marker="$test_root/godbus-download-invoked"
+platform_union_output="$test_root/platform-union/legal"
+real_go=$(command -v go)
+mkdir -p "$fake_go_bin" "$(dirname "$platform_union_output")"
+cat >"$fake_go_bin/go" <<'FAKE_GO'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${1:-}" == "list" && "$*" == *"github.com/godbus/dbus/v5"* ]]; then
+  # Reproduce `go list -m` on a platform where the selected module is not in
+  # the active build graph: the version is known, but .Dir is empty.
+  printf 'v5.2.2|\n'
+  exit 0
+fi
+
+if [[ "${1:-}" == "mod" && "${2:-}" == "download" && "$*" == *"github.com/godbus/dbus/v5"* ]]; then
+  : >"$GUL_TEST_DOWNLOAD_MARKER"
+fi
+
+exec "$GUL_TEST_REAL_GO" "$@"
+FAKE_GO
+chmod +x "$fake_go_bin/go"
+
+GUL_TEST_DOWNLOAD_MARKER="$download_marker" \
+GUL_TEST_REAL_GO="$real_go" \
+PATH="$fake_go_bin:$PATH" \
+  "$repo_root/scripts/collect-licenses.sh" "$platform_union_output"
+test -f "$download_marker"
+test -f "$platform_union_output/THIRD_PARTY_LICENSES/go/github.com/godbus/dbus/v5/LICENSE"
+grep -Fq 'github.com/godbus/dbus/v5@v5.2.2' \
+  "$platform_union_output/THIRD_PARTY_MANIFEST.txt"
+
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 
@@ -48,6 +82,7 @@ test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/third_party/toolchain-runtime
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/toolchain/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/gumble/proto/LICENSE"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/godbus/dbus/v5/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/golang.org/x/sys/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/wailsapp/wails/v3/internal/webview2/webviewloader/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/wailsapp/wails/v3/internal/go-common-file-dialog/LICENSE"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Vendors RNNoise into third_party/rnnoise, builds the binary weights blob
-# embedded by internal/dsp/rnnoise and regenerates the cgo include stubs in
-# that package. Run from anywhere; paths are derived from this script.
+# Vendors RNNoise into third_party/rnnoise, applies the local patches kept in
+# third_party/rnnoise/patches, builds the binary weights blob embedded by
+# internal/dsp/rnnoise and regenerates the cgo include stubs in that package.
+# Run from anywhere; paths are derived from this script.
 # To bump the model or the code: update the pins below, run the script,
 # review the diff, re-run the rnnoise package tests.
 #
@@ -134,8 +135,9 @@ if ! diff -q <(pp "$SRC/src/rnnoise_data.c") <(pp "$TMP/rnnoise_data.c") >/dev/n
   exit 1
 fi
 
-echo "refreshing $VENDOR"
-rm -rf "$VENDOR"
+echo "refreshing $VENDOR (patches/ is kept)"
+rm -rf "$VENDOR/include" "$VENDOR/src"
+rm -f "$VENDOR/AUTHORS" "$VENDOR/COPYING" "$VENDOR/VERSION"
 mkdir -p "$VENDOR/include"
 cp "$SRC/include/rnnoise.h" "$VENDOR/include/"
 cp "$SRC/COPYING" "$SRC/AUTHORS" "$VENDOR/"
@@ -144,6 +146,12 @@ for f in $SOURCES $HEADERS; do
   cp "$SRC/$f" "$VENDOR/$f"
 done
 cp "$TMP/rnnoise_data.c" "$VENDOR/src/rnnoise_data.c"
+
+for p in "$VENDOR"/patches/*.patch; do
+  [ -e "$p" ] || continue
+  echo "applying $(basename "$p")"
+  patch -p1 -d "$VENDOR" --no-backup-if-mismatch <"$p"
+done
 
 mkdir -p "$PKG"
 cp "$TMP/weights_blob.bin" "$PKG/weights_blob.bin"
@@ -185,6 +193,7 @@ x86 builds: nnet.h emits '#warning "Only SSE and SSE2 are available..."'
   needs RNN_ENABLE_X86_RTCD plus per-file -mavx2, which cgo cannot express.
   The warning is expected and harmless - do not "fix" it by defining that
   macro.
+patches: patches/*.patch (applied on top by this script)
 update: scripts/vendor-rnnoise.sh
 EOF
 
