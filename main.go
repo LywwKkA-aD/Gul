@@ -72,6 +72,21 @@ func (v *voiceAdapter) SetUserVolume(hash string, volume float32) {
 	v.engine.SetUserVolume(hash, volume)
 }
 
+// SetGateMode maps the validated core mode onto the engine's own type.
+func (v *voiceAdapter) SetGateMode(mode core.GateMode) {
+	m := audio.GateVAD
+	if mode == core.GateModePTT {
+		m = audio.GatePTT
+	}
+	v.engine.SetGateMode(m)
+}
+
+func (v *voiceAdapter) SetVADTuning(open, close float32, hangoverMs int) {
+	v.engine.SetVADTuning(open, close, hangoverMs)
+}
+
+func (v *voiceAdapter) SetPTT(held bool) { v.engine.SetPTT(held) }
+
 func (v *voiceAdapter) Devices() (playback, capture []domain.AudioDevice, err error) {
 	pb, cap, err := v.engine.Devices()
 	if err != nil {

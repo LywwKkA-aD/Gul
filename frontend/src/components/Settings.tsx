@@ -7,8 +7,10 @@ import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services'
 import { useGulStore } from '../state/store';
 import type { AudioDevice } from '../state/types';
 import { SILENT_DB, meterPercent } from '../state/types';
+import { GateSettings } from './GateSettings';
 import { Field } from './ui';
 import { cx } from './ui/cx';
+import { selectClass } from './ui/controlStyles';
 
 /** Settings modal. M2 ships the "Звук" tab only; the rest of the prototype's
     tabs stay in place as disabled stubs so the layout does not move later. */
@@ -175,6 +177,8 @@ function AudioTab() {
 
       <OutputMeter />
 
+      <GateSettings />
+
       {failed && (
         <p className="text-sm text-danger">
           Не удалось получить список устройств. Останется системное по умолчанию; подробности в
@@ -184,14 +188,6 @@ function AudioTab() {
     </div>
   );
 }
-
-/* Prototype selectStyle: the input base with the native chrome stripped -
-   34px tall, no border, the 1px edge is a box-shadow ring. */
-const selectClass =
-  'h-[34px] w-full min-w-0 cursor-pointer appearance-none rounded-md border-0 bg-bg-1 px-3 ' +
-  'text-text-1 shadow-[var(--sh-sm)] transition-[background-color,box-shadow] ' +
-  'duration-[var(--t-fast)] ease-[var(--e-out)] hover:shadow-[0_0_0_1px_var(--text-3)] ' +
-  'focus:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_color-mix(in_oklab,var(--accent)_18%,transparent)]';
 
 function DeviceSelect({
   devices,

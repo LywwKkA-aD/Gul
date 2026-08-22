@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -138,6 +139,103 @@ func (c *fakeController) snapshot() fakeController {
 
 var _ mumble.Controller = (*fakeController)(nil)
 
+type vadTuning struct {
+	open, close float32
+	hangoverMs  int
+}
+
+// fakeVoice records what core forwards to the audio engine. Start/Stop run on
+// their own goroutines in App, so every field is guarded.
+type fakeVoice struct {
+	mu sync.Mutex
+
+	mutes    []bool
+	deafens  []bool
+	volumes  []volumeCall
+	modes    []GateMode
+	tunings  []vadTuning
+	ptt      []bool
+	starts   int
+	stops    int
+	devCalls int
+}
+
+type volumeCall struct {
+	hash   string
+	volume float32
+}
+
+func (v *fakeVoice) Start(string, string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.starts++
+	return nil
+}
+
+func (v *fakeVoice) Stop() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.stops++
+}
+
+func (v *fakeVoice) SetMute(muted bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.mutes = append(v.mutes, muted)
+}
+
+func (v *fakeVoice) SetDeafen(deafened bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.deafens = append(v.deafens, deafened)
+}
+
+func (v *fakeVoice) SetUserVolume(hash string, volume float32) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.volumes = append(v.volumes, volumeCall{hash, volume})
+}
+
+func (v *fakeVoice) SetGateMode(mode GateMode) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.modes = append(v.modes, mode)
+}
+
+func (v *fakeVoice) SetVADTuning(open, close float32, hangoverMs int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.tunings = append(v.tunings, vadTuning{open, close, hangoverMs})
+}
+
+func (v *fakeVoice) SetPTT(held bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.ptt = append(v.ptt, held)
+}
+
+func (v *fakeVoice) Devices() (playback, capture []domain.AudioDevice, err error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.devCalls++
+	return nil, nil, nil
+}
+
+func (v *fakeVoice) snapshot() fakeVoice {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return fakeVoice{
+		mutes:   append([]bool(nil), v.mutes...),
+		deafens: append([]bool(nil), v.deafens...),
+		volumes: append([]volumeCall(nil), v.volumes...),
+		modes:   append([]GateMode(nil), v.modes...),
+		tunings: append([]vadTuning(nil), v.tunings...),
+		ptt:     append([]bool(nil), v.ptt...),
+	}
+}
+
+var _ VoiceEngine = (*fakeVoice)(nil)
+
 func newTestApp(t *testing.T) (*App, *fakeController, *fakeEmitter) {
 	t.Helper()
 	em := &fakeEmitter{}
@@ -145,6 +243,14 @@ func newTestApp(t *testing.T) (*App, *fakeController, *fakeEmitter) {
 	app := New(slog.New(slog.NewTextHandler(io.Discard, nil)), em)
 	app.SetController(ctrl)
 	return app, ctrl, em
+}
+
+func newVoiceApp(t *testing.T) (*App, *fakeVoice) {
+	t.Helper()
+	app, _, _ := newTestApp(t)
+	voice := &fakeVoice{}
+	app.SetVoice(voice)
+	return app, voice
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +435,192 @@ func TestSendMessagePropagatesError(t *testing.T) {
 
 	if err := app.SendMessage(1, "hi"); !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want %v", err, sentinel)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// voice
+// ---------------------------------------------------------------------------
+
+func TestVoiceGatesAndVolumeDelegate(t *testing.T) {
+	t.Parallel()
+	app, voice := newVoiceApp(t)
+
+	app.SetMute(true)
+	app.SetDeafen(true)
+	app.SetUserVolume("deadbeef", 1.5)
+
+	snap := voice.snapshot()
+	if len(snap.mutes) != 1 || !snap.mutes[0] {
+		t.Errorf("mutes = %v, want [true]", snap.mutes)
+	}
+	if len(snap.deafens) != 1 || !snap.deafens[0] {
+		t.Errorf("deafens = %v, want [true]", snap.deafens)
+	}
+	if len(snap.volumes) != 1 || snap.volumes[0] != (volumeCall{"deadbeef", 1.5}) {
+		t.Errorf("volumes = %v, want [{deadbeef 1.5}]", snap.volumes)
+	}
+}
+
+func TestSetGateModeDelegates(t *testing.T) {
+	t.Parallel()
+	app, voice := newVoiceApp(t)
+
+	if err := app.SetGateMode("ptt"); err != nil {
+		t.Fatalf("SetGateMode(ptt): %v", err)
+	}
+	if err := app.SetGateMode("vad"); err != nil {
+		t.Fatalf("SetGateMode(vad): %v", err)
+	}
+
+	got := voice.snapshot().modes
+	want := []GateMode{GateModePTT, GateModeVAD}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("modes = %v, want %v", got, want)
+	}
+}
+
+func TestSetGateModeRejectsUnknown(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"", "VAD", "Ptt", "off", "push-to-talk", " vad"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			app, voice := newVoiceApp(t)
+
+			if err := app.SetGateMode(mode); !errors.Is(err, ErrUnknownGateMode) {
+				t.Fatalf("err = %v, want %v", err, ErrUnknownGateMode)
+			}
+			if got := voice.snapshot().modes; len(got) != 0 {
+				t.Fatalf("engine was told %v despite invalid input", got)
+			}
+		})
+	}
+}
+
+func TestSetVADTuningDelegates(t *testing.T) {
+	t.Parallel()
+	app, voice := newVoiceApp(t)
+
+	if err := app.SetVADTuning(0.7, 0.5, 250); err != nil {
+		t.Fatalf("SetVADTuning: %v", err)
+	}
+	got := voice.snapshot().tunings
+	want := vadTuning{0.7, 0.5, 250}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("tunings = %v, want [%v]", got, want)
+	}
+}
+
+func TestSetVADTuningValidation(t *testing.T) {
+	t.Parallel()
+
+	nan := float32(math.NaN())
+	inf := float32(math.Inf(1))
+
+	cases := []struct {
+		name        string
+		open, close float32
+		hangoverMs  int
+		wantErr     bool
+	}{
+		{"defaults", 0.6, 0.4, 300, false},
+		{"fully open band", 1, 0, maxHangoverMs, false},
+		{"degenerate band", 0.5, 0.5, 0, false},
+		{"open above one", 1.01, 0.4, 300, true},
+		{"open below zero", -0.01, -0.02, 300, true},
+		{"close above open", 0.4, 0.6, 300, true},
+		{"open is NaN", nan, 0.4, 300, true},
+		{"close is NaN", 0.6, nan, 300, true},
+		{"open is Inf", inf, 0.4, 300, true},
+		{"negative hangover", 0.6, 0.4, -1, true},
+		{"hangover past the cap", 0.6, 0.4, maxHangoverMs + 1, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			app, voice := newVoiceApp(t)
+
+			err := app.SetVADTuning(tc.open, tc.close, tc.hangoverMs)
+			if tc.wantErr && !errors.Is(err, ErrInvalidVADTuning) {
+				t.Fatalf("err = %v, want %v", err, ErrInvalidVADTuning)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			want := 1
+			if tc.wantErr {
+				want = 0
+			}
+			if got := len(voice.snapshot().tunings); got != want {
+				t.Fatalf("engine calls = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestSetPTTDelegatesEveryTransition(t *testing.T) {
+	t.Parallel()
+	app, voice := newVoiceApp(t)
+
+	// Repeats are the frontend's job to filter; core forwards what it is told.
+	app.SetPTT(true)
+	app.SetPTT(true)
+	app.SetPTT(false)
+
+	got := voice.snapshot().ptt
+	want := []bool{true, true, false}
+	if len(got) != len(want) {
+		t.Fatalf("ptt = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ptt = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestGateControlsWithoutEngineValidateAndStaySilent(t *testing.T) {
+	t.Parallel()
+	app, _, _ := newTestApp(t)
+
+	// No engine injected: valid input is accepted and dropped, invalid input
+	// is still rejected - validation belongs to core, not to the engine.
+	if err := app.SetGateMode("ptt"); err != nil {
+		t.Errorf("SetGateMode without engine = %v, want nil", err)
+	}
+	if err := app.SetGateMode("nope"); !errors.Is(err, ErrUnknownGateMode) {
+		t.Errorf("SetGateMode(nope) = %v, want %v", err, ErrUnknownGateMode)
+	}
+	if err := app.SetVADTuning(0.6, 0.4, 300); err != nil {
+		t.Errorf("SetVADTuning without engine = %v, want nil", err)
+	}
+	if err := app.SetVADTuning(2, 0.4, 300); !errors.Is(err, ErrInvalidVADTuning) {
+		t.Errorf("SetVADTuning(2, ...) = %v, want %v", err, ErrInvalidVADTuning)
+	}
+	app.SetPTT(true)
+	app.SetMute(true)
+}
+
+func TestParseGateMode(t *testing.T) {
+	t.Parallel()
+
+	if got, err := ParseGateMode("vad"); err != nil || got != GateModeVAD {
+		t.Errorf("ParseGateMode(vad) = %q, %v", got, err)
+	}
+	if got, err := ParseGateMode("ptt"); err != nil || got != GateModePTT {
+		t.Errorf("ParseGateMode(ptt) = %q, %v", got, err)
+	}
+	got, err := ParseGateMode("loud")
+	if !errors.Is(err, ErrUnknownGateMode) {
+		t.Errorf("err = %v, want %v", err, ErrUnknownGateMode)
+	}
+	if got != "" {
+		t.Errorf("mode = %q, want empty on error", got)
+	}
+	if !strings.Contains(err.Error(), `"loud"`) {
+		t.Errorf("error %q does not name the rejected mode", err)
 	}
 }
 

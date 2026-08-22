@@ -6,7 +6,7 @@ import (
 )
 
 // AudioService bridges the UI to the voice engine through core: mute and
-// deafen, per-user volumes, device selection. Thin by design.
+// deafen, per-user volumes, device selection, transmit gate. Thin by design.
 type AudioService struct {
 	app *core.App
 }
@@ -29,6 +29,27 @@ func (s *AudioService) SetDeafen(deafened bool) {
 // certificate hash.
 func (s *AudioService) SetUserVolume(hash string, volume float64) {
 	s.app.SetUserVolume(hash, float32(volume))
+}
+
+// SetGateMode selects what opens the microphone: "vad" (voice activation) or
+// "ptt" (push-to-talk).
+func (s *AudioService) SetGateMode(mode string) error {
+	return s.app.SetGateMode(mode)
+}
+
+// SetVADTuning sets the voice-activation thresholds (speech probabilities in
+// [0, 1], close at or below open) and the hangover tail in milliseconds. The
+// arguments are float64 because that is what the bindings marshal a JS number
+// into; core narrows them to the engine's float32.
+func (s *AudioService) SetVADTuning(open, close float64, hangoverMs int) error {
+	return s.app.SetVADTuning(float32(open), float32(close), hangoverMs)
+}
+
+// SetPTT reports the push-to-talk key going down or up. Only the "ptt" gate
+// mode acts on it.
+func (s *AudioService) SetPTT(held bool) error {
+	s.app.SetPTT(held)
+	return nil
 }
 
 // AudioDevices is the device enumeration for the settings UI.

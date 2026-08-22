@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import { SILENT_DB } from './types';
 import type { ChannelNode, ChatMessage, ConnectionStatus, TofuPrompt } from './types';
+import {
+  PTT_KEY_DEFAULT,
+  VAD_HANGOVER_DEFAULT,
+  VAD_OPEN_DEFAULT,
+  clampHangoverMs,
+  clampOpenThreshold,
+} from './gate';
+import type { GateMode } from './gate';
 
 interface GulState {
   status: ConnectionStatus;
@@ -28,6 +36,22 @@ interface GulState {
   playbackId: string;
   settingsOpen: boolean;
 
+  // ── Transmit gate (M3) ──────────────────────────────────────────────────
+  /** What opens the microphone. Mirror of what AudioService was last told. */
+  gateMode: GateMode;
+  /** VAD open threshold; the closing edge is derived from it (gate.ts). */
+  vadOpen: number;
+  /** VAD hangover tail in ms. */
+  vadHangoverMs: number;
+  /** KeyboardEvent.code of the push-to-talk key - a physical key, so it does
+      not move when the keyboard layout changes. */
+  pttKey: string;
+  /** True while that key is held. Live session state, not a setting. */
+  pttHeld: boolean;
+  /** True while the settings field waits for the next key press. The PTT
+      listener stands down meanwhile, so binding a key cannot transmit. */
+  pttCapturing: boolean;
+
   setStatus: (status: ConnectionStatus) => void;
   setPingMs: (pingMs: number | null) => void;
   setTree: (tree: ChannelNode) => void;
@@ -41,6 +65,11 @@ interface GulState {
   setUserVolume: (hash: string, volume: number) => void;
   setDevices: (captureId: string, playbackId: string) => void;
   setSettingsOpen: (open: boolean) => void;
+  setGateMode: (mode: GateMode) => void;
+  setVadTuning: (open: number, hangoverMs: number) => void;
+  setPttKey: (code: string) => void;
+  setPttHeld: (held: boolean) => void;
+  setPttCapturing: (capturing: boolean) => void;
   reset: () => void;
 }
 
@@ -67,6 +96,13 @@ export const useGulStore = create<GulState>((set) => ({
   playbackId: '',
   settingsOpen: false,
 
+  gateMode: 'vad',
+  vadOpen: VAD_OPEN_DEFAULT,
+  vadHangoverMs: VAD_HANGOVER_DEFAULT,
+  pttKey: PTT_KEY_DEFAULT,
+  pttHeld: false,
+  pttCapturing: false,
+
   setStatus: (status) =>
     set((s) => {
       // Voice only runs while connected: anything else leaves stale halos and
@@ -86,6 +122,10 @@ export const useGulStore = create<GulState>((set) => ({
         talkingSessions: live ? s.talkingSessions : NO_TALKING,
         micDb: live ? s.micDb : SILENT_DB,
         outDb: live ? s.outDb : SILENT_DB,
+        // Nothing is on the wire while the session is down, so the indicator
+        // goes with the halos and the meters. The listener keeps its own
+        // record of what the engine was told and releases on the real keyup.
+        pttHeld: live ? s.pttHeld : false,
       };
     }),
   setPingMs: (pingMs) => set((s) => (s.status.state === 'connected' ? { pingMs } : s)),
@@ -119,6 +159,15 @@ export const useGulStore = create<GulState>((set) => ({
   setDevices: (captureId, playbackId) => set({ captureId, playbackId }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
 
+  // Leaving push-to-talk cannot leave a key held: the mode that reads it is
+  // gone, and the gate is reset on the engine side for the same reason.
+  setGateMode: (mode) => set((s) => (s.gateMode === mode ? s : { gateMode: mode, pttHeld: false })),
+  setVadTuning: (open, hangoverMs) =>
+    set({ vadOpen: clampOpenThreshold(open), vadHangoverMs: clampHangoverMs(hangoverMs) }),
+  setPttKey: (code) => set((s) => (s.pttKey === code ? s : { pttKey: code, pttHeld: false })),
+  setPttHeld: (held) => set((s) => (s.pttHeld === held ? s : { pttHeld: held })),
+  setPttCapturing: (capturing) => set({ pttCapturing: capturing }),
+
   reset: () =>
     set({
       status: initialStatus,
@@ -131,6 +180,9 @@ export const useGulStore = create<GulState>((set) => ({
       micDb: SILENT_DB,
       outDb: SILENT_DB,
       settingsOpen: false,
+      // Gate settings are settings and stay; what is live does not.
+      pttHeld: false,
+      pttCapturing: false,
     }),
 }));
 
