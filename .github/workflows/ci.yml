@@ -226,6 +226,26 @@ jobs:
       - name: Verify release license bundle
         run: bash scripts/collect-licenses_test.sh
 
+      - name: Build static Linux WSS relay
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          relay_version="$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' internal/core/app.go)"
+          test -n "$relay_version"
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=$relay_version" \
+            -o bin/gul-relay-linux-amd64 \
+            ./cmd/gul-relay
+          relay_file="$(file bin/gul-relay-linux-amd64)"
+          grep -Fq 'x86-64' <<<"$relay_file"
+          relay_segments="$(readelf -l bin/gul-relay-linux-amd64)"
+          if grep -Fq 'INTERP' <<<"$relay_segments"; then
+            echo "relay binary unexpectedly requires a dynamic loader" >&2
+            exit 1
+          fi
+
       - name: Build Linux amd64 test DEB
         if: runner.os == 'Linux'
         env:
