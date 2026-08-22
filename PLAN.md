@@ -58,7 +58,7 @@
 | Слой | Выбор | Пин | Примечания |
 |---|---|---|---|
 | Оболочка | **Wails v3** (beta) | `v3.0.0-beta.11` в go.mod И в `go install .../wails3@v3.0.0-beta.11` | Никогда `@latest`: беты — ежедневные nightly с master. Бинарных релизов у v3 нет (с beta.8), CLI только через go install. Docs: https://v3.wails.io — при расхождениях верить исходникам (v3/go.mod, v3/pkg/application) |
-| Язык ядра | **Go** | ≥ **1.25** (жёстко: v3/go.mod требует 1.25.0) | cgo обязателен, C++17 для APM |
+| Язык ядра | **Go** | **1.26.7** | cgo обязателен, C++17 для APM; patch-версия закреплена из-за исправлений безопасности stdlib |
 | Протокол Mumble | **github.com/stieneee/gumble** (живой форк layeh/gumble) | псевдоверсия `v0.0.0-20240610021017-a3449ae7108c` | MPL-2.0. Протокол 1.5 (protobuf-аудио), закрытие аудиоканалов. С M2 — собственный публичный форк с влитой веткой `feat/opus-passthrough` (коммит `4bdfe39e`), см. §5 |
 | Opus | **вендоренный libopus 1.6.1** + свой `gumble.AudioCodec` | tarball c downloads.xiph.org по SHA256 | BSD-3. Float-сборка БЕЗ DRED/OSCE/BWE, без intrinsics/RTCD (цена ~8-10% CPU при абсолютных ~1% ядра). НЕ импортировать `stieneee/gumble/opus` (тянет системный libopus через pkg-config). 137 stub-.c, +443 КБ к бинарнику — проверено сборкой |
 | AEC + AGC + NS | **webrtc-audio-processing v2.1** (freedesktop, WebRTC M131): AEC3 + GainController2 + NoiseSuppression + HPF | тег `v2.1` + свой каталог patches/ | BSD-3 + PATENTS; вендорится со срезом abseil-cpp (Apache-2.0), единый `-std=c++17`. C-шим свой (~200-300 строк extern "C", референс — livekit/rust-sdks webrtc-sys/src/apm.cpp). speexdsp из проекта исключён |
@@ -66,9 +66,9 @@
 | Аудио I/O | **вендоренный miniaudio 0.11.25** (`miniaudio.c`/`.h`) + собственная тонкая cgo-обёртка | файлы из репо mackron/miniaudio + patches/ | MIT-0/public domain. НЕ gen2brain/malgo (не экспонирует нужные поля) и НЕ duplex-режим (см. §4.2). Два патча: WASAPI `eCategory = AudioCategory_Communications` (Windows 11 Voice Clarity); опциональный `kAudioUnitSubType_VoiceProcessingIO` на macOS |
 | Frontend | **React 19 + TypeScript + Vite 8 + Tailwind v4** | TypeScript **6.0.2** (НЕ 7.x до выхода 7.1 — не работает typescript-eslint) | Состояние — zustand v5 (setState из Wails-колбэков вне React-дерева — это фича). Иконки — **@phosphor-icons/react** 2.1.10, только точечные импорты (не баррель). Шаблон Wails даёт React 18 — апгрейд до 19 руками сразу после init |
 | Сервер (не пишем) | **mumblevoip/mumble-server** | тег `v1.5.915` | Конфиг через `MUMBLE_CONFIG_*`, том `/data` (UID/GID 10000). 1.6 — RC, не брать. `opusthreshold` больше не трогаем (дефолт нормальный в 1.4+) |
-| CI | GitHub Actions | матрица ubuntu-24.04 / windows-latest / macos-latest | Linux-база: GTK4 + WebKitGTK 6.0 (`libgtk-4-dev`, `libwebkitgtk-6.0-dev`); `-tags gtk3` — только временный фолбэк, удаляется в v3.1 |
+| CI | GitHub Actions | матрица ubuntu-24.04 / windows-2025 / macos-latest | Linux-база: GTK4 + WebKitGTK 6.0 (`libgtk-4-dev`, `libwebkitgtk-6.0-dev`); `-tags gtk3` — только временный фолбэк, удаляется в v3.1 |
 
-Лицензии: проект — MIT. Зависимости: gumble-форк MPL-2.0 (пофайловый copyleft: наши правки его файлов публикуются — поэтому свой форк публичный), webrtc-audio-processing BSD-3 + PATENTS, abseil Apache-2.0, libopus BSD-3, rnnoise BSD-3, miniaudio MIT-0. В дистрибутив кладётся NOTICE со всеми уведомлениями; `third_party/*/LICENSE` + `VERSION` (upstream-коммит и команда обновления) обязательны. Запрещено: `USE_GPL_FFTW3`, любые GPL-зависимости.
+Лицензии: проект — MIT. Зависимости: gumble-форк MPL-2.0 (пофайловый copyleft: наши правки его файлов публикуются — поэтому свой форк публичный), webrtc-audio-processing BSD-3 + PATENTS, abseil Apache-2.0, libopus BSD-3, rnnoise BSD-3, miniaudio MIT-0. В дистрибутив кладётся NOTICE со всеми уведомлениями; `third_party/*/LICENSE` + `VERSION` (upstream-коммит и команда обновления) обязательны. Запрещено: `USE_GPL_FFTW3` и обычные GPL-зависимости; допустимое исключение — runtime GCC/libstdc++/libgcc под GCC Runtime Library Exception, полный текст которой входит в Windows-дистрибутив.
 
 ---
 
@@ -348,7 +348,7 @@ Taskfile-задачи: `task dev` (wails3 dev) · `task murmur:up|down` · `task
 ## 9. CI (.github/workflows/ci.yml)
 
 - Триггеры: PR и push в main; release-workflow по тегу `v*`.
-- Матрица: ubuntu-24.04 / windows-latest / macos-latest. Шаги: setup Go 1.25+ + Node → Linux-зависимости Wails (GTK4/WebKitGTK 6.0; сверить с `wails3 doctor`) → `task lint` → `go test -race ./...` → build → (release) `wails3 package` + upload.
+- Матрица: ubuntu-24.04 / windows-2025 / macos-latest. Шаги: setup Go 1.26.7 + Node → Linux-зависимости Wails (GTK4/WebKitGTK 6.0; сверить с `wails3 doctor`) → `task lint` → `go test -race ./...` → `govulncheck` → build → (release) package + upload.
 - cgo: всё из third_party статически, внешних dev-пакетов не требовать. APM+abseil — единый `-std=c++17`; per-GOOS дефайны (WEBRTC_WIN / WEBRTC_POSIX+WEBRTC_MAC / WEBRTC_POSIX+WEBRTC_LINUX, на arm64 + WEBRTC_HAS_NEON). Первая чистая сборка APM ~1650 .cc — обязателен кэш сборки Go; запасной ход: собирать статические .a через meson в CI и линковать.
 - Аудио-тесты в CI — только без устройств (синтетический clock); device-тесты за build-тегом локально.
 - Conformance Opus: энкод эталонного WAV → декод libopus и pion/opus (интероп-сетка без внешних зависимостей).
@@ -365,7 +365,7 @@ Taskfile-задачи: `task dev` (wails3 dev) · `task murmur:up|down` · `task
 6. **Зависимости** добавлять скупо, с обоснованием в PR. Новые C/C++-зависимости — только вендором в third_party с LICENSE и VERSION.
 7. **Секреты и артефакты** (сертификаты, config.json, wav-записи, weights) — в .gitignore с первого коммита (weights_blob.bin — исключение, он в репо).
 8. **Неоднозначность** — не гадать: консервативный вариант + `// DECISION:` + вопрос в PR.
-9. **Лицензии:** файлы форка gumble править только в нашем публичном форке (MPL-2.0); NOTICE поддерживать актуальным; GPL-опции зависимостей запрещены.
+9. **Лицензии:** файлы форка gumble править только в нашем публичном форке (MPL-2.0); NOTICE поддерживать актуальным; GPL-опции зависимостей запрещены, кроме отдельно документированного GCC runtime под Runtime Library Exception.
 10. **Прогресс** отмечать чекбоксами в §7 в том же PR, что закрывает задачу.
 
 ## 11. Риски и запасные ходы

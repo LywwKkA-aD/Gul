@@ -16,8 +16,9 @@ import (
 )
 
 // Version is the application version reported in diagnostics and the about
-// screen. Keep it aligned with build/config.yml package metadata.
-const Version = "0.2.0"
+// screen. Its numeric base must match build/config.yml; platform metadata omits
+// the prerelease suffix where the native format requires numeric components.
+const Version = "0.3.0-alpha.1"
 
 const (
 	// historyPerChannel caps the in-memory session transcript per channel.
