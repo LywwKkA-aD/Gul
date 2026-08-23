@@ -1,6 +1,9 @@
 import { useEffect, type ReactNode } from 'react';
 import { KeyboardIcon } from '@phosphor-icons/react/dist/csr/Keyboard';
-import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import {
+  AudioService,
+  SettingsService,
+} from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { GateMode } from '../state/gate';
 import {
@@ -9,15 +12,14 @@ import {
   VAD_OPEN_MIN,
   clampHangoverMs,
   clampOpenThreshold,
-  closeThreshold,
   keyLabel,
 } from '../state/gate';
 import { cx } from './ui/cx';
 import { captionClass, selectClass } from './ui/controlStyles';
 
 /** Transmit gate section of the "Звук" tab: what opens the microphone
-    (PLAN.md 4.3). The engine keeps these across its own restarts; storing
-    them across application restarts is M4. */
+    (PLAN.md 4.3). Every control writes through a service: core applies the
+    change to the engine and persists it (config.json). */
 export function GateSettings() {
   const gateMode = useGulStore((s) => s.gateMode);
   const setGateMode = useGulStore((s) => s.setGateMode);
@@ -85,14 +87,13 @@ function VadTuning() {
   const setVadTuning = useGulStore((s) => s.setVadTuning);
 
   // One slider drives both edges of the hysteresis band: the closing
-  // threshold is a property of the gate, not a second decision for the user.
+  // threshold is derived in Go (config.CloseThreshold), not a second decision
+  // for the user and not a second number to keep in sync here.
   const apply = (open: number, hangoverMs: number) => {
     const nextOpen = clampOpenThreshold(open);
     const nextHangover = clampHangoverMs(hangoverMs);
     setVadTuning(nextOpen, nextHangover);
-    AudioService.SetVADTuning(nextOpen, closeThreshold(nextOpen), nextHangover).catch(
-      console.error,
-    );
+    AudioService.SetVADTuning(nextOpen, nextHangover).catch(console.error);
   };
 
   const percent = Math.round(vadOpen * 100);
@@ -158,7 +159,9 @@ function PttKeyField() {
       e.stopPropagation();
       setPttCapturing(false);
       // Escape leaves the current binding alone.
-      if (e.code && e.code !== 'Escape') setPttKey(e.code);
+      if (!e.code || e.code === 'Escape') return;
+      setPttKey(e.code);
+      SettingsService.SetPTTKey(e.code).catch(console.error);
     };
     const onBlur = () => setPttCapturing(false);
     window.addEventListener('keydown', onKey, true);
@@ -199,7 +202,7 @@ function PttKeyField() {
         </button>
       </div>
       <p className="text-sm text-text-2">
-        Работает, пока окно в фокусе. Глобальная клавиша появится в следующем милстоуне.
+        Работает, пока окно в фокусе. Клавиша запоминается между запусками.
       </p>
     </div>
   );

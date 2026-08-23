@@ -160,6 +160,13 @@ func main() {
 	})
 	coreApp.SetVoice(&voiceAdapter{engine: engine})
 
+	// After SetVoice: the stored device selection has to be in place before
+	// the engine starts, and the gate settings reach the engine that now
+	// exists. A document this build cannot read costs the settings, not the
+	// start - core logs what was lost and runs on defaults.
+	settings, settingsErr := config.Load(cfgDir)
+	coreApp.UseSettings(cfgDir, settings, settingsErr)
+
 	app := application.New(application.Options{
 		Name:        "Gul",
 		Description: "Voice chat for friends on top of Mumble",
@@ -168,12 +175,17 @@ func main() {
 		// retaining Gul's own DEBUG diagnostics.
 		Logger:   logging.WithMinimumLevel(logger, slog.LevelWarn),
 		LogLevel: slog.LevelWarn,
+		// Settings writes are debounced; a change made inside the last window
+		// would otherwise leave with the process. Runs before the services
+		// are shut down, on Cmd+Q as well as on a window-driven quit.
+		OnShutdown: coreApp.FlushSettings,
 		Services: []application.Service{
 			application.NewService(services.NewConnectionService(coreApp)),
 			application.NewService(services.NewChannelsService(coreApp)),
 			application.NewService(services.NewChatService(coreApp)),
 			application.NewService(services.NewDiagnosticsService(coreApp)),
 			application.NewService(services.NewAudioService(coreApp)),
+			application.NewService(services.NewSettingsService(coreApp)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

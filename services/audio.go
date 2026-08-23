@@ -37,12 +37,12 @@ func (s *AudioService) SetGateMode(mode string) error {
 	return s.app.SetGateMode(mode)
 }
 
-// SetVADTuning sets the voice-activation thresholds (speech probabilities in
-// [0, 1], close at or below open) and the hangover tail in milliseconds. The
-// arguments are float64 because that is what the bindings marshal a JS number
-// into; core narrows them to the engine's float32.
-func (s *AudioService) SetVADTuning(open, close float64, hangoverMs int) error {
-	return s.app.SetVADTuning(float32(open), float32(close), hangoverMs)
+// SetVADTuning sets the voice-activation threshold (a speech probability in
+// [0, 1]) and the hangover tail in milliseconds. open is float64 because that
+// is what the bindings marshal a JS number into; the closing edge of the
+// hysteresis band is derived in core rather than asked of the user.
+func (s *AudioService) SetVADTuning(open float64, hangoverMs int) error {
+	return s.app.SetVADTuning(open, hangoverMs)
 }
 
 // SetPTT reports the push-to-talk key going down or up. Only the "ptt" gate

@@ -1,6 +1,7 @@
 import { Events } from '@wailsio/runtime';
+import { SettingsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from './store';
-import { commitLastConnection } from './lastConnection';
+import { normalizeSettings } from './settings';
 import { normalizeTree } from './types';
 import type {
   AudioLevels,
@@ -33,10 +34,18 @@ export function subscribeGulEvents(): void {
 
   Events.On(CONNECTION_STATE, (e) => {
     const status = e.data as unknown as ConnectionStatus;
-    // The connect form is remembered only once the server accepted it, and
-    // the screen that filled it is already gone by then.
-    if (status.state === 'connected') commitLastConnection();
     useGulStore.getState().setStatus(status);
+    // The Go side remembers the connect form once the server has accepted it
+    // (internal/core/settings.go). Read it back, so a disconnect inside this
+    // session finds the form the way the next start would fill it.
+    if (status.state === 'connected') {
+      SettingsService.Load()
+        .then((settings) => {
+          const remembered = normalizeSettings(settings);
+          useGulStore.getState().setRememberedConnection(remembered.address, remembered.username);
+        })
+        .catch((err: unknown) => console.error('settings:', err));
+    }
   });
   Events.On(CONNECTION_LATENCY, (e) => {
     const latency = e.data as unknown as ConnectionLatency;

@@ -4,36 +4,34 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
-// GateMode is the transmit gate mode as the UI spells it. The audio engine
-// has its own type; the adapter in main.go translates, so nothing under core
-// depends on the wire spelling.
-type GateMode string
+// GateMode is the transmit gate mode as the UI spells it and as the settings
+// document stores it. The vocabulary and the bounds live in internal/config,
+// so the file on disk and the running gate cannot drift apart. The audio
+// engine has its own type; the adapter in main.go translates.
+type GateMode = config.GateMode
 
 const (
 	// GateModeVAD transmits on the denoiser's speech probability.
-	GateModeVAD GateMode = "vad"
+	GateModeVAD = config.GateModeVAD
 	// GateModePTT transmits while the push-to-talk key is held.
-	GateModePTT GateMode = "ptt"
+	GateModePTT = config.GateModePTT
 )
 
-// maxHangoverMs mirrors the gate's own bound in internal/audio. It is
-// duplicated instead of imported: that package pulls in cgo, and core must
-// stay buildable and testable without it.
-const maxHangoverMs = 5000
-
 var (
-	ErrUnknownGateMode  = errors.New("unknown transmit gate mode")
+	ErrUnknownGateMode  = config.ErrUnknownGateMode
 	ErrInvalidVADTuning = errors.New("invalid vad tuning")
 )
 
 // VoiceEngine is what core needs from the audio engine; the adapter in
 // main.go binds it to internal/audio and the device layer. Device IDs are
 // opaque hex strings ("" = system default). The gate settings live on the
-// engine and survive its restarts (device change, device lost); persisting
-// them across application restarts is M4 (config.json).
+// engine and survive its restarts (device change, device lost); across
+// application restarts they are restored from the settings document by
+// UseSettings.
 type VoiceEngine interface {
 	Start(captureID, playbackID string) error
 	Stop()
@@ -49,15 +47,7 @@ type VoiceEngine interface {
 // ParseGateMode validates the mode spelling that crosses the UI boundary.
 // An unknown mode is an error rather than a fallback: answering a request for
 // push-to-talk with voice activation leaves the microphone open.
-func ParseGateMode(mode string) (GateMode, error) {
-	switch GateMode(mode) {
-	case GateModeVAD:
-		return GateModeVAD, nil
-	case GateModePTT:
-		return GateModePTT, nil
-	}
-	return "", fmt.Errorf("%w: %q", ErrUnknownGateMode, mode)
-}
+func ParseGateMode(mode string) (GateMode, error) { return config.ParseGateMode(mode) }
 
 // SetVoice injects the voice engine. Call before Connect.
 func (a *App) SetVoice(v VoiceEngine) {
@@ -117,7 +107,7 @@ func (a *App) SetUserVolume(hash string, volume float32) {
 }
 
 // SetGateMode switches the transmit gate between voice activation and
-// push-to-talk.
+// push-to-talk, and remembers the choice.
 func (a *App) SetGateMode(mode string) error {
 	m, err := ParseGateMode(mode)
 	if err != nil {
@@ -126,27 +116,47 @@ func (a *App) SetGateMode(mode string) error {
 	if v := a.voiceEngine(); v != nil {
 		v.SetGateMode(m)
 	}
+	a.updateSettings(func(c *config.Config) { c.Gate.Mode = m })
 	return nil
 }
 
-// SetVADTuning sets the voice-activation hysteresis band and the hangover
-// tail. open is the probability that starts a transmission and close the
-// lower edge that keeps it running, so close may not exceed open. The gate
-// clamps too, but a request it would have to bend is a UI defect, not a
-// setting: report it instead of applying something the user did not ask for.
-func (a *App) SetVADTuning(open, close float32, hangoverMs int) error {
+// SetVADTuning sets the voice-activation threshold and the hangover tail, and
+// remembers both. Only the opening edge is a decision: the closing edge of the
+// hysteresis band is derived from it (config.CloseThreshold), so the gate the
+// document describes is the gate the session runs. The engine clamps too, but
+// a request it would have to bend is a UI defect, not a setting: report it
+// instead of applying something the user did not ask for.
+func (a *App) SetVADTuning(open float64, hangoverMs int) error {
 	switch {
-	case !isProbability(open) || !isProbability(close):
-		return fmt.Errorf("%w: thresholds %v/%v outside [0, 1]", ErrInvalidVADTuning, open, close)
-	case close > open:
-		return fmt.Errorf("%w: close threshold %v above open %v", ErrInvalidVADTuning, close, open)
-	case hangoverMs < 0 || hangoverMs > maxHangoverMs:
-		return fmt.Errorf("%w: hangover %d ms outside [0, %d]", ErrInvalidVADTuning, hangoverMs, maxHangoverMs)
+	case !config.ValidOpenThreshold(open):
+		return fmt.Errorf("%w: open threshold %v outside [0, 1]", ErrInvalidVADTuning, open)
+	case !config.ValidHangoverMs(hangoverMs):
+		return fmt.Errorf("%w: hangover %d ms outside [0, %d]",
+			ErrInvalidVADTuning, hangoverMs, config.MaxHangoverMs)
 	}
-	if v := a.voiceEngine(); v != nil {
-		v.SetVADTuning(open, close, hangoverMs)
-	}
+	applyVADTuning(a.voiceEngine(), open, hangoverMs)
+	a.updateSettings(func(c *config.Config) {
+		c.Gate.OpenThreshold = open
+		c.Gate.HangoverMs = hangoverMs
+	})
 	return nil
+}
+
+// applyGate pushes a stored gate section onto the engine. Called on startup,
+// once the engine exists and before it is started.
+func applyGate(v VoiceEngine, gate config.Gate) {
+	if v == nil {
+		return
+	}
+	v.SetGateMode(gate.Mode)
+	applyVADTuning(v, gate.OpenThreshold, gate.HangoverMs)
+}
+
+func applyVADTuning(v VoiceEngine, open float64, hangoverMs int) {
+	if v == nil {
+		return
+	}
+	v.SetVADTuning(float32(open), float32(config.CloseThreshold(open)), hangoverMs)
 }
 
 // SetPTT reports whether the push-to-talk key is held. It runs on every key
@@ -155,12 +165,6 @@ func (a *App) SetPTT(held bool) {
 	if v := a.voiceEngine(); v != nil {
 		v.SetPTT(held)
 	}
-}
-
-// isProbability reports whether v is a usable speech probability. NaN fails
-// both comparisons and is rejected.
-func isProbability(v float32) bool {
-	return v >= 0 && v <= 1
 }
 
 // AudioDevices enumerates devices for the settings UI.
@@ -172,13 +176,19 @@ func (a *App) AudioDevices() (playback, capture []domain.AudioDevice, err error)
 	return v.Devices()
 }
 
-// SelectDevices remembers the chosen devices and restarts the engine when
-// it is running ("" keeps the system default).
+// SelectDevices remembers the chosen devices, in the session and in the
+// settings document, and restarts the engine when it is running ("" keeps the
+// system default).
 func (a *App) SelectDevices(captureID, playbackID string) {
 	a.mu.Lock()
 	a.captureID, a.playbackID = captureID, playbackID
 	running := a.status.State == domain.StateConnected || a.status.State == domain.StateReconnecting
 	a.mu.Unlock()
+
+	a.updateSettings(func(c *config.Config) {
+		c.Audio.CaptureID, c.Audio.PlaybackID = captureID, playbackID
+	})
+
 	if v := a.voiceEngine(); v != nil && running {
 		go func() {
 			v.Stop()

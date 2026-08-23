@@ -26,8 +26,6 @@ const (
 	historyPerChannel = 500
 	// maxOutgoingText matches the Mumble server default message length.
 	maxOutgoingText = 5000
-	maxAddressLen   = 255
-	maxUsernameLen  = 64
 )
 
 var (
@@ -58,9 +56,19 @@ type App struct {
 	history  map[uint32][]domain.ChatMessage
 	seq      uint64
 	username string
+	// address of the attempt in flight, remembered only once the server has
+	// accepted it (settings.go).
+	address string
 
 	voice                 VoiceEngine
 	captureID, playbackID string
+
+	// Persisted settings (settings.go). cfgDir is empty until UseSettings,
+	// which is what keeps a core built for a test from writing anything.
+	cfgDir          string
+	cfg             config.Config
+	persistSettings bool
+	saver           *settingsSaver
 }
 
 // New builds the application core. The Mumble controller is injected later
@@ -70,12 +78,15 @@ func New(log *slog.Logger, emitter domain.Emitter) *App {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &App{
+	a := &App{
 		log:     log,
 		emitter: emitter,
 		status:  domain.ConnectionStatus{State: domain.StateDisconnected},
 		history: make(map[uint32][]domain.ChatMessage),
+		cfg:     config.Defaults(),
 	}
+	a.saver = newSettingsSaver(settingsSaveWindow, a.saveSettings)
+	return a
 }
 
 // SetController injects the Mumble controller. Call once, before the UI runs.
@@ -119,12 +130,12 @@ func (a *App) Connect(address, username, password string) error {
 	switch {
 	case address == "":
 		return ErrEmptyAddress
-	case len(address) > maxAddressLen:
-		return fmt.Errorf("%w: address longer than %d bytes", ErrEmptyAddress, maxAddressLen)
+	case len(address) > config.MaxAddressLen:
+		return fmt.Errorf("%w: address longer than %d bytes", ErrEmptyAddress, config.MaxAddressLen)
 	case username == "":
 		return ErrEmptyUsername
-	case utf8.RuneCountInString(username) > maxUsernameLen:
-		return fmt.Errorf("%w: nickname longer than %d characters", ErrEmptyUsername, maxUsernameLen)
+	case utf8.RuneCountInString(username) > config.MaxUsernameLen:
+		return fmt.Errorf("%w: nickname longer than %d characters", ErrEmptyUsername, config.MaxUsernameLen)
 	}
 
 	ctrl, err := a.controller()
@@ -137,6 +148,7 @@ func (a *App) Connect(address, username, password string) error {
 	a.mu.Lock()
 	a.history = make(map[uint32][]domain.ChatMessage)
 	a.username = username
+	a.address = address
 	a.mu.Unlock()
 
 	// Address and username are deliberately omitted: malformed WSS URLs may
@@ -261,6 +273,7 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	// running (the transport channel survives them).
 	switch {
 	case s.State == domain.StateConnected && prev != domain.StateReconnecting:
+		a.commitConnection()
 		a.startVoice()
 	case s.State == domain.StateDisconnected:
 		a.stopVoice()

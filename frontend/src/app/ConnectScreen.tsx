@@ -2,16 +2,17 @@ import { useState } from 'react';
 import { PlugsIcon } from '@phosphor-icons/react/dist/csr/Plugs';
 import { ConnectionService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
-import { GUL_RELAY_ADDRESS, loadLastConnection, rememberAttempt } from '../state/lastConnection';
+import { GUL_RELAY_ADDRESS } from '../state/settings';
 import { Button, Field, Spinner, TextInput } from '../components/ui';
 
 export function ConnectScreen() {
   const status = useGulStore((s) => s.status);
   // The form starts on what worked last time and nothing else: prefilling a
   // server the user never chose would point their password at a stranger.
-  const [remembered] = useState(loadLastConnection);
-  const [address, setAddress] = useState(remembered.address);
-  const [username, setUsername] = useState(remembered.username);
+  // Read once - the snapshot is in the store before the first render, and
+  // after that the form owns what is in its fields.
+  const [address, setAddress] = useState(() => useGulStore.getState().lastAddress);
+  const [username, setUsername] = useState(() => useGulStore.getState().lastUsername);
   const [password, setPassword] = useState('');
 
   const connecting = status.state === 'connecting';
@@ -19,8 +20,8 @@ export function ConnectScreen() {
 
   const connect = () => {
     if (!canConnect) return;
-    // Stored only once the server accepts it (state/lastConnection.ts).
-    rememberAttempt({ address, username });
+    // Remembered by the Go side, and only once the server accepts it
+    // (internal/core/settings.go).
     // Result arrives via connection:state events; sync errors land there too.
     ConnectionService.Connect(address, username, password).catch(console.error);
   };

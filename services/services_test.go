@@ -229,8 +229,9 @@ func TestAudioServiceGateControlsDelegate(t *testing.T) {
 	if err := svc.SetGateMode("ptt"); err != nil {
 		t.Fatalf("SetGateMode: %v", err)
 	}
-	// float64 in, float32 at the engine: the values must survive the narrowing.
-	if err := svc.SetVADTuning(0.75, 0.55, 250); err != nil {
+	// float64 in, float32 at the engine: the values must survive the
+	// narrowing, and the closing edge is derived rather than passed in.
+	if err := svc.SetVADTuning(0.75, 250); err != nil {
 		t.Fatalf("SetVADTuning: %v", err)
 	}
 	if err := svc.SetPTT(true); err != nil {
@@ -261,7 +262,7 @@ func TestAudioServicePropagatesValidationErrors(t *testing.T) {
 	if err := svc.SetGateMode("whisper"); !errors.Is(err, core.ErrUnknownGateMode) {
 		t.Errorf("SetGateMode err = %v, want %v", err, core.ErrUnknownGateMode)
 	}
-	if err := svc.SetVADTuning(0.3, 0.9, 300); !errors.Is(err, core.ErrInvalidVADTuning) {
+	if err := svc.SetVADTuning(1.5, 300); !errors.Is(err, core.ErrInvalidVADTuning) {
 		t.Errorf("SetVADTuning err = %v, want %v", err, core.ErrInvalidVADTuning)
 	}
 
@@ -269,6 +270,51 @@ func TestAudioServicePropagatesValidationErrors(t *testing.T) {
 	defer voice.mu.Unlock()
 	if len(voice.modes) != 0 || len(voice.tunings) != 0 {
 		t.Fatalf("engine reached despite invalid input: modes=%v tunings=%v", voice.modes, voice.tunings)
+	}
+}
+
+func TestSettingsServiceDelegates(t *testing.T) {
+	t.Parallel()
+	app, _ := newAudioApp(t)
+	svc := NewSettingsService(app)
+	audio := NewAudioService(app)
+
+	// The snapshot is what the UI starts on, so it has to follow every path
+	// that changes a setting - including the ones on other services.
+	if got := svc.Load(); got.GateMode != string(core.GateModeVAD) || got.PttKey != "Space" {
+		t.Fatalf("Load() = %+v, want the defaults", got)
+	}
+	if err := audio.SetGateMode("ptt"); err != nil {
+		t.Fatalf("SetGateMode: %v", err)
+	}
+	if err := audio.SetVADTuning(0.8, 700); err != nil {
+		t.Fatalf("SetVADTuning: %v", err)
+	}
+	audio.SelectDevices("aa11", "bb22")
+	if err := svc.SetPTTKey("KeyF"); err != nil {
+		t.Fatalf("SetPTTKey: %v", err)
+	}
+
+	got := svc.Load()
+	want := Settings{
+		CaptureID: "aa11", PlaybackID: "bb22",
+		GateMode: string(core.GateModePTT), VadOpen: 0.8, HangoverMs: 700, PttKey: "KeyF",
+	}
+	if got != want {
+		t.Fatalf("Load() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSettingsServicePropagatesValidationErrors(t *testing.T) {
+	t.Parallel()
+	app, _ := newAudioApp(t)
+	svc := NewSettingsService(app)
+
+	if err := svc.SetPTTKey("Ctrl+Q"); !errors.Is(err, core.ErrInvalidPTTKey) {
+		t.Fatalf("SetPTTKey err = %v, want %v", err, core.ErrInvalidPTTKey)
+	}
+	if got := svc.Load().PttKey; got != "Space" {
+		t.Fatalf("key = %q, want it untouched", got)
 	}
 }
 

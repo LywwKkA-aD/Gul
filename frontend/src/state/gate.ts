@@ -1,8 +1,8 @@
 // Transmit gate model shared by the settings UI and the push-to-talk
-// listener. The defaults mirror internal/audio (open 0.6, hangover 300 ms), so
-// a freshly started app and a freshly started engine agree without an initial
-// round trip. Nothing here is persisted: the settings live on the engine and
-// survive its restarts, but not an application restart - config.json is M4.
+// listener. The defaults mirror internal/config and internal/audio (open 0.6,
+// hangover 300 ms), so a freshly started app and a freshly started engine
+// agree without an initial round trip. The values themselves are persisted by
+// the Go side (config.json); this module only shapes what the UI offers.
 
 /** What opens the microphone. Matches the strings core.ParseGateMode accepts. */
 export type GateMode = 'vad' | 'ptt';
@@ -26,21 +26,6 @@ export const VAD_HANGOVER_CHOICES = [100, 200, 300, 500, 700, 1000] as const;
 /** KeyboardEvent.code of the default push-to-talk key. */
 export const PTT_KEY_DEFAULT = 'Space';
 
-/** Width of the hysteresis band. One slider drives both edges: the closing
-    threshold is an implementation detail of the gate, not a second decision
-    to put in front of the user. */
-const VAD_HYSTERESIS = 0.2;
-
-/** Lower bound for the closing edge. Reachable only if the open threshold
-    range ever drops below 0.25. */
-const VAD_CLOSE_FLOOR = 0.05;
-
-/** Closing edge that trails the given open threshold. Rounded to whole
-    percent so the value that reaches Go carries no float noise. */
-export function closeThreshold(open: number): number {
-  return Math.max(VAD_CLOSE_FLOOR, Math.round((open - VAD_HYSTERESIS) * 100) / 100);
-}
-
 /** Folds an open threshold into the offered range; NaN falls back to default. */
 export function clampOpenThreshold(open: number): number {
   if (!Number.isFinite(open)) return VAD_OPEN_DEFAULT;
@@ -51,6 +36,23 @@ export function clampOpenThreshold(open: number): number {
 export function clampHangoverMs(ms: number): number {
   if (!Number.isFinite(ms)) return VAD_HANGOVER_DEFAULT;
   return Math.round(Math.min(VAD_HANGOVER_MAX, Math.max(VAD_HANGOVER_MIN, ms)));
+}
+
+/** Nearest offered tail to a stored one. A hand-edited config.json may hold a
+    tail this UI does not offer, and a select with no matching option shows
+    nothing at all. */
+export function snapHangoverMs(ms: number): number {
+  const clamped = clampHangoverMs(ms);
+  let nearest: number = VAD_HANGOVER_DEFAULT;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const choice of VAD_HANGOVER_CHOICES) {
+    const gap = Math.abs(choice - clamped);
+    if (gap < distance) {
+      nearest = choice;
+      distance = gap;
+    }
+  }
+  return nearest;
 }
 
 /* KeyboardEvent.code is layout independent - the stored key stays the same

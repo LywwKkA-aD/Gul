@@ -9,6 +9,7 @@ import {
   clampOpenThreshold,
 } from './gate';
 import type { GateMode } from './gate';
+import type { GulSettings } from './settings';
 
 interface GulState {
   status: ConnectionStatus;
@@ -19,6 +20,12 @@ interface GulState {
   messages: Record<number, ChatMessage[]>;
   tofu: TofuPrompt | null;
   activeChannelId: number | null;
+
+  // ── Persisted settings (M4) ─────────────────────────────────────────────
+  /** What the connect form starts on: the last connection the server
+      accepted, from config.json. Never the password. */
+  lastAddress: string;
+  lastUsername: string;
 
   // ── Voice (M2) ──────────────────────────────────────────────────────────
   /** Sessions currently speaking, from user:talking. Replaced, never mutated. */
@@ -59,6 +66,8 @@ interface GulState {
   setHistory: (channelId: number, messages: ChatMessage[]) => void;
   setTofu: (prompt: TofuPrompt | null) => void;
   setActiveChannel: (channelId: number | null) => void;
+  applySettings: (settings: GulSettings) => void;
+  setRememberedConnection: (address: string, username: string) => void;
   setTalking: (session: number, talking: boolean) => void;
   setLevels: (micDb: number, outDb: number) => void;
   setVoiceGates: (muted: boolean, deafened: boolean) => void;
@@ -85,6 +94,9 @@ export const useGulStore = create<GulState>((set) => ({
   messages: {},
   tofu: null,
   activeChannelId: null,
+
+  lastAddress: '',
+  lastUsername: '',
 
   talkingSessions: NO_TALKING,
   micDb: SILENT_DB,
@@ -141,6 +153,27 @@ export const useGulStore = create<GulState>((set) => ({
     set((s) => ({ messages: { ...s.messages, [channelId]: messages } })),
   setTofu: (prompt) => set({ tofu: prompt }),
   setActiveChannel: (channelId) => set({ activeChannelId: channelId }),
+
+  // Fetched once, before the first render: the connect form and the settings
+  // modal read these on mount, and re-seeding them later would fight whatever
+  // the user is typing.
+  applySettings: (settings) =>
+    set({
+      lastAddress: settings.address,
+      lastUsername: settings.username,
+      captureId: settings.captureId,
+      playbackId: settings.playbackId,
+      gateMode: settings.gateMode,
+      vadOpen: clampOpenThreshold(settings.vadOpen),
+      vadHangoverMs: clampHangoverMs(settings.hangoverMs),
+      pttKey: settings.pttKey,
+    }),
+
+  // The Go side remembers the connect form once the server accepted it; this
+  // is that value coming back, so a disconnect inside the same session finds
+  // the form filled the way the next start would.
+  setRememberedConnection: (address, username) =>
+    set({ lastAddress: address, lastUsername: username }),
 
   setTalking: (session, talking) =>
     set((s) => {

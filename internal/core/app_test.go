@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
@@ -288,10 +289,10 @@ func TestConnectValidation(t *testing.T) {
 	}{
 		{"empty address", "", "bob", "", ErrEmptyAddress},
 		{"blank address", "   ", "bob", "", ErrEmptyAddress},
-		{"long address", strings.Repeat("h", maxAddressLen+1), "bob", "", ErrEmptyAddress},
+		{"long address", strings.Repeat("h", config.MaxAddressLen+1), "bob", "", ErrEmptyAddress},
 		{"empty username", "localhost:64738", "", "", ErrEmptyUsername},
 		{"blank username", "localhost:64738", " \t ", "", ErrEmptyUsername},
-		{"long username", "localhost:64738", strings.Repeat("n", maxUsernameLen+1), "", ErrEmptyUsername},
+		{"long username", "localhost:64738", strings.Repeat("n", config.MaxUsernameLen+1), "", ErrEmptyUsername},
 		{"valid", "localhost:64738", "bob", "pw", nil},
 	}
 
@@ -534,7 +535,9 @@ func TestSetVADTuningDelegates(t *testing.T) {
 	t.Parallel()
 	app, voice := newVoiceApp(t)
 
-	if err := app.SetVADTuning(0.7, 0.5, 250); err != nil {
+	// Only the opening edge is asked of the user; the closing edge trails it
+	// by the hysteresis band (config.CloseThreshold).
+	if err := app.SetVADTuning(0.7, 250); err != nil {
 		t.Fatalf("SetVADTuning: %v", err)
 	}
 	got := voice.snapshot().tunings
@@ -547,26 +550,21 @@ func TestSetVADTuningDelegates(t *testing.T) {
 func TestSetVADTuningValidation(t *testing.T) {
 	t.Parallel()
 
-	nan := float32(math.NaN())
-	inf := float32(math.Inf(1))
-
 	cases := []struct {
-		name        string
-		open, close float32
-		hangoverMs  int
-		wantErr     bool
+		name       string
+		open       float64
+		hangoverMs int
+		wantErr    bool
 	}{
-		{"defaults", 0.6, 0.4, 300, false},
-		{"fully open band", 1, 0, maxHangoverMs, false},
-		{"degenerate band", 0.5, 0.5, 0, false},
-		{"open above one", 1.01, 0.4, 300, true},
-		{"open below zero", -0.01, -0.02, 300, true},
-		{"close above open", 0.4, 0.6, 300, true},
-		{"open is NaN", nan, 0.4, 300, true},
-		{"close is NaN", 0.6, nan, 300, true},
-		{"open is Inf", inf, 0.4, 300, true},
-		{"negative hangover", 0.6, 0.4, -1, true},
-		{"hangover past the cap", 0.6, 0.4, maxHangoverMs + 1, true},
+		{"defaults", 0.6, 300, false},
+		{"always open", 0, 0, false},
+		{"never open", 1, config.MaxHangoverMs, false},
+		{"open above one", 1.01, 300, true},
+		{"open below zero", -0.01, 300, true},
+		{"open is NaN", math.NaN(), 300, true},
+		{"open is Inf", math.Inf(1), 300, true},
+		{"negative hangover", 0.6, -1, true},
+		{"hangover past the cap", 0.6, config.MaxHangoverMs + 1, true},
 	}
 
 	for _, tc := range cases {
@@ -574,7 +572,7 @@ func TestSetVADTuningValidation(t *testing.T) {
 			t.Parallel()
 			app, voice := newVoiceApp(t)
 
-			err := app.SetVADTuning(tc.open, tc.close, tc.hangoverMs)
+			err := app.SetVADTuning(tc.open, tc.hangoverMs)
 			if tc.wantErr && !errors.Is(err, ErrInvalidVADTuning) {
 				t.Fatalf("err = %v, want %v", err, ErrInvalidVADTuning)
 			}
@@ -625,10 +623,10 @@ func TestGateControlsWithoutEngineValidateAndStaySilent(t *testing.T) {
 	if err := app.SetGateMode("nope"); !errors.Is(err, ErrUnknownGateMode) {
 		t.Errorf("SetGateMode(nope) = %v, want %v", err, ErrUnknownGateMode)
 	}
-	if err := app.SetVADTuning(0.6, 0.4, 300); err != nil {
+	if err := app.SetVADTuning(0.6, 300); err != nil {
 		t.Errorf("SetVADTuning without engine = %v, want nil", err)
 	}
-	if err := app.SetVADTuning(2, 0.4, 300); !errors.Is(err, ErrInvalidVADTuning) {
+	if err := app.SetVADTuning(2, 300); !errors.Is(err, ErrInvalidVADTuning) {
 		t.Errorf("SetVADTuning(2, ...) = %v, want %v", err, ErrInvalidVADTuning)
 	}
 	app.SetPTT(true)
