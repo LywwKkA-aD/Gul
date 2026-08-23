@@ -306,10 +306,31 @@ func TestGlobalPTTReportsAnUnknownKey(t *testing.T) {
 	if !cfg.Gate.GlobalPTT || cfg.Gate.PTTKey != "KeyV" || cfg.Gate.Mode != config.GateModePTT {
 		t.Fatalf("settings = %+v, want the request stored as made", cfg.Gate)
 	}
-	// A failed Watch leaves the monitor stopped, so the transmission is closed
-	// here or nowhere.
+	// A Watch that never bound must not touch the gate: the window listener
+	// legitimately owns push-to-talk while the global key is unavailable, and
+	// closing here would cut off a phrase the user is in the middle of.
+	if got := voice.snapshot().ptt; len(got) != 0 {
+		t.Fatalf("ptt = %v, want the failed watch to leave the gate alone", got)
+	}
+
+	// The other half of the rule: a watch that WAS running and is then
+	// replaced by one that fails must still release, or the key it had open
+	// stays open with nothing watching it.
+	monitor.mu.Lock()
+	monitor.watchErr = nil
+	monitor.mu.Unlock()
+	if err := app.SetPTTKey("KeyN"); err != nil {
+		t.Fatalf("SetPTTKey: %v", err)
+	}
+	monitor.fire(true)
+	monitor.mu.Lock()
+	monitor.watchErr = fmt.Errorf("%w: %q", hotkey.ErrUnknownKey, "KeyM")
+	monitor.mu.Unlock()
+	if err := app.SetPTTKey("KeyM"); err != nil {
+		t.Fatalf("SetPTTKey: %v", err)
+	}
 	if got := voice.snapshot().ptt; len(got) == 0 || got[len(got)-1] {
-		t.Fatalf("ptt = %v, want a release after the failed watch", got)
+		t.Fatalf("ptt = %v, want a release when a live watch is torn down", got)
 	}
 
 	// Once the key is one the platform knows, the message goes away.

@@ -74,8 +74,10 @@ type App struct {
 	selfMuted, selfDeafened bool
 	trayObservers           []func(TrayState)
 
-	// pttHeld is the last transmit state pushed to the UI, so a redundant
-	// SetPTT pushes nothing (voice.go).
+	// pttMu guards pttHeld AND is held across its event, so a press can
+	// never be published after the release that followed it (voice.go). It
+	// takes no other lock, so it cannot deadlock against a.mu.
+	pttMu   sync.Mutex
 	pttHeld bool
 
 	// Baseline of the channel we are in, for the join and leave cues
@@ -331,6 +333,7 @@ func (a *App) HandleTree(root domain.ChannelNode) {
 	a.mu.Unlock()
 
 	a.emit(domain.EventChannelsTree, root)
+	a.reconcileSelfAudio(root)
 
 	if cue, ok := a.channelCue(root); ok {
 		a.playCue(cue)

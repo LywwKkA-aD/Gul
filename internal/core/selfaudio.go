@@ -152,6 +152,54 @@ func (a *App) publishSelfAudioToServer(state domain.SelfAudioState) {
 	}
 }
 
+// reconcileSelfAudio adopts the state the server reports for our own row.
+//
+// The server is the authority: murmur applies rules of its own (deaf forces
+// mute) and an admin can mute us outright. Our flags are only an intent until
+// the server echoes them back, and a client that keeps arguing with the echo
+// shows two contradicting indicators in one window - the member list draws
+// the tree, the bottom bar draws the intent. Adopting costs nothing when they
+// already agree, which is the normal case.
+//
+// No cue and no write back: this is where the state came from.
+func (a *App) reconcileSelfAudio(root domain.ChannelNode) {
+	self, ok := findSelf(root)
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	if a.selfMuted == self.SelfMute && a.selfDeafened == self.SelfDeaf {
+		a.mu.Unlock()
+		return
+	}
+	a.selfMuted, a.selfDeafened = self.SelfMute, self.SelfDeaf
+	state, v := a.selfAudioLocked(), a.voice
+	a.mu.Unlock()
+
+	if v != nil {
+		v.SetMute(state.Muted)
+		v.SetDeafen(state.Deafened)
+	}
+	a.log.Info("self audio state adopted from the server",
+		"muted", state.Muted, "deafened", state.Deafened)
+	a.publishSelfAudio(state)
+}
+
+// findSelf locates our own row in a channel tree.
+func findSelf(node domain.ChannelNode) (domain.UserInfo, bool) {
+	for _, u := range node.Users {
+		if u.IsSelf {
+			return u, true
+		}
+	}
+	for _, child := range node.Children {
+		if u, ok := findSelf(child); ok {
+			return u, true
+		}
+	}
+	return domain.UserInfo{}, false
+}
+
 // selfAudioLocked reads the state. Caller holds a.mu.
 func (a *App) selfAudioLocked() domain.SelfAudioState {
 	return domain.SelfAudioState{Muted: a.selfMuted, Deafened: a.selfDeafened}

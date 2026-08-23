@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -292,13 +293,15 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 
 	menu := app.NewMenu()
 	menu.Add(trayShowLabel).OnClick(func(*application.Context) { showWindow(app, win) })
-	// Wails flips a checkbox before it calls back, so the clicked state is
-	// the request. Core decides what actually happens and reports it back
-	// through the observer below, which is what re-syncs a stale checkbox.
+	// The click is a toggle request against what core holds, not against the
+	// checkbox: Wails flips its own field on one goroutine and calls back on
+	// another while the observer below writes the same field from the main
+	// thread, so reading it back would be a three-way race. Core decides and
+	// reports through the observer, which is what re-syncs the checkbox.
 	mute := menu.AddCheckbox(trayMuteLabel, false)
-	mute.OnClick(func(ctx *application.Context) { coreApp.SetMute(ctx.ClickedMenuItem().Checked()) })
+	mute.OnClick(func(*application.Context) { coreApp.SetMute(!coreApp.SelfAudio().Muted) })
 	deafen := menu.AddCheckbox(trayDeafenLabel, false)
-	deafen.OnClick(func(ctx *application.Context) { coreApp.SetDeafen(ctx.ClickedMenuItem().Checked()) })
+	deafen.OnClick(func(*application.Context) { coreApp.SetDeafen(!coreApp.SelfAudio().Deafened) })
 	menu.AddSeparator()
 	menu.Add(trayQuitLabel).OnClick(func(*application.Context) { app.Quit() })
 	systemTray.SetMenu(menu)
@@ -310,12 +313,22 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 		setTrayIcon(systemTray, state.Icon)
 	}
 
-	// Before Run the tray has no platform implementation and the setters only
-	// record what it will start with. Afterwards each one touches native
-	// state, so a change arriving on a service or menu goroutine is marshalled
-	// onto the main thread.
+	// Before Run the tray has no platform implementation: the setters only
+	// record what it will start with, and InvokeAsync would dereference a nil
+	// implementation. Afterwards each setter touches native state, so a change
+	// arriving on a service or menu goroutine is marshalled onto the main
+	// thread. The flag is what tells the two apart.
+	var started atomic.Bool
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		started.Store(true)
+	})
+
 	apply(coreApp.TrayState())
 	coreApp.OnTrayState(func(state core.TrayState) {
+		if !started.Load() {
+			apply(state)
+			return
+		}
 		application.InvokeAsync(func() { apply(state) })
 	})
 }

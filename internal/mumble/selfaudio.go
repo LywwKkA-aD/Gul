@@ -38,7 +38,7 @@ func (m *Manager) restoreSelfAudio(client *gumble.Client) {
 	m.mu.Lock()
 	muted, deafened, ok := m.selfMuted, m.selfDeafened, m.hasSelfAudio
 	m.mu.Unlock()
-	if !ok || muted == false && deafened == false {
+	if !ok || (!muted && !deafened) {
 		// A fresh session starts unmuted and undeafened; saying so again
 		// would be one pointless packet per reconnect.
 		return

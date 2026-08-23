@@ -111,10 +111,11 @@ func (a *App) applyGlobalPTT() {
 	if err := monitor.Watch(gate.PTTKey, a.onHotkey); err != nil {
 		a.log.Warn("global push-to-talk", "key", gate.PTTKey, "error", err)
 		a.reportHotkeyError(hotkeyErrorMessage(gate.PTTKey, err))
-		// Watch leaves the monitor stopped when it fails, and a stopped
-		// monitor delivers nothing - not even the release of a key that was
-		// held. Nobody else will close the transmission.
-		a.SetPTT(false)
+		// No release here: stopWatchLocked above already closed a
+		// transmission this monitor had opened, and a Watch that never bound
+		// opened none. Closing unconditionally would cut off the window
+		// listener, which legitimately owns the gate while the global key is
+		// unavailable.
 		return
 	}
 	a.watching, a.watchedKey = true, gate.PTTKey

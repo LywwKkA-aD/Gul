@@ -239,3 +239,50 @@ func equalBools(a, b []bool) bool {
 	}
 	return true
 }
+
+// The server is the authority on our own audio state: it applies rules of its
+// own and an admin can mute us. A tree that disagrees with the local intent
+// is adopted, published, and applied to the engine - without writing back.
+func TestSelfAudioAdoptsTheServerState(t *testing.T) {
+	t.Parallel()
+	app, ctrl, em := newTestApp(t)
+	voice := &fakeVoice{}
+	app.SetVoice(voice)
+
+	app.HandleTree(domain.ChannelNode{
+		ID:    0,
+		Name:  "Root",
+		Users: []domain.UserInfo{{Session: 1, Name: "me", IsSelf: true, SelfMute: true}},
+	})
+
+	if got := app.SelfAudio(); !got.Muted || got.Deafened {
+		t.Fatalf("state = %+v, want muted adopted from the tree", got)
+	}
+	states := selfAudioEvents(em)
+	if len(states) != 1 || !states[0].Muted {
+		t.Fatalf("published states = %+v, want one muted", states)
+	}
+	voice.mu.Lock()
+	mutes := append([]bool(nil), voice.mutes...)
+	voice.mu.Unlock()
+	if len(mutes) != 1 || !mutes[0] {
+		t.Fatalf("engine mutes = %v, want [true]", mutes)
+	}
+	// Adopting must not echo back to the server: that is where it came from.
+	ctrl.mu.Lock()
+	writes := len(ctrl.selfMutes)
+	ctrl.mu.Unlock()
+	if writes != 0 {
+		t.Fatalf("wrote self audio to the server %d times, want 0", writes)
+	}
+
+	// An agreeing tree changes nothing at all.
+	app.HandleTree(domain.ChannelNode{
+		ID:    0,
+		Name:  "Root",
+		Users: []domain.UserInfo{{Session: 1, Name: "me", IsSelf: true, SelfMute: true}},
+	})
+	if got := len(selfAudioEvents(em)); got != 1 {
+		t.Fatalf("published %d states, want the agreeing tree to be silent", got)
+	}
+}

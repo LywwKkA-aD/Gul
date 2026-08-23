@@ -10,8 +10,13 @@ import (
 )
 
 // SchemaVersion is the version of the settings document this build writes.
-// Every change to the shape of what Save produces needs a bump here and a step
-// in the migration table (migrate.go).
+//
+// A bump here and a step in the migration table (migrate.go) are needed
+// whenever an older document cannot be read correctly as it stands: a renamed
+// or removed field, a changed meaning, or a new field whose absence is not
+// the same as its default. Adding a field that Defaults() fills is not such a
+// change - Load decodes over Defaults, so an older document simply gets the
+// default (cue_volume was added this way, with a test pinning it).
 const SchemaVersion = 1
 
 const (

@@ -205,13 +205,27 @@ func (a *App) SetPTT(held bool) {
 	if v := a.voiceEngine(); v != nil {
 		v.SetPTT(held)
 	}
-	a.mu.Lock()
-	changed := a.pttHeld != held
-	a.pttHeld = held
-	a.mu.Unlock()
-	if changed {
-		a.emit(domain.EventAudioPTT, domain.PTTState{Held: held})
+	// Two sources can drive the gate for the instant it takes the window
+	// listener to stand down, and each Wails binding call runs on its own
+	// goroutine. Publishing under the lock keeps the order the transitions
+	// happened in: a release published before its own press would leave the
+	// indicator lit with the microphone closed.
+	a.pttMu.Lock()
+	defer a.pttMu.Unlock()
+	if a.pttHeld == held {
+		return
 	}
+	a.pttHeld = held
+	a.emit(domain.EventAudioPTT, domain.PTTState{Held: held})
+}
+
+// PTTState reports the current transmit state, so a UI that lost it (a
+// reconnect clears its voice state) can re-seed instead of waiting for a
+// transition that may never come while the key is held.
+func (a *App) PTTState() domain.PTTState {
+	a.pttMu.Lock()
+	defer a.pttMu.Unlock()
+	return domain.PTTState{Held: a.pttHeld}
 }
 
 // AudioDevices enumerates devices for the settings UI.
