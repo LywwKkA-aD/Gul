@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func TestCertificateLoaderReloadsAndKeepsLastValidPair(t *testing.T) {
 	keyFile := filepath.Join(dir, "relay.key")
 	writeTestCertificate(t, certFile, keyFile, 1)
 
-	loader, err := NewCertificateLoader(certFile, keyFile)
+	loader, err := NewCertificateLoader(certFile, keyFile, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestCertificateLoaderReloadsAndKeepsLastValidPair(t *testing.T) {
 
 func TestCertificateLoaderRequiresInitialValidPair(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := NewCertificateLoader(filepath.Join(dir, "missing.crt"), filepath.Join(dir, "missing.key")); err == nil {
+	if _, err := NewCertificateLoader(filepath.Join(dir, "missing.crt"), filepath.Join(dir, "missing.key"), slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("expected missing certificate error")
 	}
 }
@@ -69,7 +70,7 @@ func TestCertificateLoaderIsSafeForConcurrentHandshakes(t *testing.T) {
 	certFile := filepath.Join(dir, "relay.crt")
 	keyFile := filepath.Join(dir, "relay.key")
 	writeTestCertificate(t, certFile, keyFile, 7)
-	loader, err := NewCertificateLoader(certFile, keyFile)
+	loader, err := NewCertificateLoader(certFile, keyFile, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
@@ -129,4 +130,107 @@ func certificateSerial(t *testing.T, certificate *tls.Certificate) int64 {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return leaf.SerialNumber.Int64()
+}
+
+// TestCertificateLoaderReportsPersistentReloadFailures covers the silent
+// failure: a certificate pair that stops loading kept the last valid one in
+// service with nothing in the journal and nothing for the health command to
+// report, until it expired.
+func TestCertificateLoaderReportsPersistentReloadFailures(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "relay.crt")
+	keyFile := filepath.Join(dir, "relay.key")
+	writeTestCertificate(t, certFile, keyFile, 1)
+
+	logger, records := newRecordingLogger()
+	loader, err := NewCertificateLoader(certFile, keyFile, logger)
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+	now := time.Date(2026, time.August, 22, 12, 0, 0, 0, time.UTC)
+	loader.now = func() time.Time { return now }
+	loader.check = 0
+	loader.next = time.Time{}
+	if loader.LastError() != nil {
+		t.Fatalf("healthy loader reports %v", loader.LastError())
+	}
+
+	if err := os.WriteFile(keyFile, []byte("incomplete renewal"), 0o600); err != nil {
+		t.Fatalf("write invalid key: %v", err)
+	}
+	certificate, err := loader.GetCertificate(nil)
+	if err != nil || certificate == nil {
+		t.Fatalf("broken pair stopped serving: %v", err)
+	}
+	if loader.LastError() == nil {
+		t.Fatal("reload failure was discarded")
+	}
+	if got := countRecords(records, "relay certificate reload failed"); got != 1 {
+		t.Fatalf("failure records = %d, want 1", got)
+	}
+
+	// Handshakes keep arriving; the failure must not be logged for each one.
+	now = now.Add(certificateErrorLogInterval - time.Second)
+	for range 5 {
+		_, _ = loader.GetCertificate(nil)
+	}
+	if got := countRecords(records, "relay certificate reload failed"); got != 1 {
+		t.Fatalf("failure records within the throttle window = %d, want 1", got)
+	}
+
+	now = now.Add(2 * time.Second)
+	_, _ = loader.GetCertificate(nil)
+	if got := countRecords(records, "relay certificate reload failed"); got != 2 {
+		t.Fatalf("failure records after the throttle window = %d, want 2", got)
+	}
+
+	writeTestCertificate(t, certFile, keyFile, 2)
+	recovered, err := loader.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("recovered certificate: %v", err)
+	}
+	if got := certificateSerial(t, recovered); got != 2 {
+		t.Fatalf("serial after recovery = %d, want 2", got)
+	}
+	if loader.LastError() != nil {
+		t.Fatalf("recovered loader still reports %v", loader.LastError())
+	}
+	if _, ok := records.find("relay certificate reload recovered"); !ok {
+		t.Fatal("recovery was not logged")
+	}
+}
+
+func TestCertificateLoaderReportsMissingFiles(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "relay.crt")
+	keyFile := filepath.Join(dir, "relay.key")
+	writeTestCertificate(t, certFile, keyFile, 3)
+
+	loader, err := NewCertificateLoader(certFile, keyFile, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+	loader.check = 0
+	loader.next = time.Time{}
+	if err := os.Remove(keyFile); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
+	if _, err := loader.GetCertificate(nil); err != nil {
+		t.Fatalf("loader stopped serving: %v", err)
+	}
+	if loader.LastError() == nil {
+		t.Fatal("missing key file was not reported")
+	}
+}
+
+func countRecords(handler *recordingHandler, message string) int {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	count := 0
+	for _, record := range handler.records {
+		if record.Message == message {
+			count++
+		}
+	}
+	return count
 }

@@ -20,7 +20,10 @@ User=10000:10000
 Mount=type=volume,source=gul-murmur-data.volume,destination=/run/relay-tls,subpath=acme,ro=true
 Secret=GUL_RELAY_BEARER,type=mount,target=GUL_RELAY_BEARER,uid=10000,gid=10000,mode=0400
 
-Exec=--listen 0.0.0.0:8443 --host murmur.gulvox.com --cert /run/relay-tls/mumble.crt --key /run/relay-tls/mumble.key --credential-file /run/secrets/GUL_RELAY_BEARER
+# A bare port binds both address families; the relay exists for networks the
+# native Mumble port cannot cross, IPv6-only ones included. Drop
+# --accept-legacy-bearer once every client sends the v2 credential (see README).
+Exec=--listen :8443 --host murmur.gulvox.com --cert /run/relay-tls/mumble.crt --key /run/relay-tls/mumble.key --credential-file /run/secrets/GUL_RELAY_BEARER --accept-legacy-bearer=true --log-level info
 
 ReadOnly=true
 NoNewPrivileges=true

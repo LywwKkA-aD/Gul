@@ -4,20 +4,15 @@
 package relay
 
 import (
-	"container/list"
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,25 +31,45 @@ const (
 
 	defaultAuthFailuresBeforeBan = 5
 	defaultAuthFailureWindow     = time.Minute
-	defaultAuthBanDuration       = 5 * time.Minute
+	// defaultAuthBanDuration is short on purpose: the ban keys on the source
+	// address, so behind a NAT it is shared by everyone on that address.
+	defaultAuthBanDuration       = time.Minute
 	defaultMaxAuthTrackedSources = 4096
+	defaultShutdownDrainTimeout  = 5 * time.Second
+	capacityRetryAfter           = 5 * time.Second
 )
 
 // Config contains the security and capacity limits for a Handler.
 type Config struct {
 	ExpectedHost string
 	Upstream     string
-	// BearerCredential is the unpadded base64url HMAC credential derived by
-	// `gul-relay derive-credential`. It must not be the raw Mumble password.
-	BearerCredential        []byte
+	// BearerCredentials are the expected credentials, precomputed by
+	// `gul-relay derive-credential`. Deriving one costs tens of milliseconds,
+	// so it must never happen while a request is being served. At least one
+	// v2 credential is required; legacy credentials are honored only while
+	// AcceptLegacyBearer is set. None of them is the raw Mumble password.
+	BearerCredentials []relayproto.Credential
+	// AcceptLegacyBearer keeps the v0.3.0-alpha.2 credential usable for one
+	// release. Every legacy match is logged at Warn.
+	AcceptLegacyBearer      bool
 	MaxConnections          int
 	MaxConnectionsPerIP     int
 	MaxWebSocketMessageSize int64
 	DialTimeout             time.Duration
-	AuthFailuresBeforeBan   int
-	AuthFailureWindow       time.Duration
-	AuthBanDuration         time.Duration
-	MaxAuthTrackedSources   int
+	// SessionIdleTimeout closes a session that transferred nothing in either
+	// direction for this long; SessionWriteTimeout bounds a single blocked
+	// write. Both default to production values when unset.
+	SessionIdleTimeout   time.Duration
+	SessionWriteTimeout  time.Duration
+	ShutdownDrainTimeout time.Duration
+
+	AuthFailuresBeforeBan int
+	AuthFailureWindow     time.Duration
+	AuthBanDuration       time.Duration
+	MaxAuthTrackedSources int
+	// Logger receives the session and rejection events. nil selects
+	// slog.Default().
+	Logger *slog.Logger
 	// Now is optional and exists so limiter behavior can be tested without
 	// wall-clock sleeps. Production callers should leave it nil.
 	Now func() time.Time
@@ -65,13 +80,17 @@ type Config struct {
 type Handler struct {
 	expectedHost string
 	upstream     string
-	authHash     [sha256.Size]byte
+	credentials  []relayproto.Credential
 	sourceKey    [sha256.Size]byte
 	dialer       net.Dialer
 	messageSize  int64
+	idleTimeout  time.Duration
+	writeTimeout time.Duration
+	drainTimeout time.Duration
 	global       chan struct{}
 	perIPMax     int
 	authFailures *authFailureLimiter
+	logger       *slog.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
 
@@ -83,25 +102,6 @@ type Handler struct {
 	shutdownOnce sync.Once
 }
 
-type authFailureLimiter struct {
-	mu                sync.Mutex
-	entries           map[string]*authFailureEntry
-	order             *list.List
-	failuresBeforeBan int
-	failureWindow     time.Duration
-	banDuration       time.Duration
-	maxEntries        int
-	now               func() time.Time
-}
-
-type authFailureEntry struct {
-	source        string
-	failures      int
-	windowStarted time.Time
-	bannedUntil   time.Time
-	element       *list.Element
-}
-
 // NewHandler validates cfg and creates a fixed-target relay.
 func NewHandler(cfg Config) (*Handler, error) {
 	if strings.TrimSpace(cfg.ExpectedHost) == "" || strings.ContainsAny(cfg.ExpectedHost, "/?#") {
@@ -110,9 +110,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if err := validateLoopbackAddress(cfg.Upstream); err != nil {
 		return nil, fmt.Errorf("relay upstream: %w", err)
 	}
-	authHash, err := bearerCredentialHash(cfg.BearerCredential)
+	credentials, primary, err := prepareCredentials(cfg.BearerCredentials, cfg.AcceptLegacyBearer)
 	if err != nil {
-		return nil, fmt.Errorf("relay bearer credential: %w", err)
+		return nil, fmt.Errorf("relay bearer credentials: %w", err)
 	}
 	if cfg.MaxConnections <= 0 {
 		return nil, errors.New("relay max connections must be positive")
@@ -125,6 +125,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 	if cfg.DialTimeout <= 0 {
 		cfg.DialTimeout = 5 * time.Second
+	}
+	if cfg.SessionIdleTimeout <= 0 {
+		cfg.SessionIdleTimeout = defaultSessionIdleTimeout
+	}
+	if cfg.SessionWriteTimeout <= 0 {
+		cfg.SessionWriteTimeout = defaultSessionWriteTimeout
+	}
+	if cfg.ShutdownDrainTimeout <= 0 {
+		cfg.ShutdownDrainTimeout = defaultShutdownDrainTimeout
 	}
 	if cfg.AuthFailuresBeforeBan < 0 {
 		return nil, errors.New("relay authorization failure limit cannot be negative")
@@ -158,18 +167,29 @@ func NewHandler(cfg Config) (*Handler, error) {
 	return &Handler{
 		expectedHost: strings.ToLower(cfg.ExpectedHost),
 		upstream:     cfg.Upstream,
-		authHash:     authHash,
-		sourceKey:    sourceAddressKey(cfg.BearerCredential),
+		credentials:  credentials,
+		sourceKey:    sourceAddressKey([]byte(primary)),
 		dialer:       net.Dialer{Timeout: cfg.DialTimeout, KeepAlive: 30 * time.Second},
 		messageSize:  cfg.MaxWebSocketMessageSize,
+		idleTimeout:  cfg.SessionIdleTimeout,
+		writeTimeout: cfg.SessionWriteTimeout,
+		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perIPMax:     cfg.MaxConnectionsPerIP,
 		authFailures: newAuthFailureLimiter(cfg),
+		logger:       loggerOrDefault(cfg.Logger),
 		perIP:        make(map[string]int),
 		active:       make(map[*websocket.Conn]struct{}),
 		ctx:          ctx,
 		cancel:       cancel,
 	}, nil
+}
+
+func loggerOrDefault(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.Default()
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -205,19 +225,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sourceIP := remoteIP(r.RemoteAddr)
 	if retryAfter, banned := h.authFailures.banRemaining(sourceIP); banned {
+		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", retryAfter)
 		writeRateLimited(w, r, retryAfter)
 		return
 	}
-	if !h.authorized(r.Header.Get("Authorization")) {
-		retryAfter, limited := h.authFailures.recordFailure(sourceIP)
+	result := h.authorize(r.Header.Get("Authorization"))
+	if !result.authorized {
+		ban := h.authFailures.recordFailure(sourceIP)
+		// The credential itself is never logged: only whether it was absent,
+		// malformed, or a well-formed credential of either generation.
+		h.logger.Warn("relay authorization rejected", "source", sourceIP, "credential", result.class)
 		w.Header().Set("Cache-Control", "no-store")
-		if limited {
-			writeRateLimited(w, r, retryAfter)
+		if ban.limited {
+			if ban.activated {
+				h.logger.Warn("relay authorization ban activated", "source", sourceIP, "retry_after", ban.retryAfter)
+			} else {
+				h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", ban.retryAfter)
+			}
+			writeRateLimited(w, r, ban.retryAfter)
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="gul-relay"`)
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
+	}
+	if result.legacy {
+		h.logger.Warn("relay accepted legacy bearer credential", "source", sourceIP)
 	}
 	if retryAfter, banned := h.authFailures.clearIfAllowed(sourceIP); banned {
 		// A concurrent failed request may have activated the ban while this
@@ -231,9 +264,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, ok := h.acquire(sourceIP)
+	release, scope, ok := h.acquire(sourceIP)
 	if !ok {
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		h.logger.Warn("relay capacity rejected", "source", sourceIP, "scope", scope)
+		writeCapacityRejected(w, capacityRetryAfter)
 		return
 	}
 	defer release()
@@ -243,27 +277,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
+		h.logger.Warn("relay websocket upgrade failed", "source", sourceIP, "error", err)
 		return
 	}
 	if !h.registerWebSocket(ws) {
-		_ = ws.CloseNow()
+		closeInBackground(ws)
 		return
 	}
 	defer h.unregisterWebSocket(ws)
 	stream := websocket.NetConn(h.ctx, ws, websocket.MessageBinary)
+	// Order is load-bearing: websocket.NetConn disables the read limit, so the
+	// bound has to be reinstated after it, not before. Without it a peer can
+	// make the relay buffer a message of any size.
 	ws.SetReadLimit(h.messageSize)
-	defer func() { _ = stream.Close() }()
+	// Closing a WebSocket runs a close handshake that a vanished peer never
+	// answers, and the library bounds that wait at seconds. Keep it off the
+	// session goroutine: the capacity slot is released when the bytes stop,
+	// not when a courtesy close frame finishes timing out.
+	defer func() { go func() { _ = stream.Close() }() }()
 
 	dialer := h.dialer
+	var localAddress net.IP
 	// Linux routes the full 127/8 block locally. Binding a stable alias gives
 	// Murmur a distinct autoban bucket per outer source IP. Darwin only assigns
 	// 127.0.0.1 by default, so local cross-platform tests use the OS default.
 	if runtime.GOOS == "linux" {
-		dialer.LocalAddr = &net.TCPAddr{IP: pseudonymousLoopback(h.sourceKey, sourceIP)}
+		localAddress = pseudonymousLoopback(h.sourceKey, sourceIP)
+		dialer.LocalAddr = &net.TCPAddr{IP: localAddress}
 	}
 	upstream, err := dialer.DialContext(h.ctx, "tcp", h.upstream)
 	if err != nil {
-		_ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable")
+		h.logger.Error("relay upstream dial failed", "source", sourceIP, "upstream", h.upstream, "error", err)
+		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
 		return
 	}
 	defer func() { _ = upstream.Close() }()
@@ -271,157 +316,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = tcp.SetNoDelay(true)
 	}
 
-	proxy(stream, upstream)
+	opened := time.Now()
+	openAttrs := []any{"source", sourceIP}
+	if localAddress != nil {
+		openAttrs = append(openAttrs, "upstream_source", localAddress.String())
+	}
+	h.logger.Info("relay session opened", openAttrs...)
+
+	stats := proxySession(stream, upstream, h.idleTimeout, h.writeTimeout)
+	closeAttrs := []any{
+		"source", sourceIP,
+		"duration", time.Since(opened).Round(time.Millisecond),
+		"bytes_from_client", stats.fromClient,
+		"bytes_to_client", stats.toClient,
+		"reason", stats.reason,
+	}
+	if stats.err != nil {
+		closeAttrs = append(closeAttrs, "error", stats.err)
+	}
+	h.logger.Info("relay session closed", closeAttrs...)
 }
 
-func (h *Handler) authorized(header string) bool {
-	scheme, credential, ok := strings.Cut(header, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || !validBearerCredential([]byte(credential)) {
-		return false
-	}
-	provided := sha256.Sum256([]byte(credential))
-	return subtle.ConstantTimeCompare(provided[:], h.authHash[:]) == 1
-}
-
-func bearerCredentialHash(credential []byte) ([sha256.Size]byte, error) {
-	if !validBearerCredential(credential) {
-		return [sha256.Size]byte{}, errors.New("must be an unpadded base64url-encoded 32-byte value")
-	}
-	return sha256.Sum256(credential), nil
-}
-
-func validBearerCredential(credential []byte) bool {
-	if len(credential) != base64.RawURLEncoding.EncodedLen(sha256.Size) {
-		return false
-	}
-	var decoded [sha256.Size]byte
-	n, err := base64.RawURLEncoding.Strict().Decode(decoded[:], credential)
-	return err == nil && n == sha256.Size
-}
-
-func newAuthFailureLimiter(cfg Config) *authFailureLimiter {
-	return &authFailureLimiter{
-		entries:           make(map[string]*authFailureEntry),
-		order:             list.New(),
-		failuresBeforeBan: cfg.AuthFailuresBeforeBan,
-		failureWindow:     cfg.AuthFailureWindow,
-		banDuration:       cfg.AuthBanDuration,
-		maxEntries:        cfg.MaxAuthTrackedSources,
-		now:               cfg.Now,
-	}
-}
-
-// recordFailure returns a positive ban duration after a source consumes its
-// configured allowance of 401 responses. The triggering request and all later
-// failed requests receive 429 until the fixed ban expires.
-func (l *authFailureLimiter) recordFailure(source string) (time.Duration, bool) {
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entry, ok := l.entries[source]
-	if !ok {
-		entry = l.insert(source, now)
-	} else {
-		l.order.MoveToBack(entry.element)
-	}
-	if now.Before(entry.bannedUntil) {
-		return entry.bannedUntil.Sub(now), true
-	}
-	if !entry.bannedUntil.IsZero() || !now.Before(entry.windowStarted.Add(l.failureWindow)) {
-		entry.failures = 0
-		entry.windowStarted = now
-		entry.bannedUntil = time.Time{}
-	}
-
-	entry.failures++
-	if entry.failures > l.failuresBeforeBan {
-		entry.bannedUntil = now.Add(l.banDuration)
-		return l.banDuration, true
-	}
-	return 0, false
-}
-
-func (l *authFailureLimiter) banRemaining(source string) (time.Duration, bool) {
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	entry, ok := l.entries[source]
-	if !ok {
-		return 0, false
-	}
-	if now.Before(entry.bannedUntil) {
-		l.order.MoveToBack(entry.element)
-		return entry.bannedUntil.Sub(now), true
-	}
-	if !entry.bannedUntil.IsZero() {
-		delete(l.entries, source)
-		l.order.Remove(entry.element)
-	}
-	return 0, false
-}
-
-func (l *authFailureLimiter) clearIfAllowed(source string) (time.Duration, bool) {
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	entry, ok := l.entries[source]
-	if !ok {
-		return 0, false
-	}
-	if now.Before(entry.bannedUntil) {
-		l.order.MoveToBack(entry.element)
-		return entry.bannedUntil.Sub(now), true
-	}
-	delete(l.entries, source)
-	l.order.Remove(entry.element)
-	return 0, false
-}
-
-func (l *authFailureLimiter) insert(source string, now time.Time) *authFailureEntry {
-	if len(l.entries) >= l.maxEntries {
-		oldestElement := l.order.Front()
-		oldest := oldestElement.Value.(*authFailureEntry)
-		delete(l.entries, oldest.source)
-		l.order.Remove(oldestElement)
-	}
-	entry := &authFailureEntry{source: source, windowStarted: now}
-	entry.element = l.order.PushBack(entry)
-	l.entries[source] = entry
-	return entry
-}
-
-func retryAfterSeconds(duration time.Duration) string {
-	seconds := duration / time.Second
-	if duration%time.Second != 0 {
-		seconds++
-	}
-	if seconds < 1 {
-		seconds = 1
-	}
-	return strconv.FormatInt(int64(seconds), 10)
-}
-
-func writeRateLimited(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Connection", "close")
-	w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
-	r.Close = true
-	http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
-}
-
-func (h *Handler) acquire(ip string) (func(), bool) {
+// acquire reserves one session slot. It reports which limit refused the
+// request so the rejection can be logged without guessing.
+func (h *Handler) acquire(ip string) (func(), string, bool) {
 	select {
 	case h.global <- struct{}{}:
 	default:
-		return nil, false
+		return nil, "global", false
 	}
 
 	h.mu.Lock()
-	if h.closing || h.perIP[ip] >= h.perIPMax {
+	if h.closing {
 		h.mu.Unlock()
 		<-h.global
-		return nil, false
+		return nil, "shutdown", false
+	}
+	if h.perIP[ip] >= h.perIPMax {
+		h.mu.Unlock()
+		<-h.global
+		return nil, "source", false
 	}
 	h.perIP[ip]++
 	h.sessions.Add(1)
@@ -439,36 +373,82 @@ func (h *Handler) acquire(ip string) (func(), bool) {
 			<-h.global
 			h.sessions.Done()
 		})
-	}, true
+	}, "", true
 }
 
-// Shutdown stops accepting sessions, cancels every active WebSocket stream,
-// and waits for both proxy directions to return.
+// closeInBackground runs a WebSocket close off the calling goroutine. The
+// close handshake waits for a reply the peer may never send, and the library
+// gives no way to cut that short, so no request-serving path may block on it.
+func closeInBackground(conn *websocket.Conn) {
+	go func() { _ = conn.CloseNow() }()
+}
+
+// Shutdown stops accepting sessions, asks every active session to close, and
+// waits up to the drain window before cutting the remainder off. Sending a
+// close frame first lets a client distinguish a planned restart from a
+// network failure and reconnect without a reconnect backoff penalty.
+//
+// A session whose peer ignores the close frame ends when the drain window
+// expires and the shared stream context is cancelled, which is what releases
+// its capacity slot. The close handshake itself may keep running in the
+// background for the few seconds the library allows it.
 func (h *Handler) Shutdown(ctx context.Context) error {
 	h.shutdownOnce.Do(func() {
-		h.mu.Lock()
-		h.closing = true
-		active := make([]*websocket.Conn, 0, len(h.active))
-		for conn := range h.active {
-			active = append(active, conn)
-		}
-		h.mu.Unlock()
-		h.cancel()
-		for _, conn := range active {
-			_ = conn.CloseNow()
+		for _, conn := range h.stopAccepting() {
+			// Close waits for the peer's close frame, so each session gets its
+			// own goroutine and none delays the others.
+			go func(conn *websocket.Conn) {
+				_ = conn.Close(websocket.StatusGoingAway, "relay is shutting down")
+			}(conn)
 		}
 	})
+
 	done := make(chan struct{})
 	go func() {
 		h.sessions.Wait()
 		close(done)
 	}()
+
+	drain := time.NewTimer(h.drainTimeout)
+	defer drain.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-drain.C:
+	case <-ctx.Done():
+	}
+
+	// Sessions that did not answer the close frame are cut off.
+	h.cancel()
+	h.mu.Lock()
+	remaining := make([]*websocket.Conn, 0, len(h.active))
+	for conn := range h.active {
+		remaining = append(remaining, conn)
+	}
+	h.mu.Unlock()
+	for _, conn := range remaining {
+		// CloseNow waits for the connection's own goroutines, so one wedged
+		// session must not delay the rest. Cancelling the shared context above
+		// is what actually ends the sessions; this only hurries them along.
+		go func(conn *websocket.Conn) { _ = conn.CloseNow() }(conn)
+	}
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (h *Handler) stopAccepting() []*websocket.Conn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closing = true
+	active := make([]*websocket.Conn, 0, len(h.active))
+	for conn := range h.active {
+		active = append(active, conn)
+	}
+	return active
 }
 
 func (h *Handler) registerWebSocket(conn *websocket.Conn) bool {
@@ -485,20 +465,6 @@ func (h *Handler) unregisterWebSocket(conn *websocket.Conn) {
 	h.mu.Lock()
 	delete(h.active, conn)
 	h.mu.Unlock()
-}
-
-func proxy(left, right net.Conn) {
-	done := make(chan struct{}, 2)
-	copyOneWay := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		done <- struct{}{}
-	}
-	go copyOneWay(left, right)
-	go copyOneWay(right, left)
-	<-done
-	_ = left.Close()
-	_ = right.Close()
-	<-done
 }
 
 func validateLoopbackAddress(address string) error {
@@ -552,23 +518,4 @@ func sameOriginOrNative(origin, expectedHost string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Hostname(), expectedHost)
-}
-
-func sourceAddressKey(token []byte) [sha256.Size]byte {
-	mac := hmac.New(sha256.New, token)
-	_, _ = mac.Write([]byte("gul-relay-v1 source-address"))
-	var key [sha256.Size]byte
-	copy(key[:], mac.Sum(nil))
-	return key
-}
-
-func pseudonymousLoopback(key [sha256.Size]byte, sourceIP string) net.IP {
-	mac := hmac.New(sha256.New, key[:])
-	_, _ = mac.Write([]byte(sourceIP))
-	sum := mac.Sum(nil)
-	result := net.IPv4(127, sum[0], sum[1], sum[2])
-	if result.Equal(net.IPv4(127, 0, 0, 1)) {
-		result = net.IPv4(127, 0, 0, 2)
-	}
-	return result
 }
