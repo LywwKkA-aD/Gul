@@ -940,3 +940,40 @@ func TestCallbacksBundle(t *testing.T) {
 		t.Fatalf("emitted %d events, want 5", got)
 	}
 }
+
+// TestHandleStatusLogDoesNotContainTheServerAddress guards the other half of
+// the privacy contract: the status the UI receives keeps the address the user
+// typed, the log record that mirrors it must not - and neither must the error
+// text, which carries host:port from the network layer.
+func TestHandleStatusLogDoesNotContainTheServerAddress(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	emitter := &fakeEmitter{}
+	app := New(logger, emitter)
+
+	const host = "murmur.private.test"
+	status := domain.ConnectionStatus{
+		State:  domain.StateDisconnected,
+		Server: "wss://" + host + "/mumble",
+		Error:  "dial wss://" + host + "/mumble: dial tcp " + host + ":443: connect: connection refused",
+	}
+	app.HandleStatus(status)
+
+	logged := output.String()
+	if strings.Contains(logged, host) {
+		t.Fatalf("connection state log leaked the server address: %s", logged)
+	}
+	if !strings.Contains(logged, "connection refused") {
+		t.Fatalf("connection state log lost the diagnosis: %s", logged)
+	}
+	// The UI still needs the address it was given.
+	event, ok := emitter.last()
+	if !ok {
+		t.Fatal("no status was emitted")
+	}
+	if got := event.payload.(domain.ConnectionStatus); got != status {
+		t.Fatalf("emitted status = %+v, want %+v", got, status)
+	}
+}

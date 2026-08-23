@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,7 +22,13 @@ const tofuFileName = "known_servers.json"
 // first connection and reject any later change.
 type TOFUStore struct {
 	mu   sync.Mutex
+	log  *slog.Logger
 	path string
+	// persist is false once the database is known to be unusable on disk.
+	// The session then keeps its pins in memory: a config directory the app
+	// cannot read or write must degrade trust to first-use, never block the
+	// application or every connection it makes.
+	persist bool
 	// host -> lowercase hex SHA-256 of the leaf certificate DER
 	known map[string]string
 	// host -> fingerprint that was rejected on the last mismatch. Kept in
@@ -50,60 +57,107 @@ func (e *MismatchError) Error() string {
 // Is makes errors.Is(err, ErrFingerprintChanged) succeed for this type.
 func (e *MismatchError) Is(target error) bool { return target == ErrFingerprintChanged }
 
-func NewTOFUStore(configDir string) (*TOFUStore, error) {
+// NewTOFUStore loads the pin database from configDir.
+//
+// It never fails. A damaged, unreadable or unwritable database costs pins -
+// the affected hosts fall back to a first-use decision - and that price is
+// paid per host: a store problem must never keep the application from
+// starting, because a client that does not start cannot even be diagnosed.
+// Dropped entries are reported by count and reason; host names stay out of
+// the record so a shared diagnostics archive carries no connection arguments.
+func NewTOFUStore(configDir string, log *slog.Logger) *TOFUStore {
+	if log == nil {
+		log = slog.Default()
+	}
 	s := &TOFUStore{
+		log:     log,
 		path:    filepath.Join(configDir, tofuFileName),
+		persist: true,
 		known:   map[string]string{},
 		pending: map[string]string{},
 	}
+
 	data, err := os.ReadFile(s.path)
 	switch {
 	case os.IsNotExist(err):
-		return s, nil
+		return s
 	case err != nil:
-		return nil, fmt.Errorf("read %s: %w", tofuFileName, err)
+		// The file exists but cannot be read. Writing over it would destroy
+		// pins that are still there, so this session stays in memory.
+		s.persist = false
+		s.log.Warn("known servers unreadable, pins are session-scoped", "file", tofuFileName, "error", err)
+		return s
 	}
-	if err := json.Unmarshal(data, &s.known); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", tofuFileName, err)
+
+	stored := map[string]string{}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		s.log.Warn("known servers damaged, starting a new database", "file", tofuFileName, "error", err)
+		return s
 	}
-	canonical, changed, err := canonicalizeKnownServers(s.known)
-	if err != nil {
-		return nil, fmt.Errorf("migrate %s: %w", tofuFileName, err)
+
+	canonical, dropped, changed := canonicalizeKnownServers(stored)
+	if dropped.invalidHosts > 0 {
+		s.log.Warn("dropped known servers: host cannot be canonicalized",
+			"file", tofuFileName, "count", dropped.invalidHosts)
 	}
-	if changed {
-		if err := s.saveKnown(canonical); err != nil {
-			return nil, fmt.Errorf("migrate %s: %w", tofuFileName, err)
-		}
+	if dropped.conflicts > 0 {
+		s.log.Warn("dropped known servers: equivalent host spellings pin different fingerprints",
+			"file", tofuFileName, "count", dropped.conflicts)
 	}
 	s.known = canonical
-	return s, nil
+	if changed {
+		if err := s.saveKnown(canonical); err != nil {
+			s.persist = false
+			s.log.Warn("known servers not writable, pins are session-scoped",
+				"file", tofuFileName, "error", err)
+		}
+	}
+	return s
+}
+
+// droppedPins counts the entries a migration had to discard, by reason.
+type droppedPins struct {
+	invalidHosts int
+	conflicts    int
 }
 
 // canonicalizeKnownServers preserves pins created before endpoint host
-// canonicalization was introduced. Equivalent legacy spellings must collapse
-// to one key; conflicting fingerprints fail closed so an upgrade can never
-// turn an existing pin into a fresh first-use trust decision.
-func canonicalizeKnownServers(known map[string]string) (map[string]string, bool, error) {
-	canonical := make(map[string]string, len(known))
+// canonicalization was introduced. Equivalent legacy spellings collapse to one
+// key; an entry whose host cannot be canonicalized at all, and every spelling
+// of a host whose duplicates disagree, are dropped. Dropping is fail-closed
+// per host - that host loses its pin and is decided again on first use - and
+// deliberately not fail-closed per application.
+func canonicalizeKnownServers(stored map[string]string) (map[string]string, droppedPins, bool) {
+	canonical := make(map[string]string, len(stored))
+	conflicting := map[string]bool{}
+	dropped := droppedPins{}
 	changed := false
-	for host, fingerprint := range known {
+
+	for host, fingerprint := range stored {
 		canonicalName, err := canonicalHost(host)
 		if err != nil {
-			return nil, false, errors.New("contains a server host that cannot be canonicalized")
+			dropped.invalidHosts++
+			changed = true
+			continue
+		}
+		if canonicalName != host {
+			changed = true
 		}
 		if pinned, ok := canonical[canonicalName]; ok {
 			if pinned != fingerprint {
-				return nil, false, errors.New("contains conflicting pins for an equivalent server host")
+				conflicting[canonicalName] = true
 			}
 			changed = true
 			continue
 		}
 		canonical[canonicalName] = fingerprint
-		if canonicalName != host {
-			changed = true
-		}
 	}
-	return canonical, changed, nil
+
+	for canonicalName := range conflicting {
+		delete(canonical, canonicalName)
+		dropped.conflicts++
+	}
+	return canonical, dropped, changed
 }
 
 // TLSConfig returns a tls.Config that accepts the pinned certificate for host
@@ -189,7 +243,13 @@ func knownWithPin(known map[string]string, host, fingerprint string) map[string]
 	return candidate
 }
 
+// saveKnown persists the database, unless startup already established that the
+// file is not usable. A write that fails at runtime stays an error: the caller
+// must not publish a pin it could not record.
 func (s *TOFUStore) saveKnown(known map[string]string) error {
+	if !s.persist {
+		return nil
+	}
 	data, err := json.MarshalIndent(known, "", "  ")
 	if err != nil {
 		return err

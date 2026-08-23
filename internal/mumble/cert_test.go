@@ -14,7 +14,7 @@ import (
 func TestClientCertificateGeneratesOnFirstRun(t *testing.T) {
 	dir := t.TempDir()
 
-	cert, err := ClientCertificate(dir)
+	cert, err := ClientCertificate(dir, testLogger(t))
 	if err != nil {
 		t.Fatalf("first run must generate a certificate: %v", err)
 	}
@@ -32,11 +32,11 @@ func TestClientCertificateGeneratesOnFirstRun(t *testing.T) {
 func TestClientCertificateIsReusedAcrossRuns(t *testing.T) {
 	dir := t.TempDir()
 
-	first, err := ClientCertificate(dir)
+	first, err := ClientCertificate(dir, testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := ClientCertificate(dir)
+	second, err := ClientCertificate(dir, testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestClientCertificateIsReusedAcrossRuns(t *testing.T) {
 func TestClientCertificateProperties(t *testing.T) {
 	dir := t.TempDir()
 
-	cert, err := ClientCertificate(dir)
+	cert, err := ClientCertificate(dir, testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestClientCertificateFilesArePrivate(t *testing.T) {
 	}
 	dir := t.TempDir()
 
-	if _, err := ClientCertificate(dir); err != nil {
+	if _, err := ClientCertificate(dir, testLogger(t)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestClientCertificateReportsBrokenPair(t *testing.T) {
 	}
 
 	// Regenerating silently would swap the user's identity behind their back.
-	if _, err := ClientCertificate(dir); err == nil {
+	if _, err := ClientCertificate(dir, testLogger(t)); err == nil {
 		t.Fatal("a corrupted key pair must be reported, not replaced")
 	}
 }
@@ -134,7 +134,7 @@ func TestClientCertificateRegeneratesHalfWrittenPair(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, keyFileName), []byte("leftover"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ClientCertificate(dir); err != nil {
+	if _, err := ClientCertificate(dir, testLogger(t)); err != nil {
 		t.Fatalf("a lone key file must not block generation: %v", err)
 	}
 }

@@ -134,6 +134,19 @@ func copyLogInto(zw *zip.Writer, src, name, cfgDir string) error {
 	return nil
 }
 
+// The Wails records that must never enter a shareable bundle, matched by the
+// exact message strings the framework logs. A version bump can rename them, so
+// TestSensitiveWailsRecordsStillExistUpstream checks them against the module
+// source and fails loudly instead of letting the filter go quiet.
+const (
+	wailsModule        = "github.com/wailsapp/wails/v3"
+	bindingCallPrefix  = "Binding call "
+	runtimeCallMessage = "Runtime call:"
+	// connectRequestedMessage is Gul's own: alpha.1 attached the raw server
+	// address and username to it.
+	connectRequestedMessage = "connect requested"
+)
+
 // Wails' debug binding completion record contains every method argument and
 // the return value. That includes join passwords, chat text and opaque device
 // IDs, so these framework traces must never enter a shareable support bundle.
@@ -147,13 +160,14 @@ func isSensitiveLogRecord(line string) bool {
 		Message string `json:"msg"`
 	}
 	if json.Unmarshal([]byte(line), &record) == nil {
-		if strings.HasPrefix(record.Message, "Binding call ") || record.Message == "Runtime call:" ||
-			record.Message == "connect requested" {
+		if strings.HasPrefix(record.Message, bindingCallPrefix) ||
+			record.Message == runtimeCallMessage ||
+			record.Message == connectRequestedMessage {
 			return true
 		}
 	}
-	return strings.Contains(line, "Binding call ") || strings.Contains(line, "Runtime call:") ||
-		strings.Contains(line, `msg="connect requested"`)
+	return strings.Contains(line, bindingCallPrefix) || strings.Contains(line, runtimeCallMessage) ||
+		strings.Contains(line, `msg="`+connectRequestedMessage+`"`)
 }
 
 // redactConfigPath handles both text logs and JSON logs. encoding/json escapes

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -16,16 +18,55 @@ import (
 var (
 	ErrRelayPasswordRequired = errors.New("server password is required for WSS")
 	ErrRelayAuthentication   = errors.New("WSS relay authentication failed")
+	// ErrRelayRateLimited reports a relay that answered 429. Use errors.As with
+	// *RateLimitedError to recover how long the relay asked us to wait.
+	ErrRelayRateLimited = errors.New("WSS relay is refusing connection attempts")
 )
 
-func dialWSS(ctx context.Context, address, password string, baseClient *http.Client) (net.Conn, error) {
-	if password == "" {
+// maxRelayRetryAfter caps what a relay can make the client wait. A hostile or
+// broken Retry-After must not park the reconnect loop for hours.
+const maxRelayRetryAfter = 5 * time.Minute
+
+// RateLimitedError carries the relay's Retry-After so the reconnect loop can
+// honour the ban instead of hammering through its own backoff ladder.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.RetryAfter <= 0 {
+		return ErrRelayRateLimited.Error()
+	}
+	return fmt.Sprintf("%s: retry after %s", ErrRelayRateLimited.Error(), e.RetryAfter)
+}
+
+// Is makes errors.Is(err, ErrRelayRateLimited) succeed for this type.
+func (e *RateLimitedError) Is(target error) bool { return target == ErrRelayRateLimited }
+
+// relayStream is the outer WSS transport: a byte stream plus the websocket
+// handle, which is what an abort needs. Closing the stream runs the WebSocket
+// close handshake with an internal 5-second timeout that no context cancels,
+// so a rejected connection to a wedged relay must be dropped, not closed.
+type relayStream struct {
+	net.Conn
+	ws *websocket.Conn
+}
+
+func (s *relayStream) closeNow() { _ = s.ws.CloseNow() }
+
+func dialWSS(
+	ctx context.Context,
+	address string,
+	credential relayproto.Credential,
+	baseClient *http.Client,
+) (*relayStream, error) {
+	if credential == "" {
 		return nil, ErrRelayPasswordRequired
 	}
 
 	client := noRedirectHTTPClient(baseClient)
 	header := make(http.Header)
-	header.Set("Authorization", relayproto.DeriveLegacy([]byte(password)).Header())
+	header.Set("Authorization", credential.Header())
 	ws, response, err := websocket.Dial(ctx, address, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      header,
@@ -33,13 +74,18 @@ func dialWSS(ctx context.Context, address, password string, baseClient *http.Cli
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
-		if response != nil && response.StatusCode == http.StatusUnauthorized {
-			return nil, ErrRelayAuthentication
+		if response != nil {
+			switch response.StatusCode {
+			case http.StatusUnauthorized:
+				return nil, ErrRelayAuthentication
+			case http.StatusTooManyRequests:
+				return nil, &RateLimitedError{RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"))}
+			}
 		}
 		return nil, fmt.Errorf("WSS relay handshake failed: %w", err)
 	}
 	if ws.Subprotocol() != relayproto.Subprotocol {
-		_ = ws.Close(websocket.StatusProtocolError, "required subprotocol was not negotiated")
+		_ = ws.CloseNow()
 		return nil, errors.New("WSS relay did not negotiate the required protocol")
 	}
 
@@ -47,8 +93,38 @@ func dialWSS(ctx context.Context, address, password string, baseClient *http.Cli
 	// deliberate: cancelling the 10-second setup context must not kill a live
 	// voice session. Session.Disconnect owns and closes the returned stream.
 	stream := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
-	ws.SetReadLimit(64 << 10)
-	return stream, nil
+	// Load-bearing order: NetConn disables the read limit (sets it to -1), so
+	// the bound has to be re-applied afterwards or an unbounded message can
+	// exhaust memory.
+	ws.SetReadLimit(relayproto.MaxMessageBytes)
+	return &relayStream{Conn: stream, ws: ws}, nil
+}
+
+// parseRetryAfter reads both header forms (delta-seconds and HTTP-date) and
+// clamps the result. An absent or unusable value yields zero, which leaves the
+// caller on its own backoff.
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return clampRetryAfter(time.Duration(seconds) * time.Second)
+	}
+	if deadline, err := http.ParseTime(value); err == nil {
+		return clampRetryAfter(time.Until(deadline))
+	}
+	return 0
+}
+
+func clampRetryAfter(d time.Duration) time.Duration {
+	switch {
+	case d <= 0:
+		return 0
+	case d > maxRelayRetryAfter:
+		return maxRelayRetryAfter
+	default:
+		return d
+	}
 }
 
 // dialWSSMumbleTLS establishes the outer CA-verified WSS connection, then
@@ -57,7 +133,7 @@ func dialWSS(ctx context.Context, address, password string, baseClient *http.Cli
 func dialWSSMumbleTLS(
 	ctx context.Context,
 	ep endpoint,
-	password string,
+	credential relayproto.Credential,
 	tofu *TOFUStore,
 	certificate *tls.Certificate,
 	baseClient *http.Client,
@@ -69,7 +145,7 @@ func dialWSSMumbleTLS(
 		return nil, errors.New("TOFU store is required")
 	}
 
-	stream, err := dialWSS(ctx, ep.address, password, baseClient)
+	stream, err := dialWSS(ctx, ep.address, credential, baseClient)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +158,7 @@ func dialWSSMumbleTLS(
 	}
 	inner := tls.Client(stream, tlsConfig)
 	if err := inner.HandshakeContext(ctx); err != nil {
-		_ = stream.Close()
+		stream.closeNow()
 		return nil, fmt.Errorf("inner Mumble TLS handshake failed: %w", err)
 	}
 	return inner, nil

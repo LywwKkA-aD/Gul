@@ -250,7 +250,11 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	a.status = s
 	a.mu.Unlock()
 
-	a.log.Debug("connection state", "state", string(s.State), "server", s.Server, "error", s.Error)
+	// The address and everything derived from it (network errors embed
+	// host:port) stays out of the record: gul.log travels in diagnostics
+	// archives the user shares (PLAN.md §10.7).
+	a.log.Debug("connection state", "state", string(s.State),
+		"error", mumble.RedactServer(s.Error, s.Server))
 	a.emit(domain.EventConnectionState, s)
 
 	// The voice engine lives while the session does; reconnects keep it
@@ -313,7 +317,7 @@ func (a *App) HandleTofu(p domain.TofuPrompt) {
 	a.notifyMu.Lock()
 	defer a.notifyMu.Unlock()
 
-	a.log.Warn("server fingerprint changed", "server", p.Server)
+	a.log.Warn("server fingerprint changed")
 	a.emit(domain.EventTofuMismatch, p)
 }
 

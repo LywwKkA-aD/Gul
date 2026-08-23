@@ -11,10 +11,7 @@ import (
 // TestDialLocalMurmur is a smoke test against the local dev stand
 // (task murmur:up). It is excluded from CI: run with `go test -tags live`.
 func TestDialLocalMurmur(t *testing.T) {
-	tofu, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	tofu := NewTOFUStore(t.TempDir(), slog.Default())
 
 	s, err := Dial(DialConfig{
 		Address:  "127.0.0.1:64738",

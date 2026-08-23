@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -317,4 +318,54 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestSensitiveWailsRecordsStillExistUpstream pins the denylist in
+// isSensitiveLogRecord to the framework it filters. The messages are Wails
+// string literals, not an API: a version bump can rename them, and the leak
+// they guard against - binding arguments carry the join password - would come
+// back silently. If this test fails after a Wails upgrade, read the new
+// message processor and update the denylist, do not delete the test.
+func TestSensitiveWailsRecordsStillExistUpstream(t *testing.T) {
+	t.Parallel()
+
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", wailsModule).CombinedOutput()
+	if err != nil {
+		t.Fatalf("locate %s (is the module cache populated?): %v: %s", wailsModule, err, out)
+	}
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		t.Fatalf("%s has no local directory; run go mod download first", wailsModule)
+	}
+
+	sources, err := filepath.Glob(filepath.Join(dir, "pkg", "application", "messageprocessor*.go"))
+	if err != nil {
+		t.Fatalf("scan message processor sources: %v", err)
+	}
+	if len(sources) == 0 {
+		t.Fatalf("no message processor sources under %s", dir)
+	}
+
+	var corpus strings.Builder
+	for _, source := range sources {
+		data, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatalf("read %s: %v", filepath.Base(source), err)
+		}
+		corpus.Write(data)
+	}
+
+	// bindingCallPrefix matches a family of messages ("Binding call complete:",
+	// "Binding call started:"), so only the opening quote is anchored; the
+	// runtime message is logged verbatim.
+	literals := map[string]string{
+		bindingCallPrefix:  `"` + bindingCallPrefix,
+		runtimeCallMessage: `"` + runtimeCallMessage + `"`,
+	}
+	for message, literal := range literals {
+		if !strings.Contains(corpus.String(), literal) {
+			t.Fatalf("Wails no longer logs %q: the diagnostics denylist stopped matching "+
+				"and binding arguments are leaking into shared archives", message)
+		}
+	}
 }

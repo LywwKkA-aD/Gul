@@ -1,5 +1,6 @@
 import { Events } from '@wailsio/runtime';
 import { useGulStore } from './store';
+import { commitLastConnection } from './lastConnection';
 import { normalizeTree } from './types';
 import type {
   AudioLevels,
@@ -31,7 +32,11 @@ export function subscribeGulEvents(): void {
   subscribed = true;
 
   Events.On(CONNECTION_STATE, (e) => {
-    useGulStore.getState().setStatus(e.data as unknown as ConnectionStatus);
+    const status = e.data as unknown as ConnectionStatus;
+    // The connect form is remembered only once the server accepted it, and
+    // the screen that filled it is already gone by then.
+    if (status.state === 'connected') commitLastConnection();
+    useGulStore.getState().setStatus(status);
   });
   Events.On(CONNECTION_LATENCY, (e) => {
     const latency = e.data as unknown as ConnectionLatency;

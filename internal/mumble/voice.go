@@ -393,6 +393,7 @@ type voiceIO struct {
 	mu       sync.Mutex
 	client   *gumble.Client
 	proto    bool
+	server   string
 	listener *voiceListener
 
 	// target is the wire voice target of outgoing frames (see SetVoiceTarget).
@@ -433,7 +434,7 @@ func (v *voiceIO) sendLoop() {
 		case <-v.stop:
 			return
 		case frame := <-v.tx.out():
-			client, proto := v.binding()
+			client, proto, server := v.binding()
 			if client == nil {
 				v.txOffline.Add(1)
 				continue
@@ -453,7 +454,8 @@ func (v *voiceIO) sendLoop() {
 			)
 			if err != nil {
 				v.txErrors.Add(1)
-				v.log.Warn("voice frame write failed", "error", err)
+				// Socket errors carry host:port; log records must not.
+				v.log.Warn("voice frame write failed", "error", RedactServer(err.Error(), server))
 			}
 		}
 	}
@@ -464,11 +466,11 @@ func (v *voiceIO) sendLoop() {
 // The protobuf framing flag is resolved here, once, rather than per frame:
 // Client.Version is written during the handshake and dial only returns after
 // the sync completed, so this read cannot race the read loop.
-func (v *voiceIO) bind(client *gumble.Client) {
+func (v *voiceIO) bind(client *gumble.Client, server string) {
 	proto := voiceProtoMode(client)
 
 	v.mu.Lock()
-	v.client, v.proto = client, proto
+	v.client, v.proto, v.server = client, proto, server
 	v.mu.Unlock()
 }
 
@@ -499,10 +501,10 @@ func (v *voiceIO) newListener() *voiceListener {
 	return l
 }
 
-func (v *voiceIO) binding() (*gumble.Client, bool) {
+func (v *voiceIO) binding() (client *gumble.Client, proto bool, server string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.client, v.proto
+	return v.client, v.proto, v.server
 }
 
 func (v *voiceIO) stats() VoiceStats {

@@ -7,6 +7,7 @@ import (
 	"html"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // ErrNotConnected is returned by actions that need a live session.
@@ -25,6 +27,10 @@ type credentials struct {
 	address  string
 	username string
 	password string
+	// bearer is the derived WSS relay credential. PBKDF2 makes derivation cost
+	// about 50 ms, so it is computed once per Connect and reused by every
+	// reconnect attempt. It is a secret: never log it, never put it in status.
+	bearer relayproto.Credential
 }
 
 // tofuPending is the certificate change awaiting the user's decision.
@@ -52,6 +58,7 @@ type Manager struct {
 	// NewManager wires the production implementations.
 	dialFn         func(DialConfig, sessionHooks) (*Session, error)
 	backoffFn      func(int) time.Duration
+	deriveFn       func([]byte) relayproto.Credential
 	statsInterval  time.Duration
 	requestStatsFn func(*gumble.Client)
 
@@ -75,11 +82,8 @@ type Manager struct {
 // NewManager loads the TOFU store and the client certificate (generating it
 // on first run) from cfgDir and returns a ready-to-use Manager.
 func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error) {
-	tofu, err := NewTOFUStore(cfgDir)
-	if err != nil {
-		return nil, err
-	}
-	cert, err := ClientCertificate(cfgDir)
+	tofu := NewTOFUStore(cfgDir, log)
+	cert, err := ClientCertificate(cfgDir, log)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +93,8 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		cb:             cb,
 		tofu:           tofu,
 		cert:           cert,
-		backoffFn:      backoffDelay,
+		backoffFn:      defaultBackoff,
+		deriveFn:       relayproto.Derive,
 		statsInterval:  statsPollInterval,
 		requestStatsFn: requestSelfStats,
 		accept:         make(chan struct{}, 1),
@@ -220,10 +225,10 @@ func (m *Manager) AcceptFingerprint() {
 		return
 	}
 	if err := m.tofu.Replace(pending.host, pending.prompt.NewFingerprint); err != nil {
-		m.log.Error("pin accepted fingerprint", "host", pending.host, "error", err)
+		m.log.Error("pin accepted fingerprint", "error", RedactServer(err.Error(), pending.host))
 		return
 	}
-	m.log.Info("accepted new server fingerprint", "host", pending.host)
+	m.log.Info("accepted new server fingerprint")
 
 	select {
 	case accept <- struct{}{}:
@@ -259,6 +264,7 @@ func (m *Manager) Close() {
 func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 
+	c.bearer = relayBearer(c, m.deriveFn)
 	attempt := 0
 	reconnecting := false
 
@@ -282,7 +288,28 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 				continue
 			}
 
-			m.log.Warn("connect attempt failed", "server", c.address, "error", err)
+			// The address never reaches gul.log: network errors embed
+			// host:port on their own (PLAN.md §10.7).
+			m.log.Warn("connect attempt failed", "error", RedactServer(err.Error(), c.address))
+
+			// A rate-limited relay states how long it wants to be left alone.
+			// Retrying earlier only extends the ban, so this is never terminal
+			// and never rushed - not even on the very first attempt.
+			var limited *RateLimitedError
+			if errors.As(err, &limited) {
+				wait := max(limited.RetryAfter, m.backoffFn(attempt))
+				m.emitStatus(domain.ConnectionStatus{
+					State: domain.StateReconnecting, Server: c.address,
+					Error: rateLimitedMessage(wait),
+				})
+				if !sleepOrStop(wait, stop) {
+					return
+				}
+				attempt++
+				reconnecting = true
+				continue
+			}
+
 			if !reconnecting || isTerminalDialError(err) {
 				m.emitStatus(domain.ConnectionStatus{
 					State: domain.StateDisconnected, Server: c.address, Error: err.Error(),
@@ -315,7 +342,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			})
 			return
 		}
-		m.log.Warn("connection lost", "server", c.address, "reason", reason)
+		m.log.Warn("connection lost", "reason", RedactServer(reason, c.address))
 		reconnecting = true
 		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address})
 		if !sleepOrStop(m.backoffFn(attempt), stop) {
@@ -395,10 +422,11 @@ func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent
 
 	cert := m.cert
 	return m.dialFn(DialConfig{
-		Address:     c.address,
-		Username:    c.username,
-		Password:    c.password,
-		Certificate: &cert,
+		Address:         c.address,
+		Username:        c.username,
+		Password:        c.password,
+		Certificate:     &cert,
+		RelayCredential: c.bearer,
 	}, hooks)
 }
 
@@ -619,7 +647,7 @@ func (m *Manager) setSession(session *Session) {
 	m.client = session.client
 	m.mu.Unlock()
 
-	m.voice.bind(session.client)
+	m.voice.bind(session.client, session.addr)
 }
 
 func (m *Manager) clearSession() {
@@ -736,5 +764,49 @@ func isTerminalDialError(err error) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// relayBearer derives the relay credential once per Connect. Direct Mumble
+// endpoints never reach a relay, so they do not pay the PBKDF2 cost.
+func relayBearer(c credentials, derive func([]byte) relayproto.Credential) relayproto.Credential {
+	if c.password == "" {
+		return ""
+	}
+	ep, err := parseEndpoint(c.address)
+	if err != nil || ep.kind != endpointWSS {
+		return ""
+	}
+	return derive([]byte(c.password))
+}
+
+// rateLimitedMessage is user-visible: the connect screen shows it verbatim.
+func rateLimitedMessage(wait time.Duration) string {
+	return fmt.Sprintf("Сервер временно отклоняет подключения. Следующая попытка через %s.", humanSeconds(wait))
+}
+
+// humanSeconds renders a wait in whole seconds with the Russian plural form.
+func humanSeconds(d time.Duration) string {
+	seconds := int64(d / time.Second)
+	if d%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		seconds = 1
+	}
+	return strconv.FormatInt(seconds, 10) + " " + pluralSeconds(seconds)
+}
+
+func pluralSeconds(n int64) string {
+	if n%100 >= 11 && n%100 <= 14 {
+		return "секунд"
+	}
+	switch n % 10 {
+	case 1:
+		return "секунду"
+	case 2, 3, 4:
+		return "секунды"
+	default:
+		return "секунд"
 	}
 }

@@ -25,14 +25,12 @@ import (
 
 func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
 	const host = "murmur.example.test"
-	const secret = "server password"
 	outerCertificate, outerRoots := testServerCertificate(t, host, 1)
 	innerCertificate, _ := testServerCertificate(t, host, 2)
 	innerSNI := make(chan string, 1)
 
 	relayServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if c, ok := relayproto.ParseHeader(r.Header.Get("Authorization")); !ok || !c.Matches(relayproto.DeriveLegacy([]byte(secret))) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if !authorizeRelayRequest(w, r) {
 			return
 		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -77,12 +75,9 @@ func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	tofu, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("new TOFU store: %v", err)
-	}
+	tofu := NewTOFUStore(t.TempDir(), testLogger(t))
 
-	conn, err := dialWSSMumbleTLS(t.Context(), ep, secret, tofu, nil, httpClient)
+	conn, err := dialWSSMumbleTLS(t.Context(), ep, relayTestCredential(), tofu, nil, httpClient)
 	if err != nil {
 		t.Fatalf("dial nested TLS: %v", err)
 	}

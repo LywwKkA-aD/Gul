@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -34,18 +35,26 @@ const (
 // is what gives the account a stable User.Hash on the server, so it must be
 // reused across runs: regenerating it creates a brand new identity.
 //
+// A directory the app cannot read or write costs persistence, not startup:
+// the identity is then generated for this run only and the degradation is
+// logged. The one hard error left is a stored pair that exists and cannot be
+// parsed, because replacing it silently would drop the user's server-side
+// identity without them ever asking for it.
+//
 // Both files are written with 0600 permissions.
-func ClientCertificate(dir string) (tls.Certificate, error) {
+func ClientCertificate(dir string, log *slog.Logger) (tls.Certificate, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	certPath := filepath.Join(dir, certFileName)
 	keyPath := filepath.Join(dir, keyFileName)
 
-	certExists, err := fileExists(certPath)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	keyExists, err := fileExists(keyPath)
-	if err != nil {
-		return tls.Certificate{}, err
+	certExists, certErr := fileExists(certPath)
+	keyExists, keyErr := fileExists(keyPath)
+	if certErr != nil || keyErr != nil {
+		log.Warn("stored client identity unreadable, using a session identity",
+			"error", errors.Join(certErr, keyErr))
+		return ephemeralClientCertificate()
 	}
 
 	if certExists && keyExists {
@@ -64,12 +73,28 @@ func ClientCertificate(dir string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	if err := writeSecret(keyPath, keyPEM); err != nil {
-		return tls.Certificate{}, fmt.Errorf("write %s: %w", keyFileName, err)
-	}
-	if err := writeSecret(certPath, certPEM); err != nil {
-		return tls.Certificate{}, fmt.Errorf("write %s: %w", certFileName, err)
+		log.Warn("client identity not writable, using a session identity",
+			"file", keyFileName, "error", err)
+	} else if err := writeSecret(certPath, certPEM); err != nil {
+		// Leaving a key without its certificate behind would look like a
+		// half-written pair on the next run, which regenerates anyway.
+		log.Warn("client identity not writable, using a session identity",
+			"file", certFileName, "error", err)
 	}
 
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("parse generated client certificate: %w", err)
+	}
+	return cert, nil
+}
+
+// ephemeralClientCertificate builds an identity that lives for this run only.
+func ephemeralClientCertificate() (tls.Certificate, error) {
+	certPEM, keyPEM, err := generateClientCertificate()
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("parse generated client certificate: %w", err)

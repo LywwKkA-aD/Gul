@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
 	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -127,7 +128,12 @@ func main() {
 	}
 	logger, closeLog, err := logging.Setup(cfgDir, slog.LevelDebug)
 	if err != nil {
-		log.Fatal(err)
+		// A config directory that cannot hold gul.log must not cost the user
+		// their client: run on stderr only and say so.
+		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		closeLog = func() error { return nil }
+		slog.SetDefault(logger)
+		logger.Warn("file logging unavailable", "error", err)
 	}
 	defer func() { _ = closeLog() }()
 

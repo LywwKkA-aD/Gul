@@ -1,20 +1,20 @@
 package mumble
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestTOFUPinAndMatch(t *testing.T) {
-	s, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := NewTOFUStore(t.TempDir(), testLogger(t))
 
 	if err := s.verify("srv:64738", "aaaa"); err != nil {
 		t.Fatalf("first use must pin, got error: %v", err)
@@ -30,18 +30,12 @@ func TestTOFUPinAndMatch(t *testing.T) {
 func TestTOFUPersistsAcrossReload(t *testing.T) {
 	dir := t.TempDir()
 
-	s1, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1 := NewTOFUStore(dir, testLogger(t))
 	if err := s1.verify("host", "cafe"); err != nil {
 		t.Fatal(err)
 	}
 
-	s2, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s2 := NewTOFUStore(dir, testLogger(t))
 	if err := s2.verify("host", "cafe"); err != nil {
 		t.Fatalf("pinned fingerprint must survive reload, got: %v", err)
 	}
@@ -51,15 +45,12 @@ func TestTOFUPersistsAcrossReload(t *testing.T) {
 }
 
 func TestTOFUMismatchCarriesBothFingerprints(t *testing.T) {
-	s, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := NewTOFUStore(t.TempDir(), testLogger(t))
 	if err := s.verify("host", "old"); err != nil {
 		t.Fatal(err)
 	}
 
-	err = s.verify("host", "new")
+	err := s.verify("host", "new")
 
 	var mismatch *MismatchError
 	if !errors.As(err, &mismatch) {
@@ -74,10 +65,7 @@ func TestTOFUMismatchCarriesBothFingerprints(t *testing.T) {
 }
 
 func TestTOFUPendingHoldsRejectedCandidate(t *testing.T) {
-	s, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := NewTOFUStore(t.TempDir(), testLogger(t))
 	if err := s.verify("host", "old"); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +84,7 @@ func TestTOFUPendingHoldsRejectedCandidate(t *testing.T) {
 func TestTOFUReplaceAcceptsNewFingerprint(t *testing.T) {
 	dir := t.TempDir()
 
-	s, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := NewTOFUStore(dir, testLogger(t))
 	if err := s.verify("host", "old"); err != nil {
 		t.Fatal(err)
 	}
@@ -121,20 +106,14 @@ func TestTOFUReplaceAcceptsNewFingerprint(t *testing.T) {
 		t.Fatalf("the superseded fingerprint must now be rejected, got: %v", err)
 	}
 
-	reloaded, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reloaded := NewTOFUStore(dir, testLogger(t))
 	if err := reloaded.verify("host", "new"); err != nil {
 		t.Fatalf("the accepted fingerprint must survive reload, got: %v", err)
 	}
 }
 
 func TestTOFUFingerprintReportsPin(t *testing.T) {
-	s, err := NewTOFUStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := NewTOFUStore(t.TempDir(), testLogger(t))
 
 	if _, ok := s.Fingerprint("host"); ok {
 		t.Fatal("an unknown host has no pin")
@@ -158,10 +137,7 @@ func TestTOFUCanonicalizesLegacyHostKeysAndPersistsMigration(t *testing.T) {
 		"SAME-PIN.EXAMPLE.TEST.": "shared-pin",
 	})
 
-	store, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatalf("load legacy pins: %v", err)
-	}
+	store := NewTOFUStore(dir, testLogger(t))
 	want := map[string]string{
 		"murmur.example.com":    "dns-pin",
 		"2001:db8::1":           "ipv6-pin",
@@ -180,41 +156,32 @@ func TestTOFUCanonicalizesLegacyHostKeysAndPersistsMigration(t *testing.T) {
 	}
 }
 
-func TestTOFURejectsConflictingCanonicalLegacyPinsWithoutRewrite(t *testing.T) {
+func TestTOFUDropsConflictingCanonicalLegacyPins(t *testing.T) {
 	dir := t.TempDir()
-	legacy := map[string]string{
+	writeKnownServers(t, dir, map[string]string{
 		"MURMUR.EXAMPLE.COM.": "first-pin",
 		"murmur.example.com":  "different-pin",
-	}
-	writeKnownServers(t, dir, legacy)
-	path := filepath.Join(dir, tofuFileName)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read legacy pins before migration: %v", err)
-	}
+		"other.example.test":  "kept-pin",
+	})
 
-	_, err = NewTOFUStore(dir)
-	if err == nil {
-		t.Fatal("conflicting equivalent host pins were accepted")
+	store := NewTOFUStore(dir, testLogger(t))
+
+	// Fail-closed for the ambiguous host only: it is decided again on first
+	// use, while every unambiguous pin survives and the app still starts.
+	if fingerprint, ok := store.Fingerprint("murmur.example.com"); ok {
+		t.Fatalf("conflicting host kept pin %q", fingerprint)
 	}
-	if !strings.Contains(err.Error(), "conflicting") {
-		t.Fatalf("conflict error = %q, want an actionable explanation", err)
+	if fingerprint, ok := store.Fingerprint("other.example.test"); !ok || fingerprint != "kept-pin" {
+		t.Fatalf("unrelated pin = (%q, %v), want (kept-pin, true)", fingerprint, ok)
 	}
-	after, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("read legacy pins after rejected migration: %v", readErr)
-	}
-	if string(after) != string(before) {
-		t.Fatal("rejected migration rewrote the original TOFU database")
+	if got := readKnownServers(t, dir); !reflect.DeepEqual(got, map[string]string{"other.example.test": "kept-pin"}) {
+		t.Fatalf("persisted pins = %#v, want only the unambiguous one", got)
 	}
 }
 
 func TestTOFUFirstUseSaveFailureDoesNotPublishPinInMemory(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
+	store := NewTOFUStore(dir, testLogger(t))
 	unblock := blockTOFUSave(t, dir)
 
 	if err := store.verify("murmur.example.test", "new-pin"); err == nil {
@@ -235,10 +202,7 @@ func TestTOFUFirstUseSaveFailureDoesNotPublishPinInMemory(t *testing.T) {
 
 func TestTOFUReplaceSaveFailureRetainsOldPinAndPendingCandidate(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewTOFUStore(dir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
+	store := NewTOFUStore(dir, testLogger(t))
 	if err := store.verify("murmur.example.test", "old-pin"); err != nil {
 		t.Fatalf("pin old fingerprint: %v", err)
 	}
@@ -309,4 +273,123 @@ func blockTOFUSave(t *testing.T, dir string) func() {
 		}
 		blocked = false
 	}
+}
+
+// TestTOFUKeepsStartingOnUncanonicalizableLegacyHost reproduces the pin an
+// alpha.1 client recorded for a docker-compose service name: the underscore
+// makes it fail host validation, which used to abort startup.
+func TestTOFUKeepsStartingOnUncanonicalizableLegacyHost(t *testing.T) {
+	dir := t.TempDir()
+	writeKnownServers(t, dir, map[string]string{"mumble_server": "aa", "ok.example.test": "bb"})
+
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
+
+	if store == nil {
+		t.Fatal("a damaged pin database must not cost the application its start")
+	}
+	if fingerprint, ok := store.Fingerprint("mumble_server"); ok {
+		t.Fatalf("invalid host kept pin %q", fingerprint)
+	}
+	if fingerprint, ok := store.Fingerprint("ok.example.test"); !ok || fingerprint != "bb" {
+		t.Fatalf("valid pin = (%q, %v), want (bb, true)", fingerprint, ok)
+	}
+	logged := records.String()
+	if !strings.Contains(logged, `"count":1`) {
+		t.Fatalf("warning must report how many pins were dropped: %s", logged)
+	}
+	if strings.Contains(logged, "mumble_server") {
+		t.Fatalf("warning leaked a server name into the log: %s", logged)
+	}
+	// The database is rewritten without the entry it cannot use.
+	if got := readKnownServers(t, dir); !reflect.DeepEqual(got, map[string]string{"ok.example.test": "bb"}) {
+		t.Fatalf("persisted pins = %#v", got)
+	}
+}
+
+func TestTOFUKeepsStartingOnUnreadableDatabase(t *testing.T) {
+	dir := t.TempDir()
+	writeKnownServers(t, dir, map[string]string{"murmur.example.test": "aa"})
+	denyAccess(t, filepath.Join(dir, tofuFileName))
+
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
+
+	if _, ok := store.Fingerprint("murmur.example.test"); ok {
+		t.Fatal("pins were reported from a database that could not be read")
+	}
+	if !strings.Contains(records.String(), "known servers unreadable") {
+		t.Fatalf("degradation was not reported: %s", records.String())
+	}
+	// In-memory trust still works, and the unreadable file is left alone.
+	if err := store.verify("murmur.example.test", "session-pin"); err != nil {
+		t.Fatalf("first use in memory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, tofuFileName+".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("unreadable database was written to: %v", err)
+	}
+}
+
+func TestTOFUKeepsStartingOnUnwritableDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// A migration is needed, so startup has to write - and cannot.
+	writeKnownServers(t, dir, map[string]string{"MURMUR.EXAMPLE.TEST": "aa"})
+	denyAccess(t, dir)
+
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
+
+	if store == nil {
+		t.Fatal("an unwritable config directory must not cost the application its start")
+	}
+	if !strings.Contains(records.String(), "known servers") {
+		t.Fatalf("degradation was not reported: %s", records.String())
+	}
+	if err := store.verify("murmur.example.test", "aa"); err != nil {
+		t.Fatalf("session-scoped trust must keep working: %v", err)
+	}
+}
+
+func TestNewManagerStartsWithADamagedConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeKnownServers(t, dir, map[string]string{"mumble_server": "aa"})
+
+	m, err := NewManager(dir, testLogger(t), Callbacks{})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(m.Close)
+}
+
+func TestNewManagerStartsWithAnUnreadableConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	denyAccess(t, dir)
+
+	m, err := NewManager(dir, testLogger(t), Callbacks{})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(m.Close)
+	if len(m.cert.Certificate) == 0 {
+		t.Fatal("a session identity must be available even without persistence")
+	}
+}
+
+// denyAccess removes every permission bit from path for the rest of the test.
+func denyAccess(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not deny access on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permission bits")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", filepath.Base(path), err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("deny access to %s: %v", filepath.Base(path), err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, info.Mode().Perm()) })
 }

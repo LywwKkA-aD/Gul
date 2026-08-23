@@ -1,9 +1,12 @@
 package mumble
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // statusSink collects OnStatus callbacks. The buffer is generous because a
@@ -508,5 +512,154 @@ func TestManagerConnectResetsChannelRestore(t *testing.T) {
 	m.mu.Unlock()
 	if hasRestore {
 		t.Fatal("an explicit Connect must clear the remembered channel")
+	}
+}
+
+// testLogger keeps package tests readable: records go to the test log, so a
+// failing test still shows what the code reported.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	return slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+type testWriter struct{ t *testing.T }
+
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Logf("%s", bytes.TrimRight(p, "\n"))
+	return len(p), nil
+}
+
+// TestManagerDerivesTheRelayBearerOncePerConnect pins the cost model: PBKDF2
+// runs once when the user connects, not once per reconnect attempt.
+func TestManagerDerivesTheRelayBearerOncePerConnect(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+
+	var derivations atomic.Int32
+	m.deriveFn = func([]byte) relayproto.Credential {
+		derivations.Add(1)
+		return relayproto.Credential("v2.test-credential")
+	}
+
+	configs := make(chan DialConfig, 8)
+	m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
+		configs <- cfg
+		// Rate limiting keeps the loop retrying without a live session.
+		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "server password")
+	for range 3 {
+		select {
+		case cfg := <-configs:
+			if cfg.RelayCredential != "v2.test-credential" {
+				t.Fatalf("dial credential = %q", cfg.RelayCredential)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for a dial attempt")
+		}
+	}
+	m.Disconnect()
+
+	if got := derivations.Load(); got != 1 {
+		t.Fatalf("derivations = %d, want 1 for one Connect", got)
+	}
+}
+
+func TestManagerWaitsOutTheRelayRetryAfter(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	// The ban has to win over the ordinary ladder, which is 1 ms here.
+	const retryAfter = 200 * time.Millisecond
+
+	attempts := make(chan time.Time, 4)
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		attempts <- time.Now()
+		return nil, &RateLimitedError{RetryAfter: retryAfter}
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	first := <-attempts
+
+	sink.expect(t, domain.StateConnecting)
+	status := sink.expect(t, domain.StateReconnecting)
+	if !strings.Contains(status.Error, "1 секунду") {
+		t.Fatalf("status error = %q, want the wait in Russian", status.Error)
+	}
+
+	second := <-attempts
+	m.Disconnect()
+	if waited := second.Sub(first); waited < retryAfter {
+		t.Fatalf("waited %s before retrying, want at least %s", waited, retryAfter)
+	}
+}
+
+func TestRateLimitedMessageCountsSeconds(t *testing.T) {
+	cases := map[time.Duration]string{
+		500 * time.Millisecond: "1 секунду",
+		2 * time.Second:        "2 секунды",
+		11 * time.Second:       "11 секунд",
+		21 * time.Second:       "21 секунду",
+		30 * time.Second:       "30 секунд",
+	}
+	for wait, want := range cases {
+		if got := rateLimitedMessage(wait); !strings.Contains(got, want) {
+			t.Errorf("rateLimitedMessage(%s) = %q, want it to contain %q", wait, got, want)
+		}
+	}
+}
+
+// TestManagerLogsCarryNoServerAddress is the privacy contract of PLAN.md
+// §10.7: diagnostics archives are shareable, so no log record may name the
+// server - neither as an attribute nor inside an error string.
+func TestManagerLogsCarryNoServerAddress(t *testing.T) {
+	const host = "murmur.example.test"
+	const address = "wss://" + host + "/mumble"
+
+	var records bytes.Buffer
+	m, err := NewManager(t.TempDir(), slog.New(slog.NewJSONHandler(&records, nil)), Callbacks{})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(m.Close)
+	m.backoffFn = func(int) time.Duration { return time.Millisecond }
+	m.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
+
+	hooksCh := make(chan sessionHooks, 4)
+	var attempts atomic.Int32
+	m.dialFn = func(_ DialConfig, hooks sessionHooks) (*Session, error) {
+		if attempts.Add(1) == 1 {
+			hooksCh <- hooks
+			return &Session{}, nil
+		}
+		// What a real failure looks like: the address in our own wrapper and
+		// host:port coming from the network layer underneath it.
+		return nil, fmt.Errorf("dial %s: dial tcp: lookup %s:443: no such host", address, host)
+	}
+
+	m.Connect(address, "gul", "secret")
+	hooks := <-hooksCh
+	hooks.disconnect(&gumble.DisconnectEvent{
+		Type:   gumble.DisconnectError,
+		String: "read tcp 10.0.0.2:51000->" + host + ":443: connection reset",
+	})
+	// Give the loop time to log the drop and at least one failed attempt.
+	deadline := time.Now().Add(3 * time.Second)
+	for attempts.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.Disconnect()
+
+	logged := records.String()
+	for _, want := range []string{"connect attempt failed", "connection lost"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log is missing the %q record: %s", want, logged)
+		}
+	}
+	if strings.Contains(logged, host) {
+		t.Fatalf("log leaked the server address: %s", logged)
+	}
+	if !strings.Contains(logged, redactedServer) {
+		t.Fatalf("log does not show that the address was redacted: %s", logged)
 	}
 }

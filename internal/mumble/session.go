@@ -11,6 +11,8 @@ import (
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 	"github.com/LywwKkA-aD/gumble/gumbleutil"
+
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // dialTimeout bounds one attempt end to end: gumble.DialWithDialer only returns
@@ -26,6 +28,10 @@ type DialConfig struct {
 	// Certificate is the persistent client identity. When nil the server sees
 	// an anonymous client and User.Hash stays empty.
 	Certificate *tls.Certificate
+	// RelayCredential is the bearer for the WSS relay. Deriving it costs
+	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
+	// every reconnect reuses it; an empty value here is derived on the spot.
+	RelayCredential relayproto.Credential
 }
 
 // sessionHooks receive gumble events for one session. Every hook runs on a
@@ -73,7 +79,9 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{log: log.With("server", ep.address), addr: ep.address, host: ep.host}
+	// The logger carries no server attribute: log records travel in shareable
+	// diagnostics archives and must not name the address the user connected to.
+	s := &Session{log: log, addr: ep.address, host: ep.host}
 
 	// The stub codec must be in gumble's registry before Dial: the Authenticate
 	// packet advertises Opus only when codec id 4 is registered, and without
@@ -105,11 +113,13 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	if ep.kind == endpointWSS {
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
-		conn, dialErr := dialWSSMumbleTLS(ctx, ep, cfg.Password, tofu, cfg.Certificate, nil)
+		conn, dialErr := dialWSSMumbleTLS(ctx, ep, relayCredential(cfg), tofu, cfg.Certificate, nil)
 		if dialErr != nil {
 			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 		}
-		client, err = gumble.DialWithConn(ctx, conn, gc)
+		// One Mumble packet per WebSocket message (see newPacketConn); the
+		// wrapper belongs on the connection gumble writes packets into.
+		client, err = gumble.DialWithConn(ctx, newPacketConn(conn), gc)
 	} else {
 		tlsConfig := tofu.TLSConfig(ep.host)
 		if cfg.Certificate != nil {
@@ -123,6 +133,16 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	}
 	s.client = client
 	return s, nil
+}
+
+// relayCredential returns the bearer for the relay, deriving it when the
+// caller did not. An empty password yields an empty credential, which dialWSS
+// rejects before it touches the network.
+func relayCredential(cfg DialConfig) relayproto.Credential {
+	if cfg.RelayCredential != "" || cfg.Password == "" {
+		return cfg.RelayCredential
+	}
+	return relayproto.Derive([]byte(cfg.Password))
 }
 
 // Disconnect closes the connection exactly once; later calls are no-ops.
