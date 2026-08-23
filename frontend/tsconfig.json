@@ -22,4 +22,7 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src", "bindings"],
+  /* Tests run on node's own runner (npm test) and import node: modules, whose
+     types are not a dependency of the app build. */
+  "exclude": ["src/**/*.test.ts"],
 }

@@ -21,6 +21,10 @@ var (
 	// ErrRelayRateLimited reports a relay that answered 429. Use errors.As with
 	// *RateLimitedError to recover how long the relay asked us to wait.
 	ErrRelayRateLimited = errors.New("WSS relay is refusing connection attempts")
+	// ErrRelayFull reports a relay that answered 503: the credential was
+	// accepted, the relay simply has no free slot. Use errors.As with
+	// *RelayFullError to recover how long it asked us to wait.
+	ErrRelayFull = errors.New("WSS relay has no free capacity")
 )
 
 // maxRelayRetryAfter caps what a relay can make the client wait. A hostile or
@@ -34,14 +38,32 @@ type RateLimitedError struct {
 }
 
 func (e *RateLimitedError) Error() string {
-	if e.RetryAfter <= 0 {
-		return ErrRelayRateLimited.Error()
-	}
-	return fmt.Sprintf("%s: retry after %s", ErrRelayRateLimited.Error(), e.RetryAfter)
+	return retryAfterMessage(ErrRelayRateLimited, e.RetryAfter)
 }
 
 // Is makes errors.Is(err, ErrRelayRateLimited) succeed for this type.
 func (e *RateLimitedError) Is(target error) bool { return target == ErrRelayRateLimited }
+
+// RelayFullError carries the Retry-After of a relay that is reachable and
+// willing but out of capacity. It is as transient as a rate limit and travels
+// the same path through the reconnect loop, with its own message for the user.
+type RelayFullError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RelayFullError) Error() string {
+	return retryAfterMessage(ErrRelayFull, e.RetryAfter)
+}
+
+// Is makes errors.Is(err, ErrRelayFull) succeed for this type.
+func (e *RelayFullError) Is(target error) bool { return target == ErrRelayFull }
+
+func retryAfterMessage(base error, retryAfter time.Duration) string {
+	if retryAfter <= 0 {
+		return base.Error()
+	}
+	return fmt.Sprintf("%s: retry after %s", base.Error(), retryAfter)
+}
 
 // relayStream is the outer WSS transport: a byte stream plus the websocket
 // handle, which is what an abort needs. Closing the stream runs the WebSocket
@@ -80,6 +102,8 @@ func dialWSS(
 				return nil, ErrRelayAuthentication
 			case http.StatusTooManyRequests:
 				return nil, &RateLimitedError{RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"))}
+			case http.StatusServiceUnavailable:
+				return nil, &RelayFullError{RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"))}
 			}
 		}
 		return nil, fmt.Errorf("WSS relay handshake failed: %w", err)

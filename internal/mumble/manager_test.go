@@ -41,6 +41,20 @@ func (s *statusSink) next(t *testing.T) domain.ConnectionStatus {
 	}
 }
 
+// drained returns everything recorded so far without blocking. Callers use it
+// after the loop has stopped, when no further callback can arrive.
+func (s *statusSink) drained() []domain.ConnectionStatus {
+	var out []domain.ConnectionStatus
+	for {
+		select {
+		case status := <-s.ch:
+			out = append(out, status)
+		default:
+			return out
+		}
+	}
+}
+
 func (s *statusSink) expect(t *testing.T, want domain.ConnState) domain.ConnectionStatus {
 	t.Helper()
 	status := s.next(t)
@@ -582,7 +596,7 @@ func TestManagerWaitsOutTheRelayRetryAfter(t *testing.T) {
 	first := <-attempts
 
 	sink.expect(t, domain.StateConnecting)
-	status := sink.expect(t, domain.StateReconnecting)
+	status := sink.expect(t, domain.StateConnecting)
 	if !strings.Contains(status.Error, "1 секунду") {
 		t.Fatalf("status error = %q, want the wait in Russian", status.Error)
 	}
@@ -591,6 +605,190 @@ func TestManagerWaitsOutTheRelayRetryAfter(t *testing.T) {
 	m.Disconnect()
 	if waited := second.Sub(first); waited < retryAfter {
 		t.Fatalf("waited %s before retrying, want at least %s", waited, retryAfter)
+	}
+}
+
+// TestManagerRateLimitedFirstConnectStaysOnTheConnectForm is the first-connect
+// half of the rate-limit contract. "reconnecting" means a session existed: the
+// UI replaces the connect form with the locked main screen and its banner, so
+// announcing it for an attempt that never connected leaves the user staring at
+// a dimmed session that does not exist, with the form that holds the message
+// unmounted.
+func TestManagerRateLimitedFirstConnectStaysOnTheConnectForm(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	sink.expect(t, domain.StateConnecting)
+
+	status := sink.expect(t, domain.StateConnecting)
+	if !strings.Contains(status.Error, "Следующая попытка") {
+		t.Fatalf("status error = %q, want the wait the connect form shows", status.Error)
+	}
+	if status.Server != "wss://murmur.example.test/mumble" {
+		t.Fatalf("server = %q, want the normalized address", status.Server)
+	}
+
+	// Disconnect waits for the loop, so every status it produced is recorded.
+	m.Disconnect()
+	for _, recorded := range sink.drained() {
+		if recorded.State == domain.StateReconnecting {
+			t.Fatal("a first connect entered the reconnect state: there was no session to lose")
+		}
+	}
+}
+
+// TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal: waiting out a
+// rate limit is not the same as having been connected. The next failure is
+// still a first-attempt failure and still belongs on the connect form.
+func TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+
+	var attempts atomic.Int32
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		if attempts.Add(1) == 1 {
+			return nil, &RateLimitedError{RetryAfter: time.Millisecond}
+		}
+		return nil, errors.New("connection refused")
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	sink.expect(t, domain.StateConnecting)
+	sink.expect(t, domain.StateConnecting) // the wait
+	sink.expect(t, domain.StateConnecting) // the retry
+
+	status := sink.expect(t, domain.StateDisconnected)
+	if status.Error != "connection refused" {
+		t.Fatalf("error = %q, want the dial error verbatim", status.Error)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("dial attempts = %d, want 2: the user is back at the form", got)
+	}
+}
+
+// TestManagerRateLimitedReconnectShowsTheReconnectState is the other half: a
+// session did exist, so the locked main screen and its banner are correct -
+// and the banner is where the wait has to be readable.
+func TestManagerRateLimitedReconnectShowsTheReconnectState(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+
+	var attempts atomic.Int32
+	hooksCh := make(chan sessionHooks, 4)
+	m.dialFn = func(_ DialConfig, hooks sessionHooks) (*Session, error) {
+		if attempts.Add(1) == 1 {
+			hooksCh <- hooks
+			return &Session{}, nil
+		}
+		return nil, &RateLimitedError{RetryAfter: 20 * time.Millisecond}
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	sink.expect(t, domain.StateConnecting)
+	sink.expect(t, domain.StateConnected)
+
+	hooks := <-hooksCh
+	hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError, String: "eof"})
+
+	sink.expect(t, domain.StateReconnecting) // the drop
+	status := sink.expect(t, domain.StateReconnecting)
+	if !strings.Contains(status.Error, "Следующая попытка") {
+		t.Fatalf("status error = %q, want the wait visible in the banner", status.Error)
+	}
+	m.Disconnect()
+}
+
+// TestManagerWaitsOutAFullRelay: a relay answering 503 is neither a bad
+// password nor a broken address, and the Retry-After it sends is as binding as
+// the one a rate limit sends.
+func TestManagerWaitsOutAFullRelay(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	const retryAfter = 200 * time.Millisecond
+
+	attempts := make(chan time.Time, 4)
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		attempts <- time.Now()
+		return nil, &RelayFullError{RetryAfter: retryAfter}
+	}
+
+	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	first := <-attempts
+
+	sink.expect(t, domain.StateConnecting)
+	status := sink.expect(t, domain.StateConnecting)
+	if !strings.Contains(status.Error, "переполнен") {
+		t.Fatalf("status error = %q, want the Russian capacity message", status.Error)
+	}
+	if strings.Contains(status.Error, "websocket") {
+		t.Fatalf("status error = %q, want no raw transport error", status.Error)
+	}
+
+	second := <-attempts
+	m.Disconnect()
+	if waited := second.Sub(first); waited < retryAfter {
+		t.Fatalf("waited %s before retrying, want at least %s", waited, retryAfter)
+	}
+}
+
+func TestRelayRefusalKeepsTheLadderAsAFloor(t *testing.T) {
+	const ladder = 5 * time.Second
+
+	cases := []struct {
+		name string
+		err  error
+		want time.Duration
+		says string
+	}{
+		{
+			name: "rate limit shorter than the ladder",
+			err:  &RateLimitedError{RetryAfter: time.Second},
+			want: ladder,
+			says: "отклоняет подключения",
+		},
+		{
+			name: "rate limit longer than the ladder",
+			err:  &RateLimitedError{RetryAfter: 30 * time.Second},
+			want: 30 * time.Second,
+			says: "отклоняет подключения",
+		},
+		{
+			name: "full relay carries its own message",
+			err:  &RelayFullError{RetryAfter: 30 * time.Second},
+			want: 30 * time.Second,
+			says: "переполнен",
+		},
+		{
+			name: "full relay without a Retry-After",
+			err:  &RelayFullError{},
+			want: ladder,
+			says: "переполнен",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wait, message, ok := relayRefusal(tc.err, ladder)
+			if !ok {
+				t.Fatalf("relayRefusal(%v) did not recognize a transient refusal", tc.err)
+			}
+			if wait != tc.want {
+				t.Fatalf("wait = %s, want %s", wait, tc.want)
+			}
+			if !strings.Contains(message, tc.says) {
+				t.Fatalf("message = %q, want it to contain %q", message, tc.says)
+			}
+		})
+	}
+
+	if _, _, ok := relayRefusal(errors.New("connection refused"), ladder); ok {
+		t.Fatal("an ordinary dial failure is not a relay refusal")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
@@ -220,6 +221,12 @@ func (v *fakeVoice) Devices() (playback, capture []domain.AudioDevice, err error
 	defer v.mu.Unlock()
 	v.devCalls++
 	return nil, nil, nil
+}
+
+func (v *fakeVoice) startCount() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.starts
 }
 
 func (v *fakeVoice) snapshot() fakeVoice {
@@ -975,5 +982,72 @@ func TestHandleStatusLogDoesNotContainTheServerAddress(t *testing.T) {
 	}
 	if got := event.payload.(domain.ConnectionStatus); got != status {
 		t.Fatalf("emitted status = %+v, want %+v", got, status)
+	}
+}
+
+// TestHandleStatusStartsVoiceOncePerSession pins which lifecycle transition
+// owns the audio engine, and with it the cost of getting the connection state
+// wrong. A first connect that had to wait out a relay refusal (429/503) stays
+// "connecting" until it succeeds: the engine has never run, so the 'connected'
+// that follows has to start it. A reconnect is the opposite case - the engine
+// is already running and the transport channel survives the drop - so it must
+// not be started a second time.
+func TestHandleStatusStartsVoiceOncePerSession(t *testing.T) {
+	const server = "wss://murmur.example.test/mumble"
+
+	cases := []struct {
+		name       string
+		states     []domain.ConnectionStatus
+		wantStarts int
+	}{
+		{
+			name: "first connect that waited out a relay refusal",
+			states: []domain.ConnectionStatus{
+				{State: domain.StateConnecting, Server: server},
+				{State: domain.StateConnecting, Server: server, Error: "Следующая попытка через 30 секунд."},
+				{State: domain.StateConnecting, Server: server},
+				{State: domain.StateConnected, Server: server},
+			},
+			wantStarts: 1,
+		},
+		{
+			name: "reconnect after an unexpected drop",
+			states: []domain.ConnectionStatus{
+				{State: domain.StateReconnecting, Server: server},
+				{State: domain.StateConnected, Server: server},
+			},
+			wantStarts: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, voice := newVoiceApp(t)
+			for _, status := range tc.states {
+				app.HandleStatus(status)
+			}
+
+			if got := awaitVoiceStarts(voice, tc.wantStarts); got != tc.wantStarts {
+				t.Fatalf("voice starts = %d, want %d", got, tc.wantStarts)
+			}
+		})
+	}
+}
+
+// awaitVoiceStarts returns how many times the engine was started, once the
+// expected number has arrived and a settling window has passed on top - so a
+// start too many is caught as reliably as a start missing. startVoice runs on
+// a goroutine of its own, which is what makes the wait necessary.
+func awaitVoiceStarts(v *fakeVoice, want int) int {
+	const settle = 50 * time.Millisecond
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := v.startCount(); got > want || time.Now().After(deadline) {
+			return got
+		} else if got == want {
+			time.Sleep(settle)
+			return v.startCount()
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }

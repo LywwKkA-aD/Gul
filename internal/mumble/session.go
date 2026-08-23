@@ -71,7 +71,7 @@ type Session struct {
 // for the dev stand and the live smoke test; the Manager uses dial directly so
 // it can route events into snapshots and callbacks.
 func Dial(cfg DialConfig, tofu *TOFUStore, log *slog.Logger) (*Session, error) {
-	return dial(cfg, tofu, loggingHooks(log), log)
+	return dial(cfg, tofu, loggingHooks(log, cfg.Address), log)
 }
 
 func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger) (*Session, error) {
@@ -178,7 +178,11 @@ func (s *Session) State() string {
 
 // loggingHooks keep the M0 behaviour: lifecycle visible in the log, no tree
 // dump - the tree now travels as a snapshot through the Manager callbacks.
-func loggingHooks(log *slog.Logger) sessionHooks {
+//
+// address is only ever used to keep itself out of the records: a disconnect
+// reason is often a network error carrying host:port or a resolved IP, and
+// gul.log travels in shareable diagnostics archives (PLAN.md §10.7).
+func loggingHooks(log *slog.Logger, address string) sessionHooks {
 	return sessionHooks{
 		connect: func(e *gumble.ConnectEvent) {
 			welcome := ""
@@ -188,7 +192,7 @@ func loggingHooks(log *slog.Logger) sessionHooks {
 			log.Info("connected", "welcome", welcome, "users", len(e.Client.Users))
 		},
 		disconnect: func(e *gumble.DisconnectEvent) {
-			log.Info("disconnected", "type", int(e.Type), "reason", e.String)
+			log.Info("disconnected", "type", int(e.Type), "reason", RedactServer(e.String, address))
 		},
 		permissionDenied: func(e *gumble.PermissionDeniedEvent) {
 			log.Warn("permission denied", "type", int(e.Type), "reason", e.String)

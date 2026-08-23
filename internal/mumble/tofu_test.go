@@ -92,9 +92,7 @@ func TestTOFUReplaceAcceptsNewFingerprint(t *testing.T) {
 		t.Fatalf("expected a mismatch, got: %v", err)
 	}
 
-	if err := s.Replace("host", "new"); err != nil {
-		t.Fatalf("Replace: %v", err)
-	}
+	s.Replace("host", "new")
 	if _, ok := s.Pending("host"); ok {
 		t.Fatal("Replace must clear the pending candidate")
 	}
@@ -179,51 +177,85 @@ func TestTOFUDropsConflictingCanonicalLegacyPins(t *testing.T) {
 	}
 }
 
-func TestTOFUFirstUseSaveFailureDoesNotPublishPinInMemory(t *testing.T) {
+// TestTOFUFirstUseOnAnUnwritableDirectoryConnects is the fresh install on a
+// read-only config directory: no store file exists, none can be created, and
+// the very first pin therefore cannot be written. Trust degrades to the
+// session; refusing the connection instead would leave the user with a client
+// that can never connect to anything.
+func TestTOFUFirstUseOnAnUnwritableDirectoryConnects(t *testing.T) {
 	dir := t.TempDir()
-	store := NewTOFUStore(dir, testLogger(t))
-	unblock := blockTOFUSave(t, dir)
+	denyWrites(t, dir)
 
-	if err := store.verify("murmur.example.test", "new-pin"); err == nil {
-		t.Fatal("first use unexpectedly succeeded while persistence was blocked")
-	}
-	if fingerprint, ok := store.Fingerprint("murmur.example.test"); ok {
-		t.Fatalf("failed first-use save published pin %q in memory", fingerprint)
-	}
-	if _, ok := store.Pending("murmur.example.test"); ok {
-		t.Fatal("failed first-use save created a pending replacement")
-	}
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
 
-	unblock()
-	if err := store.verify("murmur.example.test", "new-pin"); err != nil {
-		t.Fatalf("first use after persistence recovered: %v", err)
+	if err := store.verify("murmur.example.test", "session-pin"); err != nil {
+		t.Fatalf("first use on an unwritable config directory: %v", err)
+	}
+	if fingerprint, ok := store.Fingerprint("murmur.example.test"); !ok || fingerprint != "session-pin" {
+		t.Fatalf("pin = (%q, %v), want (session-pin, true) for this session", fingerprint, ok)
+	}
+	// Session-scoped trust is still trust: the same certificate passes, a
+	// different one is still a mismatch.
+	if err := store.verify("murmur.example.test", "session-pin"); err != nil {
+		t.Fatalf("pinned fingerprint must verify: %v", err)
+	}
+	if err := store.verify("murmur.example.test", "other-pin"); !errors.Is(err, ErrFingerprintChanged) {
+		t.Fatalf("changed fingerprint = %v, want ErrFingerprintChanged", err)
+	}
+	if !strings.Contains(records.String(), "session-scoped") {
+		t.Fatalf("degradation was not reported: %s", records.String())
 	}
 }
 
-func TestTOFUReplaceSaveFailureRetainsOldPinAndPendingCandidate(t *testing.T) {
+func TestTOFUFirstUseSurvivesABlockedSave(t *testing.T) {
 	dir := t.TempDir()
-	store := NewTOFUStore(dir, testLogger(t))
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
+	blockTOFUSave(t, dir)
+
+	if err := store.verify("murmur.example.test", "new-pin"); err != nil {
+		t.Fatalf("first use while persistence was blocked: %v", err)
+	}
+	if fingerprint, ok := store.Fingerprint("murmur.example.test"); !ok || fingerprint != "new-pin" {
+		t.Fatalf("pin = (%q, %v), want (new-pin, true)", fingerprint, ok)
+	}
+	if _, ok := store.Pending("murmur.example.test"); ok {
+		t.Fatal("a first use is not a pending replacement")
+	}
+	if !strings.Contains(records.String(), "session-scoped") {
+		t.Fatalf("degradation was not reported: %s", records.String())
+	}
+}
+
+// TestTOFUReplaceSurvivesABlockedSave: accepting a changed certificate is a
+// decision the user just made in a dialog. A store that cannot record it keeps
+// it for the session instead of discarding it and prompting again.
+func TestTOFUReplaceSurvivesABlockedSave(t *testing.T) {
+	dir := t.TempDir()
+	var records bytes.Buffer
+	store := NewTOFUStore(dir, slog.New(slog.NewJSONHandler(&records, nil)))
 	if err := store.verify("murmur.example.test", "old-pin"); err != nil {
 		t.Fatalf("pin old fingerprint: %v", err)
 	}
 	if err := store.verify("murmur.example.test", "new-pin"); !errors.Is(err, ErrFingerprintChanged) {
 		t.Fatalf("create pending replacement: %v", err)
 	}
-	unblock := blockTOFUSave(t, dir)
+	blockTOFUSave(t, dir)
 
-	if err := store.Replace("murmur.example.test", "new-pin"); err == nil {
-		t.Fatal("replacement unexpectedly succeeded while persistence was blocked")
-	}
-	if fingerprint, ok := store.Fingerprint("murmur.example.test"); !ok || fingerprint != "old-pin" {
-		t.Fatalf("pin after failed replacement = (%q, %v), want (old-pin, true)", fingerprint, ok)
-	}
-	if pending, ok := store.Pending("murmur.example.test"); !ok || pending != "new-pin" {
-		t.Fatalf("pending after failed replacement = (%q, %v), want (new-pin, true)", pending, ok)
-	}
+	store.Replace("murmur.example.test", "new-pin")
 
-	unblock()
-	if err := store.Replace("murmur.example.test", "new-pin"); err != nil {
-		t.Fatalf("replace after persistence recovered: %v", err)
+	if fingerprint, ok := store.Fingerprint("murmur.example.test"); !ok || fingerprint != "new-pin" {
+		t.Fatalf("pin after replacement = (%q, %v), want (new-pin, true)", fingerprint, ok)
+	}
+	if _, ok := store.Pending("murmur.example.test"); ok {
+		t.Fatal("Replace must clear the pending candidate")
+	}
+	if err := store.verify("murmur.example.test", "new-pin"); err != nil {
+		t.Fatalf("the accepted fingerprint must verify: %v", err)
+	}
+	if !strings.Contains(records.String(), "session-scoped") {
+		t.Fatalf("degradation was not reported: %s", records.String())
 	}
 }
 
@@ -373,6 +405,26 @@ func TestNewManagerStartsWithAnUnreadableConfigDirectory(t *testing.T) {
 	if len(m.cert.Certificate) == 0 {
 		t.Fatal("a session identity must be available even without persistence")
 	}
+}
+
+// denyWrites leaves path readable but not writable for the rest of the test:
+// a config directory the client may inspect and may not add a file to.
+func denyWrites(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not deny access on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permission bits")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", filepath.Base(path), err)
+	}
+	if err := os.Chmod(path, 0o500); err != nil {
+		t.Fatalf("deny writes to %s: %v", filepath.Base(path), err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, info.Mode().Perm()) })
 }
 
 // denyAccess removes every permission bit from path for the rest of the test.

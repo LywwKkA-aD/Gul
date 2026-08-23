@@ -3,7 +3,11 @@ import { Button, Spinner } from './ui';
 
 // Scenario C from the prototype: the UI beneath is locked (opacity + no
 // pointer events); this banner is the only interactive element.
-export function ReconnectBanner({ server }: { server: string }) {
+//
+// note carries what the Go side put in status.error while reconnecting - the
+// wait a relay asked for (429/503). While it is waiting, when the next attempt
+// happens is the only thing worth the space.
+export function ReconnectBanner({ server, note }: { server: string; note?: string }) {
   return (
     <div
       className="pointer-events-auto fixed inset-x-0 top-0 z-[var(--z-modal)] flex justify-center"
@@ -14,7 +18,7 @@ export function ReconnectBanner({ server }: { server: string }) {
         <div className="text-sm">
           <span className="text-text-1">Переподключение к </span>
           <span className="font-mono text-sm text-text-2">{server}</span>
-          <span className="ml-2 text-xs text-warning">пинг — мс</span>
+          <span className="ml-2 text-xs text-warning">{note || 'пинг — мс'}</span>
         </div>
         <Button variant="quiet" onClick={() => ConnectionService.Disconnect().catch(console.error)}>
           Отменить

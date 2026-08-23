@@ -95,3 +95,21 @@ func TestDefaultBackoffStaysWithinTheJitteredLadder(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaultBackoffDrawsAFreshSpreadPerCall pins the wiring, not the maths:
+// the ladder above is deterministic, so re-pointing the production function at
+// the unjittered variant would keep every test but this one green - and put
+// every client of a restarted server back in lockstep.
+func TestDefaultBackoffDrawsAFreshSpreadPerCall(t *testing.T) {
+	const calls = 32
+	seen := map[time.Duration]bool{}
+	for range calls {
+		seen[defaultBackoff(3)] = true
+	}
+
+	// Nanosecond resolution over a 3.2s span: repeats mean a constant, not luck.
+	if len(seen) < calls/2 {
+		t.Fatalf("distinct delays = %d out of %d calls, want the attempt jittered per call",
+			len(seen), calls)
+	}
+}

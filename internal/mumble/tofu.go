@@ -24,10 +24,11 @@ type TOFUStore struct {
 	mu   sync.Mutex
 	log  *slog.Logger
 	path string
-	// persist is false once the database is known to be unusable on disk.
-	// The session then keeps its pins in memory: a config directory the app
-	// cannot read or write must degrade trust to first-use, never block the
-	// application or every connection it makes.
+	// persist is false once the database is known to be unusable on disk -
+	// unreadable at startup, or unwritable at any point, including the very
+	// first pin on a fresh install. The session then keeps its pins in memory:
+	// a config directory the app cannot read or write must degrade trust to
+	// first-use, never block the application or the connections it makes.
 	persist bool
 	// host -> lowercase hex SHA-256 of the leaf certificate DER
 	known map[string]string
@@ -106,11 +107,7 @@ func NewTOFUStore(configDir string, log *slog.Logger) *TOFUStore {
 	}
 	s.known = canonical
 	if changed {
-		if err := s.saveKnown(canonical); err != nil {
-			s.persist = false
-			s.log.Warn("known servers not writable, pins are session-scoped",
-				"file", tofuFileName, "error", err)
-		}
+		s.saveKnown(canonical)
 	}
 	return s
 }
@@ -184,9 +181,10 @@ func (s *TOFUStore) verify(host, fingerprint string) error {
 	pinned, ok := s.known[host]
 	if !ok {
 		candidate := knownWithPin(s.known, host, fingerprint)
-		if err := s.saveKnown(candidate); err != nil {
-			return err
-		}
+		// First use establishes trust for this session whether or not the
+		// decision can be recorded: a config directory that cannot be written
+		// costs the pin its lifetime, never the connection.
+		s.saveKnown(candidate)
 		s.known = candidate
 		delete(s.pending, host)
 		return nil
@@ -222,16 +220,16 @@ func (s *TOFUStore) Pending(host string) (string, bool) {
 // Replace pins fingerprint for host, overriding whatever was pinned before.
 // It implements the user accepting a changed server certificate, so it must
 // only be called after an explicit confirmation.
-func (s *TOFUStore) Replace(host, fingerprint string) error {
+//
+// It cannot fail: the acceptance always holds for this session, and only its
+// persistence depends on the store being writable.
+func (s *TOFUStore) Replace(host, fingerprint string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	candidate := knownWithPin(s.known, host, fingerprint)
-	if err := s.saveKnown(candidate); err != nil {
-		return err
-	}
+	s.saveKnown(candidate)
 	s.known = candidate
 	delete(s.pending, host)
-	return nil
 }
 
 func knownWithPin(known map[string]string, host, fingerprint string) map[string]string {
@@ -243,13 +241,24 @@ func knownWithPin(known map[string]string, host, fingerprint string) map[string]
 	return candidate
 }
 
-// saveKnown persists the database, unless startup already established that the
-// file is not usable. A write that fails at runtime stays an error: the caller
-// must not publish a pin it could not record.
-func (s *TOFUStore) saveKnown(known map[string]string) error {
+// saveKnown persists the database. A write that fails costs persistence and
+// nothing else: the store says so once, drops to session-scoped pins and keeps
+// answering, because refusing to trust anything the client cannot write down
+// makes an unwritable config directory an unusable application.
+//
+// Caller holds s.mu (construction is single-threaded).
+func (s *TOFUStore) saveKnown(known map[string]string) {
 	if !s.persist {
-		return nil
+		return
 	}
+	if err := s.writeKnown(known); err != nil {
+		s.persist = false
+		s.log.Warn("known servers not writable, pins are session-scoped",
+			"file", tofuFileName, "error", err)
+	}
+}
+
+func (s *TOFUStore) writeKnown(known map[string]string) error {
 	data, err := json.MarshalIndent(known, "", "  ")
 	if err != nil {
 		return err
@@ -258,5 +267,11 @@ func (s *TOFUStore) saveKnown(known map[string]string) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", tofuFileName, err)
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		// Leaving the temporary file behind would keep the next attempt from
+		// writing it, so the failure would outlive its cause.
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace %s: %w", tofuFileName, err)
+	}
+	return nil
 }

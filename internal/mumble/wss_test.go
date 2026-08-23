@@ -370,3 +370,33 @@ func TestPacketConnOverWSSSendsOneMessagePerPacket(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// TestDialWSSReportsAFullRelayWithRetryAfter covers the answer a relay at
+// capacity gives: 503 with a Retry-After. Without a type of its own it would
+// reach the user as a raw English websocket error and its wait would be lost.
+func TestDialWSSReportsAFullRelayWithRetryAfter(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := dialWSS(t.Context(), relayAddress(t, server), relayTestCredential(), server.Client())
+
+	if !errors.Is(err, ErrRelayFull) {
+		t.Fatalf("error = %v, want ErrRelayFull", err)
+	}
+	var full *RelayFullError
+	if !errors.As(err, &full) {
+		t.Fatalf("error %T does not carry the wait", err)
+	}
+	if full.RetryAfter != 5*time.Second {
+		t.Fatalf("RetryAfter = %s, want 5s", full.RetryAfter)
+	}
+	if errors.Is(err, ErrRelayRateLimited) {
+		t.Fatal("a full relay is not this client asking too often")
+	}
+	if isTerminalDialError(err) {
+		t.Fatal("a full relay clears on its own")
+	}
+}

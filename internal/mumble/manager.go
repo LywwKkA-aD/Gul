@@ -224,10 +224,10 @@ func (m *Manager) AcceptFingerprint() {
 	if pending == nil {
 		return
 	}
-	if err := m.tofu.Replace(pending.host, pending.prompt.NewFingerprint); err != nil {
-		m.log.Error("pin accepted fingerprint", "error", RedactServer(err.Error(), pending.host))
-		return
-	}
+	// Replace cannot fail the acceptance: a store that cannot be written
+	// degrades to session-scoped pins (tofu.go) instead of refusing the trust
+	// decision the user just made.
+	m.tofu.Replace(pending.host, pending.prompt.NewFingerprint)
 	m.log.Info("accepted new server fingerprint")
 
 	select {
@@ -258,9 +258,12 @@ func (m *Manager) Close() {
 // run is the connect/reconnect loop. Exactly one runs per Connect.
 //
 // First attempt failing is terminal: the user is looking at a connect form and
-// needs the error, not a silent retry. Once a session has been established,
-// every unexpected drop is retried with 1s, 2s, 4s ... capped at 30s, until
-// Disconnect, Close, or a terminal condition (kick, ban, rejected credentials).
+// needs the error, not a silent retry. The exception is a relay that answers
+// "not now, come back in N seconds" (429, 503): that attempt keeps retrying,
+// and keeps the user on the connect form while it does. Once a session has
+// been established, every unexpected drop is retried with 1s, 2s, 4s ... capped
+// at 30s, until Disconnect, Close, or a terminal condition (kick, ban,
+// rejected credentials).
 func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 
@@ -292,21 +295,25 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			// host:port on their own (PLAN.md §10.7).
 			m.log.Warn("connect attempt failed", "error", RedactServer(err.Error(), c.address))
 
-			// A rate-limited relay states how long it wants to be left alone.
-			// Retrying earlier only extends the ban, so this is never terminal
-			// and never rushed - not even on the very first attempt.
-			var limited *RateLimitedError
-			if errors.As(err, &limited) {
-				wait := max(limited.RetryAfter, m.backoffFn(attempt))
+			// A relay that turns the attempt away for now states how long it
+			// wants to be left alone. Retrying earlier only extends the
+			// refusal, so this is never terminal and never rushed - not even
+			// on the very first attempt. What it must not do on a first
+			// attempt is take the user off the connect form: until a session
+			// has existed, the form is where the message and the wait belong,
+			// and "reconnecting" would strand the user behind a locked screen.
+			if wait, message, refused := relayRefusal(err, m.backoffFn(attempt)); refused {
+				state := domain.StateConnecting
+				if reconnecting {
+					state = domain.StateReconnecting
+				}
 				m.emitStatus(domain.ConnectionStatus{
-					State: domain.StateReconnecting, Server: c.address,
-					Error: rateLimitedMessage(wait),
+					State: state, Server: c.address, Error: message,
 				})
 				if !sleepOrStop(wait, stop) {
 					return
 				}
 				attempt++
-				reconnecting = true
 				continue
 			}
 
@@ -780,9 +787,34 @@ func relayBearer(c credentials, derive func([]byte) relayproto.Credential) relay
 	return derive([]byte(c.password))
 }
 
-// rateLimitedMessage is user-visible: the connect screen shows it verbatim.
+// relayRefusal recognizes a relay answer that rejects this attempt but says
+// when to come back: 429 (this client is asking too often) and 503 (the relay
+// is full). Both are transient, and both carry a Retry-After the client must
+// honour - the backoff ladder is only the floor, never a way to come earlier.
+func relayRefusal(err error, ladder time.Duration) (wait time.Duration, message string, ok bool) {
+	var limited *RateLimitedError
+	if errors.As(err, &limited) {
+		wait = max(limited.RetryAfter, ladder)
+		return wait, rateLimitedMessage(wait), true
+	}
+	var full *RelayFullError
+	if errors.As(err, &full) {
+		wait = max(full.RetryAfter, ladder)
+		return wait, relayFullMessage(wait), true
+	}
+	return 0, "", false
+}
+
+// rateLimitedMessage is user-visible: the connect form and the reconnect
+// banner show it verbatim.
 func rateLimitedMessage(wait time.Duration) string {
 	return fmt.Sprintf("Сервер временно отклоняет подключения. Следующая попытка через %s.", humanSeconds(wait))
+}
+
+// relayFullMessage is user-visible: a relay at capacity is not a failure of
+// the address, the password or the nickname, so it must not read like one.
+func relayFullMessage(wait time.Duration) string {
+	return fmt.Sprintf("Сервер переполнен: нет свободных мест. Следующая попытка через %s.", humanSeconds(wait))
 }
 
 // humanSeconds renders a wait in whole seconds with the Russian plural form.

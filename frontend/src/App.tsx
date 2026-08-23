@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useGulStore } from './state/store';
 import { subscribeGulEvents } from './state/events';
+import { showsMainScreen } from './state/screen';
 import { usePushToTalk } from './state/ptt';
 import { ConnectScreen } from './app/ConnectScreen';
 import { MainScreen } from './app/MainScreen';
@@ -23,8 +24,9 @@ function App() {
 
   // The Go state machine decides what we show: an unexpected drop keeps the
   // session in 'reconnecting' (main screen, locked); terminal failures land
-  // in 'disconnected' with an error for the connect form.
-  const showMain = state === 'connected' || state === 'reconnecting';
+  // in 'disconnected' with an error for the connect form, and an attempt that
+  // has not connected yet stays 'connecting' on the form (state/screen.ts).
+  const showMain = showsMainScreen(state);
 
   return (
     <ErrorBoundary>

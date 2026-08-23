@@ -84,10 +84,28 @@ export function ConnectScreen() {
             )}
           </Button>
 
+          {/* While the attempt is still alive the message is a wait, not a
+              failure: a relay asking for N seconds is not a red error. */}
           {status.error && (
-            <p className="text-xs leading-relaxed text-danger" role="alert">
+            <p
+              className={'text-xs leading-relaxed ' + (connecting ? 'text-warning' : 'text-danger')}
+              role="alert"
+            >
               {status.error}
             </p>
+          )}
+
+          {/* A relay that is rate limiting or full answers with a wait and the
+              attempt keeps retrying on its own, so this screen can stay in
+              'connecting' for minutes. Leaving it has to be possible. */}
+          {connecting && (
+            <button
+              type="button"
+              className="mx-auto block cursor-pointer border-0 bg-transparent p-0 text-xs text-text-3 hover:underline"
+              onClick={() => ConnectionService.Disconnect().catch(console.error)}
+            >
+              Отменить попытку
+            </button>
           )}
         </div>
       </div>

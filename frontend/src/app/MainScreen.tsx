@@ -91,7 +91,7 @@ export function MainScreen() {
         <MemberList channel={activeChannel} />
       </div>
 
-      {reconnecting && <ReconnectBanner server={status.server} />}
+      {reconnecting && <ReconnectBanner server={status.server} note={status.error} />}
     </div>
   );
 }

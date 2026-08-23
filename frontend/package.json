@@ -8,6 +8,7 @@
     "build:dev": "tsc && vite build --minify false --mode development",
     "build": "tsc && vite build --mode production",
     "lint": "eslint src",
+    "test": "node --test 'src/**/*.test.ts'",
     "preview": "vite preview"
   },
   "dependencies": {
