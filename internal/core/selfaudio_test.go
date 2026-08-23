@@ -207,18 +207,24 @@ func TestSelfAudioReachesTheServer(t *testing.T) {
 	app.SetMute(true)
 	app.SetMute(true) // no change, no wire write
 	app.SetDeafen(true)
-	app.SetMute(false)
+	app.SetDeafen(false)
 
 	ctrl.mu.Lock()
 	mutes := append([]bool(nil), ctrl.selfMutes...)
 	deafs := append([]bool(nil), ctrl.selfDeafs...)
 	ctrl.mu.Unlock()
 
-	if want := []bool{true, false}; !equalBools(mutes, want) {
+	// Both flags travel together on every change, and deafen carries the
+	// microphone with it - undeafening must state mute=false explicitly, or
+	// the server keeps the mute it forced and the user stays inaudible.
+	if want := []bool{true, true, false}; !equalBools(mutes, want) {
 		t.Fatalf("self mutes = %v, want %v", mutes, want)
 	}
-	if want := []bool{true}; !equalBools(deafs, want) {
+	if want := []bool{false, true, false}; !equalBools(deafs, want) {
 		t.Fatalf("self deafs = %v, want %v", deafs, want)
+	}
+	if got := app.SelfAudio(); got.Muted || got.Deafened {
+		t.Fatalf("state after undeafen = %+v, want both cleared", got)
 	}
 }
 

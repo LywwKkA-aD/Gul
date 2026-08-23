@@ -37,6 +37,7 @@ func init() {
 	application.RegisterEvent[domain.AudioLevels](domain.EventAudioLevels)
 	application.RegisterEvent[domain.SelfAudioState](domain.EventAudioSelf)
 	application.RegisterEvent[domain.PTTState](domain.EventAudioPTT)
+	application.RegisterEvent[domain.SelfTalkingState](domain.EventAudioSelfTalking)
 }
 
 // voiceAdapter binds core.VoiceEngine to the audio engine, translating the
@@ -174,9 +175,10 @@ func main() {
 		Send:    manager.SendVoice,
 		Log:     logger,
 		Callbacks: audio.Callbacks{
-			OnTalking:    coreApp.HandleTalking,
-			OnLevels:     coreApp.HandleLevels,
-			OnDeviceLost: coreApp.HandleDeviceLost,
+			OnTalking:     coreApp.HandleTalking,
+			OnSelfTalking: coreApp.HandleSelfTalking,
+			OnLevels:      coreApp.HandleLevels,
+			OnDeviceLost:  coreApp.HandleDeviceLost,
 		},
 	})
 	coreApp.SetVoice(&voiceAdapter{engine: engine})

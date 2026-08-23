@@ -26,6 +26,10 @@ type FrameSink interface {
 type Callbacks struct {
 	// OnTalking reports a remote stream starting or stopping.
 	OnTalking func(session uint32, hash string, talking bool)
+	// OnSelfTalking reports our own transmission starting or stopping. Our
+	// voice never comes back from the server, so this is the only source of
+	// the local speaking indication.
+	OnSelfTalking func(talking bool)
 	// OnLevels reports mic and output levels in dBFS every ~50 ms.
 	OnLevels func(micDB, outDB float64)
 	// OnDeviceLost fires once when a device stops underneath the engine

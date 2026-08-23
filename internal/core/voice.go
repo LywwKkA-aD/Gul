@@ -277,6 +277,12 @@ func (a *App) HandleTalking(session uint32, hash string, talking bool) {
 	})
 }
 
+// HandleSelfTalking publishes our own transmit state. It runs on the DSP
+// goroutine, so it stays a plain forward.
+func (a *App) HandleSelfTalking(talking bool) {
+	a.emit(domain.EventAudioSelfTalking, domain.SelfTalkingState{Talking: talking})
+}
+
 // HandleLevels forwards meter values (already throttled by the engine).
 func (a *App) HandleLevels(micDb, outDb float64) {
 	a.emit(domain.EventAudioLevels, domain.AudioLevels{MicDb: micDb, OutDb: outDb})

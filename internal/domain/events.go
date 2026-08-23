@@ -12,6 +12,7 @@ const (
 	EventAudioLevels       = "audio:levels"       // payload: AudioLevels
 	EventAudioSelf         = "audio:self"         // payload: SelfAudioState
 	EventAudioPTT          = "audio:ptt"          // payload: PTTState
+	EventAudioSelfTalking  = "audio:selftalking"  // payload: SelfTalkingState
 )
 
 // SelfAudioState is the local microphone and monitor state. Mute and deafen
@@ -31,6 +32,14 @@ type SelfAudioState struct {
 // event when the held state does not change.
 type PTTState struct {
 	Held bool `json:"held"`
+}
+
+// SelfTalkingState reports whether our own microphone is transmitting right
+// now. Our voice never returns from the server, so the local speaking
+// indication has no other source: without this the user is the only
+// participant whose halo never lights up.
+type SelfTalkingState struct {
+	Talking bool `json:"talking"`
 }
 
 // ConnectionLatency is the smoothed TCP round-trip time of the active Mumble

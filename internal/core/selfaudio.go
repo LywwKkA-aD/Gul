@@ -102,9 +102,7 @@ func (a *App) SetMute(muted bool) {
 	if v != nil {
 		v.SetMute(muted)
 	}
-	if ctrl, err := a.controller(); err == nil {
-		ctrl.SetSelfMuted(muted)
-	}
+	a.publishSelfAudioToServer(state)
 	cue := CueUnmuted
 	if muted {
 		cue = CueMuted
@@ -113,9 +111,17 @@ func (a *App) SetMute(muted bool) {
 	a.publishSelfAudio(state)
 }
 
-// SetDeafen silences all remote streams locally. No cue: the cues are mixed
-// into the receive path deliberately (DECISIONS.md 2026-08-23), and the two
-// clips this build has confirm the microphone, not the monitor.
+// SetDeafen silences all remote streams locally and takes the microphone with
+// it: deafen means "I am not in this conversation", and the server enforces
+// the same rule (murmur forces self_mute alongside self_deaf), so a client
+// that pretended otherwise would transmit room noise to people it cannot
+// hear. Undeafening restores both. Every entry point - the window, the tray -
+// goes through here, so they cannot disagree.
+//
+// No cue: the cues are mixed into the receive path deliberately
+// (DECISIONS.md 2026-08-23) and the two clips this build has confirm the
+// microphone, not the monitor. The implied mute is part of one gesture and
+// does not beep on its own either.
 func (a *App) SetDeafen(deafened bool) {
 	a.mu.Lock()
 	if a.selfDeafened == deafened {
@@ -123,16 +129,27 @@ func (a *App) SetDeafen(deafened bool) {
 		return
 	}
 	a.selfDeafened = deafened
+	muteChanged := a.selfMuted != deafened
+	a.selfMuted = deafened
 	state, v := a.selfAudioLocked(), a.voice
 	a.mu.Unlock()
 
 	if v != nil {
 		v.SetDeafen(deafened)
+		if muteChanged {
+			v.SetMute(deafened)
+		}
 	}
-	if ctrl, err := a.controller(); err == nil {
-		ctrl.SetSelfDeafened(deafened)
-	}
+	a.publishSelfAudioToServer(state)
 	a.publishSelfAudio(state)
+}
+
+// publishSelfAudioToServer tells the room what we hear and send. Offline the
+// controller records the intent for the next connect.
+func (a *App) publishSelfAudioToServer(state domain.SelfAudioState) {
+	if ctrl, err := a.controller(); err == nil {
+		ctrl.SetSelfAudio(state.Muted, state.Deafened)
+	}
 }
 
 // selfAudioLocked reads the state. Caller holds a.mu.

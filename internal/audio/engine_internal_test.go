@@ -215,6 +215,44 @@ func TestEngineGateClosesOnSilence(t *testing.T) {
 	}
 }
 
+// TestEngineReportsOwnTalking pins the local speaking indication: our voice
+// never comes back from the server, so the transmit gate is its only source.
+// The callback fires on transitions only, never once per frame.
+func TestEngineReportsOwnTalking(t *testing.T) {
+	send := func([]byte, bool) error { return nil }
+	var mu sync.Mutex
+	var transitions []bool
+	dsp := DSPOptions{EchoCancel: false, NS: apm.NSLow, RNNoise: true, Gate: true}
+	e := NewEngine(Config{
+		Send: send,
+		DSP:  &dsp,
+		Log:  slog.Default(),
+		Callbacks: Callbacks{OnSelfTalking: func(talking bool) {
+			mu.Lock()
+			transitions = append(transitions, talking)
+			mu.Unlock()
+		}},
+	})
+
+	const toneFrames = 60
+	src := &burstSource{toneFrames: toneFrames}
+	sink := &collectSink{}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go e.run(src, sink, stop, done)
+	// Tone, then a second of silence: long enough for the hangover to expire.
+	time.Sleep(1600 * time.Millisecond)
+	close(stop)
+	<-done
+
+	mu.Lock()
+	got := append([]bool(nil), transitions...)
+	mu.Unlock()
+	if len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("self talking transitions = %v, want [true false]", got)
+	}
+}
+
 // TestEngineDeafenSilencesOutput checks that deafen keeps frames flowing
 // to the sink but silent.
 func TestEngineDeafenSilencesOutput(t *testing.T) {

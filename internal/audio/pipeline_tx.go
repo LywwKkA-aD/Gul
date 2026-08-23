@@ -11,15 +11,16 @@ import (
 // not, so the DSP states stay warm and the mic meter shows the processed
 // level; muted and gate-closed frames simply never reach the encoder.
 type txPipeline struct {
-	enc     *opus.Encoder
-	chain   *dspChain
-	gate    *Gate // nil when the DSP options disable gating
-	send    func(opus []byte, final bool) error
-	log     *slog.Logger
-	frame   []int16
-	packet  []byte
-	talking bool
-	micRMS  float64
+	enc           *opus.Encoder
+	chain         *dspChain
+	gate          *Gate // nil when the DSP options disable gating
+	send          func(opus []byte, final bool) error
+	onSelfTalking func(talking bool)
+	log           *slog.Logger
+	frame         []int16
+	packet        []byte
+	talking       bool
+	micRMS        float64
 }
 
 func newTxPipeline(cfg Config, chain *dspChain, gate *Gate) (*txPipeline, error) {
@@ -28,13 +29,14 @@ func newTxPipeline(cfg Config, chain *dspChain, gate *Gate) (*txPipeline, error)
 		return nil, err
 	}
 	return &txPipeline{
-		enc:    enc,
-		chain:  chain,
-		gate:   gate,
-		send:   cfg.Send,
-		log:    cfg.Log,
-		frame:  make([]int16, FrameSamples),
-		packet: make([]byte, opus.MaxEncodedBytes),
+		enc:           enc,
+		chain:         chain,
+		gate:          gate,
+		send:          cfg.Send,
+		onSelfTalking: cfg.Callbacks.OnSelfTalking,
+		log:           cfg.Log,
+		frame:         make([]int16, FrameSamples),
+		packet:        make([]byte, opus.MaxEncodedBytes),
 	}, nil
 }
 
@@ -62,7 +64,19 @@ func (t *txPipeline) tick(src FrameSource, muted, ptt bool) {
 		if err := t.send(append([]byte(nil), data...), false); err != nil {
 			t.log.Warn("voice send", "error", err)
 		}
-		t.talking = true
+		t.setTalking(true)
+	}
+}
+
+// setTalking reports a change of our own transmit state. The callback runs on
+// the DSP goroutine, like every other engine callback, and must not block.
+func (t *txPipeline) setTalking(talking bool) {
+	if t.talking == talking {
+		return
+	}
+	t.talking = talking
+	if cb := t.onSelfTalking; cb != nil {
+		cb(talking)
 	}
 }
 
@@ -76,7 +90,7 @@ func (t *txPipeline) finish() {
 	if !t.talking {
 		return
 	}
-	t.talking = false
+	t.setTalking(false)
 	clear(t.frame)
 	data, err := t.enc.Encode(t.frame, t.packet)
 	if err != nil {

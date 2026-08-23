@@ -87,15 +87,10 @@ type fakeController struct {
 	selfDeafs []bool
 }
 
-func (c *fakeController) SetSelfMuted(muted bool) {
+func (c *fakeController) SetSelfAudio(muted, deafened bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.selfMutes = append(c.selfMutes, muted)
-}
-
-func (c *fakeController) SetSelfDeafened(deafened bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.selfDeafs = append(c.selfDeafs, deafened)
 }
 
