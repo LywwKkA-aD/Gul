@@ -41,8 +41,9 @@
 │      │                          internal/dsp: apm (WebRTC AEC3+AGC2+NS),     │
 │      │                          rnnoise (denoise+VAD), opus (libopus 1.6.1)  │
 └──────┼───────────────────────────────────────────────────────────────────────┘
-       ▼  TLS/TCP (весь трафик, включая голос — UDPTunnel)
-  mumble-server v1.5.915 на VPS — готовый, ноль нашего кода
+       ▼  Mumble TLS/TCP (весь трафик, включая голос — UDPTunnel)
+  либо напрямую host:64738, либо внутри wss://host/mumble:443 → gul-relay (наш
+  байтовый насос на VPS, см. §5) → mumble-server v1.5.915 — готовый, ноль нашего кода
 ```
 
 Принципы:
@@ -119,15 +120,23 @@ Gul/
 │       ├── styles/          # tokens.css (дословно из прототипа) + index.css
 │       ├── assets/fonts/    # вендоренные woff2 (IBM Plex, Martian Mono) + OFL
 │       └── bindings/        # сгенерированные wails-биндинги
+├── cmd/
+│   ├── gul-dsp/             # офлайн-кит слепого A/B шумодава (WAV → два кандидата)
+│   └── gul-relay/           # WSS-релей: wss://host/mumble на 443 → murmur 64738
+├── internal/relay/          # обработчик релея (bearer, лимиты, насос, серты)
+├── internal/relayproto/     # контракт клиент↔релей: путь, субпротокол, bearer, лимит
 ├── third_party/
 │   ├── webrtc-apm/          # webrtc-audio-processing v2.1 + срез abseil + patches/
 │   ├── opus/                # libopus 1.6.1 (include, celt, silk, src) + stubs
 │   ├── rnnoise/             # ветка main + weights_blob.bin
 │   ├── miniaudio/           # miniaudio.c/.h + patches/
+│   ├── toolchain-runtime/   # лицензии GCC/MinGW runtime (статическая Windows-сборка)
 │   └── README.md            # upstream-коммиты, SHA256, команды обновления
-├── deploy/murmur/
-│   └── docker-compose.yml   # дев/прод сервер (v1.5.915, MUMBLE_CONFIG_*)
-└── .github/workflows/ci.yml
+├── deploy/
+│   ├── murmur/              # docker-compose дев/прод сервера (v1.5.915, MUMBLE_CONFIG_*)
+│   └── relay/               # Containerfile + quadlet релея (rootless, least-privilege)
+├── scripts/                 # vendor-*.sh, collect-licenses.sh, проверки версии/заголовков
+└── .github/workflows/ci.yml # матрица 3 ОС, релиз по тегу v*, статический релей
 ```
 
 ---
@@ -228,7 +237,8 @@ mic s16[480]  (из capture ring)
 ## 5. Слой Mumble (internal/mumble)
 
 - Зависимость: до M2 — `github.com/stieneee/gumble` (пин псевдоверсией). С M2 — собственный публичный форк (обязательство MPL-2.0 при правках) с влитой веткой `feat/opus-passthrough`; go.mod переключить на него. // DECISION: имя/владелец форка — решить при создании.
-- Подключение: адрес, ник, пароль (опц.), TLS.
+- Подключение: адрес, ник, пароль (опц.), TLS. Две формы адреса (internal/mumble/endpoint.go): прямая `host:64738` и релейная `wss://host/mumble`.
+- **WSS-релей (с v0.3.0-alpha.2)**: прямой долгоживущий Mumble TCP на 64738 в ряде сетей режется провайдером каждые ~20 с, поэтому прод ходит через собственный релей на HTTPS-порту 443 (`cmd/gul-relay`, `internal/relay`). Релей — непрозрачный байтовый насос с фиксированной целью (только loopback-murmur), не терминирует доверие: **внутри WSS — полный Mumble TLS с тем же TOFU-отпечатком**, что и при прямом подключении. Авторизация релея — bearer, производный от пароля сервера (`internal/relayproto`: PBKDF2 v2, v1-HMAC принимается в окне депрекации); одна полная Mumble-пачка = одно WS-сообщение, лимит `relayproto.MaxMessageBytes` с обеих сторон. Релей ничего не знает о 48k/10ms/480 и не трогает аудио-инварианты.
 - **Модель доверия — TOFU как у самого Mumble**: при первом подключении сохраняем SHA-256 отпечаток сертификата сервера в конфиг, при смене — явное предупреждение с подтверждением. `insecure_tls` — только для локального докер-стенда, за явным dev-флагом.
 - Клиентский сертификат: генерация при первом запуске, хранение в конфиг-папке (ключ 0600), подсовывать в Dial. Это стабильная «учётка» (User.Hash) без регистрации.
 - Слушатели → внутренние события core: ConnectionState, ChannelTree, UserJoined/Left/Moved, TalkingChanged, TextMessage, PermissionDenied.
