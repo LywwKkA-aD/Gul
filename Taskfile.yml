@@ -82,9 +82,10 @@ tasks:
       - cd frontend && npm run lint
 
   test:
-    summary: Runs Go tests with the race detector (device/live tests excluded)
+    summary: Runs Go tests with the race detector (device/live tests excluded) and the frontend unit tests
     cmds:
       - go test -race {{.GO_PACKAGES}}
+      - cd frontend && npm test
 
   test:live:
     summary: Runs tests that need the local murmur stand (task murmur:up first)

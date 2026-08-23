@@ -120,6 +120,34 @@ if grep -Eq '^  (@types/|csstype@)' "$output_dir/THIRD_PARTY_MANIFEST.txt"; then
   exit 1
 fi
 
+# Modules outside the shipped build graphs must not be attributed. Neither of
+# these reaches a released binary: they enter the default-tag graphs only
+# (go-isatty everywhere, go-colorable on Windows). Dropping "-tags production"
+# or going back to a hand-kept module array puts both back into the bundle.
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/go/github.com/mattn/go-colorable"
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/go/github.com/mattn/go-isatty"
+if grep -Eq '^  github\.com/mattn/go-(colorable|isatty)@' "$output_dir/THIRD_PARTY_MANIFEST.txt"; then
+  echo "modules outside the shipped build graphs must not be attributed as bundled" >&2
+  exit 1
+fi
+
+# A third_party tree without a single license file means the collector stopped
+# matching, not that the vendored sources became unlicensed.
+unlicensed_root="$test_root/unlicensed-third-party"
+unlicensed_output="$unlicensed_root/bin/legal"
+mkdir -p "$unlicensed_root/scripts" "$unlicensed_root/third_party/opus" "$unlicensed_root/bin"
+cp "$repo_root/scripts/collect-licenses.sh" "$unlicensed_root/scripts/collect-licenses.sh"
+cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$unlicensed_root/"
+printf 'int gul_placeholder(void) { return 0; }\n' >"$unlicensed_root/third_party/opus/opus.c"
+
+if "$unlicensed_root/scripts/collect-licenses.sh" "$unlicensed_output" \
+  >/dev/null 2>"$test_root/unlicensed.log"; then
+  echo "collector accepted a third_party tree without license files" >&2
+  exit 1
+fi
+grep -Fq 'No license files found below' "$test_root/unlicensed.log"
+test ! -e "$unlicensed_output"
+
 # A module whose directory carries no license text must stop the release, not
 # ship an unattributed dependency.
 stripped_go_bin="$test_root/stripped-go-bin"

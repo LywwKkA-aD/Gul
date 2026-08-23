@@ -184,6 +184,11 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      - name: Test frontend
+        # node's own runner over src/**/*.test.ts (no test framework dependency).
+        working-directory: frontend
+        run: npm test
+
       - name: Build frontend
         # Produces frontend/dist, which main.go embeds; must precede any
         # go vet / lint / test / build step.

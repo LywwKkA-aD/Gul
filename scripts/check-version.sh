@@ -105,6 +105,14 @@ extract_lock_root() {
   ' "$file"
 }
 
+# regex_escape <literal>: an extended regular expression matching exactly the
+# literal text. Alphanumerics, "_" and "~" pass through; everything else is
+# backslash-escaped. A hyphen is special only inside a bracket expression and
+# passes through too, because "\-" is not portable across greps.
+regex_escape() {
+  printf '%s' "$1" | sed 's|[^A-Za-z0-9_~-]|\\&|g'
+}
+
 expect() { # expect <label> <expected> <actual>
   if [[ "$3" != "$2" ]]; then
     report "$1: found '$3', want '$2'"
@@ -206,12 +214,24 @@ expect "frontend/package-lock.json root package version" "$app_version" \
   "$(extract_lock_root frontend/package-lock.json)"
 
 # CI must derive the Debian version through this script instead of repeating
-# it; a literal copy there is invisible to every check above.
+# it; a literal copy there is invisible to every check above. Both shipped
+# spellings are searched, each as a whole token: the upstream version of a
+# release without a prerelease is a bare semver, and a substring search would
+# flag the pinned toolchain versions (WAILS3_VERSION: v3.0.0-beta.11) that
+# legitimately contain one.
 ci_file="$repo_root/.github/workflows/ci.yml"
 if [[ ! -f "$ci_file" ]]; then
   report "missing file: .github/workflows/ci.yml"
-elif grep -Fq "$deb_upstream" "$ci_file"; then
-  report ".github/workflows/ci.yml hardcodes '$deb_upstream'; use scripts/check-version.sh --print deb"
+else
+  # A version token ends where a character that cannot belong to one begins.
+  token_start='(^|[^0-9A-Za-z._~+-])'
+  token_end='([^0-9A-Za-z._~+-]|$)'
+  for hardcoded_version in "$deb_version" "$deb_upstream"; do
+    if grep -Eq "$token_start$(regex_escape "$hardcoded_version")$token_end" "$ci_file"; then
+      report ".github/workflows/ci.yml hardcodes '$hardcoded_version'; use scripts/check-version.sh --print deb"
+      break
+    fi
+  done
 fi
 
 if [[ "$failures" -ne 0 ]]; then

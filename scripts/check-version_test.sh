@@ -18,6 +18,27 @@ repo_upstream=$(bash "$checker" --print deb-upstream)
 repo_revision=$(bash "$checker" --print deb-revision)
 test "$repo_deb" = "$repo_upstream-$repo_revision"
 
+# Release-build pins that a later edit must not drop unnoticed. They are
+# asserted here because this is the one shell test every CI leg runs before a
+# toolchain exists, so a silent revert cannot reach a release.
+ci_workflow="$repo_root/.github/workflows/ci.yml"
+if grep -Fq 'macos-latest' "$ci_workflow"; then
+  echo "ci.yml must pin a concrete macOS runner: macos-latest changes Xcode and the SDK under a release" >&2
+  exit 1
+fi
+if ! grep -Eq 'macos-[0-9]+' "$ci_workflow"; then
+  echo "ci.yml names no pinned macos-NN runner image" >&2
+  exit 1
+fi
+
+# Setting CGO_CFLAGS replaces cgo's built-in "-g -O2", so dropping the explicit
+# -O2 would compile future cgo packages unoptimised in macOS release builds.
+darwin_taskfile="$repo_root/build/darwin/Taskfile.yml"
+if ! grep -Eq '^[[:space:]]*CGO_CFLAGS:[[:space:]]*"[^"]*-O2([[:space:]]|")' "$darwin_taskfile"; then
+  echo "build/darwin/Taskfile.yml must keep -O2 in CGO_CFLAGS" >&2
+  exit 1
+fi
+
 pristine="$test_root/pristine"
 mkdir -p \
   "$pristine/internal/core" \
@@ -230,5 +251,32 @@ reject "an unparsable version constant" "unsupported version"
 setup_case
 sed -i.bak 's/const Version = "1.4.0-rc.2"/const APIVersion = "1.4.0"/' "$case_root/internal/core/app.go"
 reject "a missing version constant" "cannot read the Version constant"
+
+# A release without a prerelease derives a bare semver as its Debian upstream
+# version, which the pinned toolchain versions in CI legitimately contain. The
+# hardcode guard must match whole tokens, not substrings.
+retarget_case() { # retarget_case: restate the pristine tree as a 3.0.0 release
+  local file
+  while IFS= read -r file; do
+    sed -i.bak \
+      -e 's/1\.4\.0-rc\.2/3.0.0/g' \
+      -e 's/1\.4\.0~rc2/3.0.0/g' \
+      -e 's/1\.4\.0/3.0.0/g' \
+      "$file"
+    rm -f "$file.bak"
+  done < <(find "$case_root" -type f -not -name '*.bak')
+}
+
+setup_case
+retarget_case
+printf 'env:\n  WAILS3_VERSION: v3.0.0-beta.11\n' >>"$case_root/.github/workflows/ci.yml"
+bash "$checker" --root "$case_root" >/dev/null
+test "$(bash "$checker" --root "$case_root" --print app)" = "3.0.0"
+test "$(bash "$checker" --root "$case_root" --print deb-upstream)" = "3.0.0"
+test "$(bash "$checker" --root "$case_root" --print deb)" = "3.0.0-1"
+
+printf '          test "$(dpkg-deb --field bin/gul.deb Version)" = "3.0.0-1"\n' \
+  >>"$case_root/.github/workflows/ci.yml"
+reject "a hardcoded Debian version without a prerelease" "hardcodes '3.0.0-1'"
 
 echo "version metadata: ok"
