@@ -192,27 +192,6 @@ func TestSourceLimitedListenerClosesOverLimitConnectionsOnRealSockets(t *testing
 	}
 }
 
-func TestSourcePrefixKey(t *testing.T) {
-	tests := []struct {
-		name string
-		addr net.Addr
-		want string
-	}{
-		{name: "ipv4", addr: mustAddr("198.51.100.7:443"), want: "198.51.100.7"},
-		{name: "ipv4 mapped", addr: mustAddr("[::ffff:198.51.100.7]:443"), want: "198.51.100.7"},
-		{name: "ipv6", addr: mustAddr("[2001:db8:1:2:3:4:5:6]:443"), want: "2001:db8:1:2::/64"},
-		{name: "ipv6 loopback", addr: mustAddr("[::1]:443"), want: "::/64"},
-		{name: "nil", addr: nil, want: ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := sourcePrefixKey(tc.addr); got != tc.want {
-				t.Fatalf("sourcePrefixKey = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func mustAddr(value string) net.Addr {
 	host, port, err := net.SplitHostPort(value)
 	if err != nil {

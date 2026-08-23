@@ -4,13 +4,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"net"
+	"runtime"
 )
 
 const sourceAddressDomain = "gul-relay-v1 source-address"
 
-// sourceAddressKey derives the pseudonymization key from the expected v2
-// bearer credential, so the mapping from public source address to loopback
-// alias cannot be reproduced without the relay secret.
+// sourceAddressKey derives the HMAC key behind the pseudonyms from the expected
+// v2 bearer credential, so the mapping from source block to loopback alias
+// cannot be reproduced without the relay secret. It keys the mapping; sourceKey
+// produces the values that go into it.
 func sourceAddressKey(credential []byte) [sha256.Size]byte {
 	mac := hmac.New(sha256.New, credential)
 	_, _ = mac.Write([]byte(sourceAddressDomain))
@@ -19,16 +21,28 @@ func sourceAddressKey(credential []byte) [sha256.Size]byte {
 	return key
 }
 
-// pseudonymousLoopback maps one public source address to a stable address
-// inside 127/8, used as the local address of the upstream connection.
+// pseudonymousUpstreamAddress resolves the local address an upstream dial
+// binds for one folded source key, or nil where the platform cannot route it.
 //
-// Linux-only: Linux routes the whole 127/8 block locally, which gives Murmur a
-// distinct autoban bucket per outer source. Other operating systems assign
+// Linux routes the whole 127/8 block locally, which is what gives Murmur a
+// distinct autoban bucket per source block. Other operating systems assign
 // only 127.0.0.1, so every session there shares Murmur's ordinary loopback
-// identity and the callers must not bind at all.
-func pseudonymousLoopback(key [sha256.Size]byte, sourceIP string) net.IP {
+// identity and nothing may be bound.
+func (h *Handler) pseudonymousUpstreamAddress(source string) net.IP {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	return pseudonymousLoopback(h.pseudonymKey, source)
+}
+
+// pseudonymousLoopback maps one source key to a stable address inside 127/8,
+// used as the local address of the upstream connection. The argument is the
+// folded key from sourceKey, never a raw address: an IPv6 subscriber who
+// rotates addresses inside a /64 would otherwise get a fresh Murmur autoban
+// bucket per attempt.
+func pseudonymousLoopback(key [sha256.Size]byte, source string) net.IP {
 	mac := hmac.New(sha256.New, key[:])
-	_, _ = mac.Write([]byte(sourceIP))
+	_, _ = mac.Write([]byte(source))
 	return loopbackFromDigest(mac.Sum(nil))
 }
 

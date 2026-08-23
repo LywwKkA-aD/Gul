@@ -59,13 +59,25 @@ Legacy lifecycle:
    the `Exec=` line. Either change alone is enough to stop accepting it; doing
    both removes the value from the host as well.
 
+## What counts as one source
+
+Every per-source limit in this document counts a source block, not a single
+address: IPv4 by /32, IPv6 by /64. One IPv6 subscriber is handed a /64 or
+shorter, so counting single addresses would let one customer rotate through 2^64
+of them and reset every counter in turn - the pre-authentication connection cap,
+the authentication ban, the session quota and the Murmur autoban bucket alike.
+The full address is written to the log lines only.
+
 ## Host firewall
 
-The relay caps accepted TCP connections at 16 per source (IPv4 keyed by /32,
-IPv6 by /64) and 256 in total, and it keeps accepting at either cap instead of
-suspending its accept loop. The per-source figure is twice the 8 sessions one
-source may run, so a source at its session quota still has room to open a
-handshake.
+The relay caps accepted TCP connections at 16 per source block and 256 in
+total, and it keeps accepting at either cap instead of suspending its accept
+loop. The per-source figure is twice the 8 sessions one source may run, so a
+source at its session quota still has room to open a handshake. A connection
+that neither finishes its TLS handshake nor sends a request is dropped after
+5 s, and so is an idle keep-alive connection between requests, so nobody can
+squat on a share of the cap; an established session is hijacked out of the HTTP
+server and lives under the session timeouts below instead.
 
 That cap is the last line, not the first. Add a connection limit on the public
 port as well, so the kernel drops a flood before it costs a TLS handshake. The
@@ -91,12 +103,12 @@ firewall-cmd --reload
 
 ## Limits
 
-Failed authentication is bounded per source: five failures in one minute are
-followed by a one-minute temporary rejection, and at most 4096 sources are
-retained. The ban keys on the source address, which behind a NAT is shared by
-everyone on it, so it is deliberately short and every rejection carries
-`Retry-After`; a client that honors it waits rather than treating the rejection
-as final. At most 64 authenticated relay sessions may be active, 8 per source.
+Failed authentication is bounded per source block: five failures in one minute
+are followed by a one-minute temporary rejection, and at most 4096 blocks are
+retained. A block can be a whole NAT or a whole household, so the ban is
+deliberately short and every rejection carries `Retry-After`; a client that
+honors it waits rather than treating the rejection as final. At most 64
+authenticated relay sessions may be active, 8 per source block.
 
 A session that transfers nothing in either direction for 60 s is closed, and a
 single write that stays blocked for 30 s ends the session. Mumble pings every
@@ -147,11 +159,13 @@ command is declared in exec form because the scratch image contains no shell.
 ## Source pseudonymization
 
 On Linux the relay derives a stable pseudonymous address inside `127/8` from
-each outer source IP and binds backend connections to it. Murmur therefore
-keeps separate IP-autoban buckets without learning the public source address.
-The network address `127.0.0.0`, the broadcast address `127.255.255.255` and
-Murmur's own `127.0.0.1` are remapped, because Linux refuses to bind the first
-two and a source that hashed onto one of them would be locked out silently.
+each outer source block and binds backend connections to it. Murmur therefore
+keeps one IP-autoban bucket per source block without learning the public
+address, and a subscriber who rotates addresses inside a /64 stays in the bucket
+Murmur already banned. The network address `127.0.0.0`, the broadcast address
+`127.255.255.255` and Murmur's own `127.0.0.1` are remapped, because Linux
+refuses to bind the first two and a source that hashed onto one of them would be
+locked out silently.
 
 This is Linux-only: other systems assign just `127.0.0.1`, so every session
 there shares one identity and one autoban bucket. Only the production Linux

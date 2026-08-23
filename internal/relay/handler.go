@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +30,8 @@ const (
 
 	defaultAuthFailuresBeforeBan = 5
 	defaultAuthFailureWindow     = time.Minute
-	// defaultAuthBanDuration is short on purpose: the ban keys on the source
-	// address, so behind a NAT it is shared by everyone on that address.
+	// defaultAuthBanDuration is short on purpose: the ban keys on a source
+	// block, so behind a NAT it is shared by everyone in that block.
 	defaultAuthBanDuration       = time.Minute
 	defaultMaxAuthTrackedSources = 4096
 	defaultShutdownDrainTimeout  = 5 * time.Second
@@ -51,8 +50,11 @@ type Config struct {
 	BearerCredentials []relayproto.Credential
 	// AcceptLegacyBearer keeps the v0.3.0-alpha.2 credential usable for one
 	// release. Every legacy match is logged at Warn.
-	AcceptLegacyBearer      bool
-	MaxConnections          int
+	AcceptLegacyBearer bool
+	MaxConnections     int
+	// MaxConnectionsPerIP bounds the sessions one source may hold. "IP" is the
+	// folded source key, not a single address: IPv4 by /32, IPv6 by /64. See
+	// sourceKey.
 	MaxConnectionsPerIP     int
 	MaxWebSocketMessageSize int64
 	DialTimeout             time.Duration
@@ -81,21 +83,26 @@ type Handler struct {
 	expectedHost string
 	upstream     string
 	credentials  []relayproto.Credential
-	sourceKey    [sha256.Size]byte
+	pseudonymKey [sha256.Size]byte
 	dialer       net.Dialer
 	messageSize  int64
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 	drainTimeout time.Duration
 	global       chan struct{}
-	perIPMax     int
+	perSourceMax int
 	authFailures *authFailureLimiter
 	logger       *slog.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
+	// upstreamLocalAddress resolves the local address of an upstream dial from
+	// a folded source key, or returns nil where the platform cannot route the
+	// alias. Holding it in a field keeps the platform decision in one place and
+	// lets a test observe the key a session used without a Linux host.
+	upstreamLocalAddress func(source string) net.IP
 
 	mu           sync.Mutex
-	perIP        map[string]int
+	perSource    map[string]int
 	active       map[*websocket.Conn]struct{}
 	closing      bool
 	sessions     sync.WaitGroup
@@ -118,7 +125,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, errors.New("relay max connections must be positive")
 	}
 	if cfg.MaxConnectionsPerIP <= 0 || cfg.MaxConnectionsPerIP > cfg.MaxConnections {
-		return nil, errors.New("relay per-IP limit must be positive and no larger than the global limit")
+		return nil, errors.New("relay per-source limit must be positive and no larger than the global limit")
 	}
 	if cfg.MaxWebSocketMessageSize <= 0 {
 		return nil, errors.New("relay message size limit must be positive")
@@ -164,25 +171,27 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Handler{
+	h := &Handler{
 		expectedHost: strings.ToLower(cfg.ExpectedHost),
 		upstream:     cfg.Upstream,
 		credentials:  credentials,
-		sourceKey:    sourceAddressKey([]byte(primary)),
+		pseudonymKey: sourceAddressKey([]byte(primary)),
 		dialer:       net.Dialer{Timeout: cfg.DialTimeout, KeepAlive: 30 * time.Second},
 		messageSize:  cfg.MaxWebSocketMessageSize,
 		idleTimeout:  cfg.SessionIdleTimeout,
 		writeTimeout: cfg.SessionWriteTimeout,
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
-		perIPMax:     cfg.MaxConnectionsPerIP,
+		perSourceMax: cfg.MaxConnectionsPerIP,
 		authFailures: newAuthFailureLimiter(cfg),
 		logger:       loggerOrDefault(cfg.Logger),
-		perIP:        make(map[string]int),
+		perSource:    make(map[string]int),
 		active:       make(map[*websocket.Conn]struct{}),
 		ctx:          ctx,
 		cancel:       cancel,
-	}, nil
+	}
+	h.upstreamLocalAddress = h.pseudonymousUpstreamAddress
+	return h, nil
 }
 
 func loggerOrDefault(logger *slog.Logger) *slog.Logger {
@@ -223,15 +232,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
+	// sourceIP identifies one client and is only ever logged. Every defense
+	// below counts against the block the subscriber controls, so rotating
+	// addresses inside one IPv6 /64 cannot reset a ban, a session count, or a
+	// Murmur autoban bucket.
 	sourceIP := remoteIP(r.RemoteAddr)
-	if retryAfter, banned := h.authFailures.banRemaining(sourceIP); banned {
+	sourceBlock := sourceKey(sourceIP)
+	if retryAfter, banned := h.authFailures.banRemaining(sourceBlock); banned {
 		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", retryAfter)
 		writeRateLimited(w, r, retryAfter)
 		return
 	}
 	result := h.authorize(r.Header.Get("Authorization"))
 	if !result.authorized {
-		ban := h.authFailures.recordFailure(sourceIP)
+		ban := h.authFailures.recordFailure(sourceBlock)
 		// The credential itself is never logged: only whether it was absent,
 		// malformed, or a well-formed credential of either generation.
 		h.logger.Warn("relay authorization rejected", "source", sourceIP, "credential", result.class)
@@ -252,7 +266,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if result.legacy {
 		h.logger.Warn("relay accepted legacy bearer credential", "source", sourceIP)
 	}
-	if retryAfter, banned := h.authFailures.clearIfAllowed(sourceIP); banned {
+	if retryAfter, banned := h.authFailures.clearIfAllowed(sourceBlock); banned {
 		// A concurrent failed request may have activated the ban while this
 		// request was validating its credential. Recheck under the limiter lock
 		// before accepting it.
@@ -264,7 +278,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, scope, ok := h.acquire(sourceIP)
+	release, scope, ok := h.acquire(sourceBlock)
 	if !ok {
 		h.logger.Warn("relay capacity rejected", "source", sourceIP, "scope", scope)
 		writeCapacityRejected(w, capacityRetryAfter)
@@ -297,12 +311,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { go func() { _ = stream.Close() }() }()
 
 	dialer := h.dialer
-	var localAddress net.IP
-	// Linux routes the full 127/8 block locally. Binding a stable alias gives
-	// Murmur a distinct autoban bucket per outer source IP. Darwin only assigns
-	// 127.0.0.1 by default, so local cross-platform tests use the OS default.
-	if runtime.GOOS == "linux" {
-		localAddress = pseudonymousLoopback(h.sourceKey, sourceIP)
+	localAddress := h.upstreamLocalAddress(sourceBlock)
+	if localAddress != nil {
 		dialer.LocalAddr = &net.TCPAddr{IP: localAddress}
 	}
 	upstream, err := dialer.DialContext(h.ctx, "tcp", h.upstream)
@@ -337,9 +347,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("relay session closed", closeAttrs...)
 }
 
-// acquire reserves one session slot. It reports which limit refused the
-// request so the rejection can be logged without guessing.
-func (h *Handler) acquire(ip string) (func(), string, bool) {
+// acquire reserves one session slot for a folded source key. It reports which
+// limit refused the request so the rejection can be logged without guessing.
+func (h *Handler) acquire(source string) (func(), string, bool) {
 	select {
 	case h.global <- struct{}{}:
 	default:
@@ -352,12 +362,12 @@ func (h *Handler) acquire(ip string) (func(), string, bool) {
 		<-h.global
 		return nil, "shutdown", false
 	}
-	if h.perIP[ip] >= h.perIPMax {
+	if h.perSource[source] >= h.perSourceMax {
 		h.mu.Unlock()
 		<-h.global
 		return nil, "source", false
 	}
-	h.perIP[ip]++
+	h.perSource[source]++
 	h.sessions.Add(1)
 	h.mu.Unlock()
 
@@ -365,9 +375,9 @@ func (h *Handler) acquire(ip string) (func(), string, bool) {
 	return func() {
 		once.Do(func() {
 			h.mu.Lock()
-			h.perIP[ip]--
-			if h.perIP[ip] == 0 {
-				delete(h.perIP, ip)
+			h.perSource[source]--
+			if h.perSource[source] == 0 {
+				delete(h.perSource, source)
 			}
 			h.mu.Unlock()
 			<-h.global
@@ -491,14 +501,6 @@ func offersSubprotocol(values []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func remoteIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err == nil {
-		return host
-	}
-	return remoteAddr
 }
 
 func requestHost(value string) string {

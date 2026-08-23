@@ -127,10 +127,12 @@ type banState struct {
 // 401 responses. The triggering request and all later failed requests receive
 // 429 until the fixed ban expires.
 //
-// The key is the raw source address, which behind a NAT is shared by everyone
-// on it. The ban is therefore deliberately short and always accompanied by
-// Retry-After: it has to blunt online password guessing without turning one
-// mistyped password into a lasting outage for the whole network behind it.
+// The key is a folded source block (sourceKey), not one address: an IPv6
+// subscriber holds a /64 and would otherwise spend a fresh allowance of
+// guesses per address. That block can also be a whole NAT, so the ban is
+// deliberately short and always accompanied by Retry-After: it has to blunt
+// online password guessing without turning one mistyped password into a
+// lasting outage for the network behind it.
 func (l *authFailureLimiter) recordFailure(source string) banState {
 	now := l.now()
 	l.mu.Lock()

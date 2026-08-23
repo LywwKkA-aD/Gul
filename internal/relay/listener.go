@@ -3,7 +3,6 @@ package relay
 import (
 	"log/slog"
 	"net"
-	"net/netip"
 	"sync"
 	"time"
 )
@@ -155,31 +154,4 @@ type limitedConn struct {
 func (c *limitedConn) Close() error {
 	c.release()
 	return c.Conn.Close()
-}
-
-// sourcePrefixKey buckets a remote address by the block a single subscriber
-// controls: IPv4 by /32, IPv6 by /64. Keying IPv6 by the full address would
-// let one customer rotate through 2^64 addresses to defeat the limit.
-func sourcePrefixKey(addr net.Addr) string {
-	host := ""
-	if addr != nil {
-		host = addr.String()
-	}
-	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		host = parsed
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		// Unparseable addresses share one bucket rather than escaping the limit.
-		return host
-	}
-	ip = ip.Unmap().WithZone("")
-	if ip.Is4() {
-		return ip.String()
-	}
-	prefix, err := ip.Prefix(64)
-	if err != nil {
-		return ip.String()
-	}
-	return prefix.String()
 }

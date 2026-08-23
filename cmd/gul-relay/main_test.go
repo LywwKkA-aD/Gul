@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,21 @@ func TestPreAuthorizationConnectionLimitsLeaveBoundedHandshakeHeadroom(t *testin
 	// session quota must still have room to open a handshake.
 	if maxPreAuthPerSource <= maxSessionsPerIP {
 		t.Fatalf("per-source connection limit %d leaves no handshake headroom above %d sessions", maxPreAuthPerSource, maxSessionsPerIP)
+	}
+
+	// The headroom is only bounded if an admitted connection cannot sit on its
+	// slot: a source at maxPreAuthPerSource idle connections must lose them
+	// within seconds. Pinned on the wired server, not on the constants, so a
+	// longer timeout cannot return through the constructor.
+	server := relayServer("127.0.0.1:0", http.NewServeMux(), nil, slog.New(slog.DiscardHandler))
+	if server.IdleTimeout != 5*time.Second {
+		t.Fatalf("idle timeout = %s, want 5s", server.IdleTimeout)
+	}
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("read header timeout = %s, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.MaxHeaderBytes != 16<<10 {
+		t.Fatalf("max header bytes = %d, want %d", server.MaxHeaderBytes, 16<<10)
 	}
 }
 
@@ -115,8 +131,15 @@ func TestParseLogLevel(t *testing.T) {
 }
 
 // TestServeBoundsPreAuthenticationConnectionsPerSource is the daemon-level form
-// of the outage: unauthenticated connections from one source are capped, and
-// the listener keeps serving instead of suspending Accept at the cap.
+// of the outage: unauthenticated connections from one source are capped, the
+// surplus is dropped, and the listener keeps serving instead of suspending
+// Accept at the cap.
+//
+// Only that half is provable here. Every connection a test can make to a
+// loopback listener shares one /32, so the concurrent-service half - a flood
+// from one source does not starve another - is covered at unit level by
+// TestSourceLimitedListenerBoundsOneSourceWithoutStarvingOthers, which offers
+// connections from distinct sources.
 func TestServeBoundsPreAuthenticationConnectionsPerSource(t *testing.T) {
 	opts, roots := testDaemonOptions(t)
 	listener, err := listenRelay("127.0.0.1:0")
@@ -133,32 +156,41 @@ func TestServeBoundsPreAuthenticationConnectionsPerSource(t *testing.T) {
 		t.Fatalf("health probe: %v", err)
 	}
 
-	idle := make([]net.Conn, 0, maxPreAuthPerSource)
-	for range maxPreAuthPerSource {
+	// The surplus is what has to be rejected. The health probe above may not
+	// have given its slot back yet, so the assertions are about the surplus and
+	// the remaining headroom rather than about one exact connection.
+	const surplus = 4
+	flood := make([]net.Conn, 0, maxPreAuthPerSource+surplus)
+	for range cap(flood) {
 		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
 		t.Cleanup(func() { _ = conn.Close() })
-		idle = append(idle, conn)
+		flood = append(flood, conn)
 	}
-	overLimit, err := net.DialTimeout("tcp", address, 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial over the limit: %v", err)
+
+	// A rejected connection is closed at accept time, before TLS, so it ends
+	// within milliseconds. The deadline only bounds the test: accepting any
+	// error would also accept the timeout of an unlimited idle TLS connection,
+	// which is the state this test exists to rule out.
+	const readBudget = 3 * time.Second
+	closed, open, slowest := classifyPreAuthConnections(t, flood, readBudget)
+	if closed < surplus {
+		t.Fatalf("connections ended past the per-source limit = %d, want at least %d", closed, surplus)
 	}
-	t.Cleanup(func() { _ = overLimit.Close() })
-	if err := overLimit.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		t.Fatalf("set deadline: %v", err)
+	if open < maxSessionsPerIP {
+		t.Fatalf("connections still open = %d, want room for the %d sessions one source may run", open, maxSessionsPerIP)
 	}
-	if _, err := overLimit.Read(make([]byte, 1)); err == nil {
-		t.Fatal("connection past the per-source limit stayed open")
+	if slowest >= readBudget/3 {
+		t.Fatalf("slowest rejection took %s, want well under the %s deadline", slowest, readBudget)
 	}
 
 	// Freeing the source's slots restores service, which proves the listener
 	// kept accepting while the source sat at its cap. The slot belongs to the
 	// accepted connection, so it comes back once the server side notices the
 	// close rather than the instant the client hangs up.
-	for _, conn := range idle {
+	for _, conn := range flood {
 		_ = conn.Close()
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -182,6 +214,60 @@ func TestServeBoundsPreAuthenticationConnectionsPerSource(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("serve did not return after the context was cancelled")
 	}
+}
+
+// classifyPreAuthConnections reads one byte from every connection in parallel
+// and reports how many the server ended, how many outlasted the budget, and how
+// long the slowest ending took. Only a deadline counts as still open: any other
+// read outcome means the connection is gone, and data would mean the relay
+// spoke to an unauthenticated peer.
+func classifyPreAuthConnections(t *testing.T, conns []net.Conn, budget time.Duration) (closed, open int, slowest time.Duration) {
+	t.Helper()
+	type outcome struct {
+		elapsed time.Duration
+		closed  bool
+		err     error
+	}
+	outcomes := make([]outcome, len(conns))
+	deadline := time.Now().Add(budget)
+	var pending sync.WaitGroup
+	for i, conn := range conns {
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			if err := conn.SetReadDeadline(deadline); err != nil {
+				outcomes[i] = outcome{err: err}
+				return
+			}
+			started := time.Now()
+			_, err := conn.Read(make([]byte, 1))
+			elapsed := time.Since(started)
+			switch {
+			case err == nil:
+				outcomes[i] = outcome{err: errors.New("relay sent data to an unauthenticated connection")}
+			case errors.Is(err, os.ErrDeadlineExceeded):
+				outcomes[i] = outcome{elapsed: elapsed}
+			default:
+				outcomes[i] = outcome{elapsed: elapsed, closed: true}
+			}
+		}()
+	}
+	pending.Wait()
+
+	for i, result := range outcomes {
+		if result.err != nil {
+			t.Fatalf("connection %d: %v", i, result.err)
+		}
+		if !result.closed {
+			open++
+			continue
+		}
+		closed++
+		if result.elapsed > slowest {
+			slowest = result.elapsed
+		}
+	}
+	return closed, open, slowest
 }
 
 func TestServeRejectsUnusableCredentialFile(t *testing.T) {

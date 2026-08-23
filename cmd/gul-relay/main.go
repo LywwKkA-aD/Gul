@@ -42,6 +42,16 @@ const (
 	// shared address would lock itself out.
 	maxPreAuthConnections = 256
 	maxPreAuthPerSource   = 2 * maxSessionsPerIP
+	// idleConnectionTimeout drops an idle HTTP connection within seconds. An
+	// unauthenticated keep-alive connection is the cheapest way to occupy the
+	// endpoint, and net/http bounds an idle connection only if it is told to.
+	// Established sessions are unaffected: the WebSocket is hijacked out of the
+	// server and carries its own idle timeout.
+	idleConnectionTimeout = 5 * time.Second
+	// readHeaderTimeout bounds the request line and headers of a connection
+	// that did send something; maxRequestHeaderBytes bounds their size.
+	readHeaderTimeout     = 5 * time.Second
+	maxRequestHeaderBytes = 16 << 10
 	shutdownBudget        = 10 * time.Second
 )
 
@@ -154,23 +164,7 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 	mux := http.NewServeMux()
 	mux.Handle(relay.Path, handler)
 	mux.HandleFunc("/healthz", healthHandler(opts.expectedHost, loader.LastError))
-	server := &http.Server{
-		Addr:              listener.Addr().String(),
-		Handler:           rejectRequestBodies(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-		// An unauthenticated keep-alive connection is the cheapest way to
-		// occupy the endpoint, so an idle HTTP connection is dropped within
-		// seconds. Established sessions are unaffected: the WebSocket is
-		// hijacked out of the server and carries its own idle timeout.
-		IdleTimeout:    5 * time.Second,
-		MaxHeaderBytes: 16 << 10,
-		ErrorLog:       serverErrorLog(logger),
-		TLSConfig: &tls.Config{
-			MinVersion:     tls.VersionTLS12,
-			NextProtos:     []string{"http/1.1"},
-			GetCertificate: loader.GetCertificate,
-		},
-	}
+	server := relayServer(listener.Addr().String(), mux, loader.GetCertificate, logger)
 
 	limitedListener := relay.LimitListenerBySource(listener, maxPreAuthPerSource, maxPreAuthConnections, logger)
 	tlsListener := tls.NewListener(limitedListener, server.TLSConfig)
@@ -202,6 +196,25 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 			return fmt.Errorf("shutdown relay: %w", err)
 		}
 		return nil
+	}
+}
+
+// relayServer builds the HTTPS server. The timeouts live here rather than at
+// the call site so a test can pin them: the idle timeout in particular is a
+// security bound, not a comfort setting.
+func relayServer(address string, handler http.Handler, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error), logger *slog.Logger) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           rejectRequestBodies(handler),
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleConnectionTimeout,
+		MaxHeaderBytes:    maxRequestHeaderBytes,
+		ErrorLog:          serverErrorLog(logger),
+		TLSConfig: &tls.Config{
+			MinVersion:     tls.VersionTLS12,
+			NextProtos:     []string{"http/1.1"},
+			GetCertificate: getCertificate,
+		},
 	}
 }
 
