@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/LywwKkA-aD/Gul/internal/config"
 )
 
 // gateStep is one 10 ms frame offered to the gate.
@@ -444,5 +446,20 @@ func BenchmarkGateUpdate(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		g.Update(0.7, false)
+	}
+}
+
+// TestGateBoundsMatchTheConfigPackage pins the one constant internal/config
+// has to restate: it cannot import this package (cgo), so the file-level
+// bound and the engine bound are two literals that must stay equal.
+func TestGateBoundsMatchTheConfigPackage(t *testing.T) {
+	if config.MaxHangoverMs != gateHangoverMaxMs {
+		t.Fatalf("config.MaxHangoverMs = %d, engine cap = %d", config.MaxHangoverMs, gateHangoverMaxMs)
+	}
+	if config.DefaultHangoverMs != gateHangoverDefaultMs {
+		t.Fatalf("config.DefaultHangoverMs = %d, engine default = %d", config.DefaultHangoverMs, gateHangoverDefaultMs)
+	}
+	if float32(config.DefaultOpenThreshold) != gateOpenDefault {
+		t.Fatalf("config.DefaultOpenThreshold = %v, engine default = %v", config.DefaultOpenThreshold, gateOpenDefault)
 	}
 }

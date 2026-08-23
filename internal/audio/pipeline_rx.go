@@ -32,6 +32,7 @@ type rxPipeline struct {
 	log     *slog.Logger
 	chain   *dspChain
 	streams map[uint32]*rxStream
+	cues    cuePlayer
 	mixer   *Mixer
 	mix     []int16
 	frame   []int16
@@ -146,6 +147,14 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map, extr
 		}
 		r.mixer.Add(r.frame, volume)
 	}
+
+	// DECISION: cues are mixed after the deafen check, so they play while
+	// deafened. Deafen silences other people; a cue is this client's own
+	// confirmation that an action landed - and the mute and deafen cues in
+	// particular would be silenced by exactly the state they report.
+	// Passing through the mixer also lands them in the AEC reference below
+	// and on the user's chosen playback device.
+	r.cues.mix(r.mixer)
 
 	r.mixer.Mix(r.mix)
 	r.outRMS = RMS(r.mix)

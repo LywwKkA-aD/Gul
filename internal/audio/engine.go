@@ -72,6 +72,12 @@ type engineState struct {
 	ptt      atomic.Bool
 	volumes  sync.Map // user hash -> float32
 
+	// cue is the pending UI sound, encoded as Cue+1 so that 0 means empty.
+	// PlayCue fills it from any goroutine, the DSP goroutine drains it.
+	cue atomic.Int32
+	// cueVol is the cue gain as float32 bits (math.Float32bits).
+	cueVol atomic.Uint32
+
 	gateMu sync.Mutex
 	gate   gateSettings
 }
@@ -100,6 +106,7 @@ func NewEngine(cfg Config) *Engine {
 		close:      gateCloseDefault,
 		hangoverMs: gateHangoverDefaultMs,
 	}
+	e.SetCueVolume(cueVolumeDefault)
 	return e
 }
 
@@ -181,6 +188,7 @@ func (e *Engine) Stop() {
 	}
 	close(e.stop)
 	<-e.done
+	e.dropPendingCue()
 	e.capture.Close()
 	e.playback.Close()
 	_ = e.ctx.Close()
@@ -295,6 +303,7 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 		if gate != nil {
 			e.applyGateSettings(gate)
 		}
+		e.applyCue(&rx.cues)
 
 		rx.drain(e.cfg.Packets)
 		tx.tick(src, e.state.muted.Load(), e.state.ptt.Load())
