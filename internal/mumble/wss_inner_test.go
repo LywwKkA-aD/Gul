@@ -31,7 +31,7 @@ func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
 	innerSNI := make(chan string, 1)
 
 	relayServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !relayproto.MatchesAuthorization(r.Header.Get("Authorization"), []byte(secret)) {
+		if c, ok := relayproto.ParseHeader(r.Header.Get("Authorization")); !ok || !c.Matches(relayproto.DeriveLegacy([]byte(secret))) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

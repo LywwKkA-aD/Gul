@@ -25,7 +25,7 @@ func dialWSS(ctx context.Context, address, password string, baseClient *http.Cli
 
 	client := noRedirectHTTPClient(baseClient)
 	header := make(http.Header)
-	header.Set("Authorization", relayproto.Authorization([]byte(password)))
+	header.Set("Authorization", relayproto.DeriveLegacy([]byte(password)).Header())
 	ws, response, err := websocket.Dial(ctx, address, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      header,

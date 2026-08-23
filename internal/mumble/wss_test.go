@@ -22,7 +22,7 @@ func TestDialWSSAuthenticatesAndCarriesBinaryStream(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if !relayproto.MatchesAuthorization(r.Header.Get("Authorization"), []byte(secret)) {
+		if c, ok := relayproto.ParseHeader(r.Header.Get("Authorization")); !ok || !c.Matches(relayproto.DeriveLegacy([]byte(secret))) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

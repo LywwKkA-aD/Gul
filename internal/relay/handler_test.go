@@ -725,13 +725,13 @@ func echoServer(t *testing.T) string {
 func bearerHeader(token string) http.Header {
 	header := make(http.Header)
 	if token != "" {
-		header.Set("Authorization", relayproto.Authorization([]byte(token)))
+		header.Set("Authorization", relayproto.DeriveLegacy([]byte(token)).Header())
 	}
 	return header
 }
 
 func testBearerCredential(secret string) []byte {
-	header := relayproto.Authorization([]byte(secret))
+	header := relayproto.DeriveLegacy([]byte(secret)).Header()
 	return []byte(strings.TrimPrefix(header, "Bearer "))
 }
 

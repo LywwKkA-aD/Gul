@@ -1,41 +1,109 @@
 // Package relayproto defines the narrow wire contract shared by the Gul app
-// and its fixed-target WSS relay.
+// and its fixed-target WSS relay: the path, the subprotocol, the message
+// size bound and the bearer credential derivation.
 package relayproto
 
 import (
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"strings"
 )
 
-const bearerDomain = "gul-relay-v1 bearer"
-
 const (
 	Path        = "/mumble"
 	Subprotocol = "gul-mumble-v1"
+
+	// MaxMessageBytes bounds one WebSocket message in either direction. The
+	// client sends one whole Mumble TCP packet per message, so the bound has
+	// to clear the largest packet murmur legitimately carries (images in
+	// chat, user textures: hundreds of KiB), while staying far below
+	// gumble's 10 MiB MaximumPacketBytes. Both sides MUST apply it: the
+	// websocket library disables its own limit when a connection is
+	// adapted into a net.Conn.
+	MaxMessageBytes = 1 << 20
+
+	// bearerIterations is the PBKDF2 work factor (OWASP 2023 guidance for
+	// PBKDF2-HMAC-SHA256). Derivation costs on the order of 100 ms: derive
+	// once per process or per password, never per request or per frame.
+	bearerIterations = 600_000
+
+	legacyDomain = "gul-relay-v1 bearer"
+	bearerSalt   = "gul-relay-v2 bearer"
+	v2Prefix     = "v2."
 )
 
-// Authorization returns a domain-separated, one-way bearer credential derived
-// from secret. It remains replayable and therefore still relies on HTTPS for
-// transport secrecy, but a leaked header is not the direct Mumble password.
-func Authorization(secret []byte) string {
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(bearerDomain))
-	return "Bearer " + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+// Credential is a derived bearer token without the "Bearer " scheme.
+//
+// It is a static shared secret: every client derives the same value from
+// the server join password, it is replayable by design, and HTTPS is what
+// keeps it confidential in transit. What the derivation buys is that a
+// leaked header does not hand over the Mumble password - recovering it
+// means brute-forcing the password through the PBKDF2 work factor.
+type Credential string
+
+// Derive computes the current (v2) bearer credential from the server join
+// password. Expensive by design; cache the result.
+func Derive(secret []byte) Credential {
+	key, err := pbkdf2.Key(sha256.New, string(secret), []byte(bearerSalt), bearerIterations, 32)
+	if err != nil {
+		// pbkdf2.Key only fails on a zero-length key or iteration count,
+		// both fixed constants here; a failure is a programming error.
+		panic("relayproto: pbkdf2 derivation failed: " + err.Error())
+	}
+	return Credential(v2Prefix + base64.RawURLEncoding.EncodeToString(key))
 }
 
-// MatchesAuthorization compares a supplied header with secret in constant
-// time after validating the strict single-token Bearer shape.
-func MatchesAuthorization(header string, secret []byte) bool {
-	scheme, credential, ok := strings.Cut(header, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || credential == "" || strings.ContainsAny(credential, " \t\r\n") {
-		return false
+// DeriveLegacy computes the v1 credential of v0.3.0-alpha.2 clients: a
+// single HMAC-SHA256 of a fixed domain string, which is cheap enough to
+// brute-force offline from a leaked header. It exists only so the relay
+// can keep accepting alpha.2 clients during a deprecation window.
+func DeriveLegacy(secret []byte) Credential {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(legacyDomain))
+	return Credential(base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+}
+
+// Header renders the credential as an Authorization header value.
+func (c Credential) Header() string { return "Bearer " + string(c) }
+
+// Legacy reports whether the credential uses the v1 scheme.
+func (c Credential) Legacy() bool { return !strings.HasPrefix(string(c), v2Prefix) }
+
+// Matches compares two credentials in constant time (over SHA-256 digests,
+// so differing lengths leak nothing either).
+func (c Credential) Matches(other Credential) bool {
+	a := sha256.Sum256([]byte(c))
+	b := sha256.Sum256([]byte(other))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+}
+
+// ParseHeader extracts the credential from an Authorization header value,
+// accepting only the strict single-token Bearer shape with a well-formed
+// token: an optional v2 prefix followed by unpadded base64url. Anything
+// else is rejected before any comparison happens.
+func ParseHeader(header string) (Credential, bool) {
+	scheme, token, ok := strings.Cut(header, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
 	}
-	provided := sha256.Sum256([]byte(credential))
-	expectedHeader := Authorization(secret)
-	_, expectedCredential, _ := strings.Cut(expectedHeader, " ")
-	expected := sha256.Sum256([]byte(expectedCredential))
-	return subtle.ConstantTimeCompare(provided[:], expected[:]) == 1
+	body := strings.TrimPrefix(token, v2Prefix)
+	if body == "" || len(body) > 128 || !validBase64URL(body) {
+		return "", false
+	}
+	return Credential(token), true
+}
+
+func validBase64URL(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }

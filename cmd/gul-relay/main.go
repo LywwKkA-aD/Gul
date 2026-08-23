@@ -116,7 +116,7 @@ func deriveCredentialCommand(args []string, stdin io.Reader, stdout io.Writer) e
 		return fmt.Errorf("read raw Mumble password: %w", err)
 	}
 	defer clear(secret)
-	authorization := relayproto.Authorization(secret)
+	authorization := relayproto.DeriveLegacy(secret).Header()
 	credential, ok := strings.CutPrefix(authorization, "Bearer ")
 	if !ok || credential == "" {
 		return errors.New("derive bearer credential")
