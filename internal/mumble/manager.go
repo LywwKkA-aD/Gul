@@ -76,7 +76,13 @@ type Manager struct {
 	pending    *tofuPending
 	restore    uint32
 	hasRestore bool
-	closed     bool
+
+	// Desired self mute/deafen, remembered so a reconnect can re-publish it.
+	selfMuted    bool
+	selfDeafened bool
+	hasSelfAudio bool
+
+	closed bool
 }
 
 // NewManager loads the TOFU store and the client certificate (generating it
@@ -409,6 +415,7 @@ func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent
 			// Fires from handleServerSync, i.e. state is fully synced here and
 			// dial has not returned yet.
 			m.restoreChannel(e.Client)
+			m.restoreSelfAudio(e.Client)
 		},
 		disconnect: func(e *gumble.DisconnectEvent) {
 			// Buffered by one and never blocking: the read loop must not wait.

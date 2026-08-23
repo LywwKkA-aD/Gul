@@ -82,6 +82,21 @@ type fakeController struct {
 	joinErr error
 	sendErr error
 	status  domain.ConnectionStatus
+
+	selfMutes []bool
+	selfDeafs []bool
+}
+
+func (c *fakeController) SetSelfMuted(muted bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.selfMutes = append(c.selfMutes, muted)
+}
+
+func (c *fakeController) SetSelfDeafened(deafened bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.selfDeafs = append(c.selfDeafs, deafened)
 }
 
 func (c *fakeController) Connect(address, username, password string) {

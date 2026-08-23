@@ -102,6 +102,9 @@ func (a *App) SetMute(muted bool) {
 	if v != nil {
 		v.SetMute(muted)
 	}
+	if ctrl, err := a.controller(); err == nil {
+		ctrl.SetSelfMuted(muted)
+	}
 	cue := CueUnmuted
 	if muted {
 		cue = CueMuted
@@ -125,6 +128,9 @@ func (a *App) SetDeafen(deafened bool) {
 
 	if v != nil {
 		v.SetDeafen(deafened)
+	}
+	if ctrl, err := a.controller(); err == nil {
+		ctrl.SetSelfDeafened(deafened)
 	}
 	a.publishSelfAudio(state)
 }

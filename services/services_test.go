@@ -44,6 +44,8 @@ func (r *recorder) SendMessage(_ uint32, text string) error {
 	return nil
 }
 func (r *recorder) AcceptFingerprint()              { r.mu.Lock(); defer r.mu.Unlock(); r.accepts++ }
+func (r *recorder) SetSelfMuted(bool)               {}
+func (r *recorder) SetSelfDeafened(bool)            {}
 func (r *recorder) Status() domain.ConnectionStatus { return domain.ConnectionStatus{} }
 func (r *recorder) Close()                          {}
 

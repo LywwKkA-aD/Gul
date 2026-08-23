@@ -37,6 +37,11 @@ type Controller interface {
 	// SendMessage sends plain text to the channel; HTML metacharacters are
 	// escaped inside (Mumble text messages are HTML).
 	SendMessage(channelID uint32, text string) error
+	// SetSelfMuted and SetSelfDeafened publish the local audio state to the
+	// server so other participants see it. Offline they record the intent,
+	// restored on the next connect.
+	SetSelfMuted(muted bool)
+	SetSelfDeafened(deafened bool)
 	// AcceptFingerprint confirms the pending TOFU mismatch (OnTofu) and
 	// retries the connection with the new pinned fingerprint.
 	AcceptFingerprint()
