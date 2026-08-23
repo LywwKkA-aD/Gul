@@ -87,6 +87,10 @@ tasks:
           Docker image '{{.CROSS_IMAGE}}' not found.
           Build it first: wails3 task setup:docker
     cmds:
+      - >-
+        echo "WARNING: building through the wails-cross container - unofficial
+        developer build, not release-equivalent. Toolchain and packaging differ
+        from a release; releases come only from .github/workflows/ci.yml."
       - task: generate:syso
         vars:
           ARCH: '{{.ARCH}}'

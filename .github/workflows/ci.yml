@@ -19,6 +19,7 @@ env:
   WAILS3_VERSION: v3.0.0-beta.11
   GOLANGCI_LINT_VERSION: v2.13.1
   GOVULNCHECK_VERSION: v1.7.0
+  ACTIONLINT_VERSION: v1.7.7
   NODE_VERSION: '24'
   MINGW_GCC_VERSION: '15.2.0'
 
@@ -26,11 +27,17 @@ jobs:
   build-test:
     name: build-test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # The Windows leg cold-compiles the vendored C/C++ tree (~270 translation
+    # units) and then runs the suite under -race. The Go cache key includes
+    # third_party, so any vendored bump makes that cold build the normal case.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-latest]
+        # Pinned images only: a floating label silently changes the Xcode,
+        # SDK and toolchain of a release build. Bump deliberately, together
+        # with LSMinimumSystemVersion, once the newer image is GA.
+        os: [ubuntu-24.04, windows-2025, macos-15]
     defaults:
       run:
         # Every scripted step below uses POSIX syntax; on Windows this selects
@@ -45,13 +52,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check version metadata
+        # internal/core/app.go is the single source of truth; the checker
+        # derives every packaging representation and fails on any disagreement.
+        run: bash scripts/check-version.sh
+
+      - name: Verify the version checker
+        run: bash scripts/check-version_test.sh
+
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
-          app_version="$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' internal/core/app.go)"
-          test -n "$app_version"
-          test "$GITHUB_REF_NAME" = "v$app_version"
+          test "$GITHUB_REF_NAME" = "v$(bash scripts/check-version.sh --print app)"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -230,8 +243,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          relay_version="$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' internal/core/app.go)"
-          test -n "$relay_version"
+          relay_version="$(bash scripts/check-version.sh --print app)"
           mkdir -p bin
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -trimpath \
@@ -250,16 +262,20 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GOARCH: amd64
-          GIT_COMMITTER_NAME: Gul contributors
-          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
+          # The maintainer identity is not set here: build/linux/Taskfile.yml
+          # holds the single default, so local and released DEBs agree.
           wails3 task linux:create:deb ARCH=amd64
 
           test "$(dpkg-deb --field bin/gul.deb Package)" = "gul"
           test "$(dpkg-deb --field bin/gul.deb Architecture)" = "amd64"
-          test "$(dpkg-deb --field bin/gul.deb Version)" = "0.3.0~alpha2-1"
+          test "$(dpkg-deb --field bin/gul.deb Version)" = "$(bash scripts/check-version.sh --print deb)"
           test "$(dpkg-deb --field bin/gul.deb Section)" = "net"
+          # lintian rejects a maintainer that is not a valid addr-spec, which
+          # is what the github-actions[bot] address used to produce here.
+          package_maintainer="$(dpkg-deb --field bin/gul.deb Maintainer)"
+          grep -Eq '^[^<>]+ <[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}>$' <<<"$package_maintainer"
           test "$(dpkg-deb --field bin/gul.deb Priority)" = "optional"
           package_dependencies="$(dpkg-deb --field bin/gul.deb Depends)"
           grep -Fq 'libgtk-4-1' <<<"$package_dependencies"
@@ -368,10 +384,37 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install actionlint
+        # Pinned version, fetched through the Go module proxy: the checksum
+        # database verifies the download.
+        run: go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+
+      - name: Lint workflows
+        # The shellcheck and pyflakes integrations are disabled on purpose:
+        # they are present on some runner images and absent on others, which
+        # would make this gate depend on the image instead of on the workflow.
+        run: actionlint -color -shellcheck= -pyflakes=
+
   release:
     name: publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-test
+    needs: [build-test, actionlint]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

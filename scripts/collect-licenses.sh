@@ -33,6 +33,9 @@ cleanup() {
   if [[ -n "${staging_dir:-}" && -d "$staging_dir" ]]; then
     rm -rf -- "$staging_dir"
   fi
+  if [[ -n "${module_list:-}" && -f "$module_list" ]]; then
+    rm -f -- "$module_list"
+  fi
 }
 trap cleanup EXIT
 
@@ -54,18 +57,26 @@ cp "$repo_root/NOTICE" "$staging_dir/NOTICE"
   echo "Vendored native sources"
 } >"$manifest"
 
+vendored_licenses=0
 while IFS= read -r source_file; do
   relative_path=${source_file#"$repo_root/"}
   destination="$licenses_dir/vendored/$relative_path"
   mkdir -p "$(dirname "$destination")"
   cp "$source_file" "$destination"
   printf '  %s\n' "$relative_path" >>"$manifest"
+  vendored_licenses=$((vendored_licenses + 1))
 done < <(
   find "$repo_root/third_party" -type f \
-    \( -iname '*license*' -o -iname '*copying*' -o -iname 'notice*' \
-       -o -iname 'patents*' -o -iname 'authors*' -o -iname 'version' \) \
+    \( -iname '*license*' -o -iname '*licence*' -o -iname '*copying*' \
+       -o -iname '*copyright*' -o -iname 'notice*' -o -iname 'patents*' \
+       -o -iname 'authors*' -o -iname 'version' \) \
     -print | sort
 )
+
+if [[ "$vendored_licenses" -eq 0 ]]; then
+  echo "No license files found below $repo_root/third_party" >&2
+  exit 1
+fi
 
 {
   echo
@@ -91,21 +102,50 @@ if [[ -f "$go_root/PATENTS" ]]; then
 fi
 printf '  Go toolchain: %s\n' "$(go version)" >>"$manifest"
 
-# This union is the platform-specific runtime graph across macOS, Windows and
-# Linux. Test-only modules and build tools are deliberately excluded.
-go_modules=(
-  github.com/LywwKkA-aD/gumble
-  github.com/adrg/xdg
-  github.com/coder/websocket
-  github.com/godbus/dbus/v5
-  github.com/go-ole/go-ole
-  github.com/mattn/go-colorable
-  github.com/mattn/go-isatty
-  github.com/wailsapp/wails/v3
-  golang.org/x/net
-  golang.org/x/sys
-  google.golang.org/protobuf
+# The runtime module set is derived from the shipped build graphs instead of
+# being maintained by hand: every target of the release matrix contributes,
+# and their union is what a released binary can contain. Test-only modules and
+# build tools never enter these graphs, so they stay out on their own. The
+# build tags must match the ones the release builds use: dependencies that
+# only exist in the default-tag graph are not shipped and must not be
+# attributed as if they were.
+#
+# Fields: GOOS GOARCH CGO_ENABLED package.
+shipped_targets=(
+  "darwin amd64 1 ."
+  "darwin arm64 1 ."
+  "linux amd64 1 ."
+  "windows amd64 1 ."
+  "linux amd64 0 ./cmd/gul-relay"
 )
+
+module_list=$(mktemp "${TMPDIR:-/tmp}/gul-modules.XXXXXX")
+main_module=$(cd "$repo_root" && go list -m)
+for shipped_target in "${shipped_targets[@]}"; do
+  read -r target_os target_arch target_cgo target_package <<<"$shipped_target"
+  if ! (
+    cd "$repo_root"
+    GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED="$target_cgo" \
+      go list -deps -tags production \
+      -f '{{if .Module}}{{.Module.Path}}{{end}}' "$target_package"
+  ) >>"$module_list"; then
+    echo "Cannot list the $target_os/$target_arch build graph of $target_package" >&2
+    exit 1
+  fi
+done
+
+go_modules=()
+while IFS= read -r module_path; do
+  if [[ -z "$module_path" || "$module_path" == "$main_module" ]]; then
+    continue
+  fi
+  go_modules+=("$module_path")
+done < <(sort -u "$module_list")
+
+if [[ "${#go_modules[@]}" -eq 0 ]]; then
+  echo "No third-party Go modules found in the shipped build graphs" >&2
+  exit 1
+fi
 
 for module_path in "${go_modules[@]}"; do
   # `go list -m` can report an empty .Dir for a selected module that is only
@@ -152,7 +192,8 @@ for module_path in "${go_modules[@]}"; do
     found_license=1
   done < <(
     find "$module_dir" -type f \
-      \( -iname '*license*' -o -iname '*copying*' -o -iname 'notice*' -o -iname 'patents*' \) \
+      \( -iname '*license*' -o -iname '*licence*' -o -iname '*copying*' \
+         -o -iname '*copyright*' -o -iname 'notice*' -o -iname 'patents*' \) \
       -not -path "$module_dir/examples/*" \
       -not -path "$module_dir/internal/templates/*" \
       -not -path "$module_dir/internal/setupwizard/*" \
@@ -218,7 +259,8 @@ while IFS='|' read -r package_name package_version package_dir; do
     found_license=1
   done < <(
     find "$package_dir" -maxdepth 1 -type f \
-      \( -iname '*license*' -o -iname '*copying*' -o -iname 'notice*' \) \
+      \( -iname '*license*' -o -iname '*licence*' -o -iname '*copying*' \
+         -o -iname '*copyright*' -o -iname 'notice*' \) \
       -print | sort
   )
 
@@ -233,7 +275,9 @@ const path = require("node:path");
 const lock = require("./frontend/package-lock.json");
 
 for (const [packagePath, metadata] of Object.entries(lock.packages ?? {})) {
-  if (!packagePath.startsWith("node_modules/") || metadata.dev) {
+  // devOptional marks a package reachable only through the development and
+  // optional trees - type definitions, for instance - so it is not bundled.
+  if (!packagePath.startsWith("node_modules/") || metadata.dev || metadata.devOptional) {
     continue;
   }
   const name = metadata.name ?? packagePath.slice("node_modules/".length);

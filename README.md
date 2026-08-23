@@ -25,6 +25,13 @@ RNNoise, VAD и Push-to-talk при фокусе окна.
 | mumble-server (стенд) | mumblevoip/mumble-server:v1.5.915 |
 | golangci-lint | v2.13.1 |
 
+Версия приложения задаётся один раз — константой `Version` в
+`internal/core/app.go`. `scripts/check-version.sh` выводит из неё каждое
+представление (`build/config.yml`, plist-файлы, `info.json`, NSIS, nfpm,
+версия DEB, `frontend/package.json` и lock-файл) и падает при расхождении; проверка входит в
+`task lint` и в CI. При смене версии правится константа, затем
+`bash scripts/check-version.sh` показывает, какие копии остались старыми.
+
 ## Подготовка окружения
 
 ```sh
@@ -40,7 +47,7 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ```sh
 task murmur:up      # локальный Mumble-сервер в докере (порт 64738)
 task dev            # приложение в dev-режиме
-task lint           # gofmt + go vet + golangci-lint + eslint
+task lint           # версии + заголовки + gofmt + go vet + golangci-lint + eslint
 task test           # go test -race (без устройств и сети)
 task test:live      # смоук-тесты против запущенного стенда
 task murmur:logs    # логи сервера
@@ -91,3 +98,15 @@ Workflow `CI` можно запустить вручную во вкладке A
 подписанные установщики остаются задачей M4. На Windows также нужен WebView2 Runtime
 (в Windows 11 он уже входит в систему). Linux-пакет устанавливается вместе с зависимостями:
 `sudo apt install ./gul-linux-amd64.deb`.
+
+## Кросс-сборка через Docker
+
+`task build`/`task package` для чужой ОС уходят в контейнер `wails-cross`
+(`task setup:docker`). Это неофициальные сборки для разработки, а не
+эквивалент релиза: контейнер собирает C++ через Zig и libc++ вместо MinGW GCC
+со статическим libstdc++, не линкует `-extldflags=-static`, не кладёт
+лицензионный комплект, не делает установщики и сам не генерирует
+Windows-ресурсы и манифест (`.syso`). Об этом печатается баннер при каждом
+запуске. Сводить два рантайма в один не планируется: релизные артефакты
+выпускает только `.github/workflows/ci.yml` на нативных раннерах, и это
+единственный путь релиза.

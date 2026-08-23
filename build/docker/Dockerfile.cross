@@ -1,4 +1,13 @@
-# Cross-compile Wails v3 apps to any platform
+# Cross-compile Wails v3 apps to any platform.
+#
+# UNOFFICIAL DEVELOPER BUILDS ONLY - NOT RELEASE-EQUIVALENT.
+# Releases are produced solely by .github/workflows/ci.yml on native runners.
+# This image differs from that pipeline in ways that change the artifact:
+# Zig with libc++ instead of MinGW GCC with a static libstdc++, no
+# -extldflags=-static, no license bundle and no installer or package step; it
+# also never generates the Windows resource/manifest .syso itself. Unifying
+# the two runtimes is a non-goal; the build script below states the difference
+# on every invocation instead.
 #
 # Darwin: Zig + macOS SDK
 # Linux: Native GCC when host matches target, Zig for cross-arch
@@ -166,6 +175,19 @@ set -e
 OS=${1:-darwin}
 ARCH=${2:-arm64}
 
+cat >&2 <<'BANNER'
+======================================================================
+ UNOFFICIAL DEVELOPER BUILD - NOT RELEASE-EQUIVALENT
+ This container is a convenience cross-compiler, not the release
+ pipeline. Toolchain and packaging both differ from a release: Zig
+ with libc++ instead of MinGW GCC with a static libstdc++, no
+ -extldflags=-static, no license bundle, no installer or package step.
+ Windows resources and the manifest are present only when the caller
+ generated the .syso beforehand.
+ Releases are produced only by .github/workflows/ci.yml.
+======================================================================
+BANNER
+
 case "${OS}-${ARCH}" in
     darwin-arm64|darwin-aarch64)
         export CC=zcc-darwin-arm64
@@ -244,6 +266,7 @@ fi
 
 ${COMPILER} -tags "$TAGS" -trimpath -buildvcs=false -ldflags="$LDFLAGS" -o bin/${APP}-${GOOS}-${GOARCH}${EXT} .
 echo "Built: bin/${APP}-${GOOS}-${GOARCH}${EXT}"
+echo "Reminder: unofficial developer build, not release-equivalent." >&2
 SCRIPT
 RUN chmod +x /usr/local/bin/build.sh
 

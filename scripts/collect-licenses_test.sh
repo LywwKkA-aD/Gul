@@ -105,6 +105,60 @@ grep -Fq 'react@19.2.8' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq '@fontsource/ibm-plex-sans@5.3.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'third_party/toolchain-runtime/gcc/COPYING.RUNTIME' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 
+# The Go module set is derived from the build graph of every shipped target,
+# so platform-specific dependencies are attributed whatever the host is.
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/go-ole/go-ole/LICENSE"
+grep -Fq 'github.com/go-ole/go-ole@' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'golang.org/x/sys@' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+
+# devOptional packages (type definitions and their dependencies) belong to the
+# development tree only and must not be attributed as bundled.
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/npm/@types"
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/npm/csstype"
+if grep -Eq '^  (@types/|csstype@)' "$output_dir/THIRD_PARTY_MANIFEST.txt"; then
+  echo "development-only npm packages must not be attributed as bundled" >&2
+  exit 1
+fi
+
+# A module whose directory carries no license text must stop the release, not
+# ship an unattributed dependency.
+stripped_go_bin="$test_root/stripped-go-bin"
+stripped_module_dir="$test_root/stripped-module"
+stripped_output="$test_root/stripped/legal"
+mkdir -p "$stripped_go_bin" "$stripped_module_dir" "$(dirname "$stripped_output")"
+touch "$stripped_module_dir/README.md"
+cat >"$stripped_go_bin/go" <<'STRIPPED_GO'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${1:-}" == "mod" && "${2:-}" == "download" && "$*" == *"$GUL_TEST_STRIPPED_MODULE"* ]]; then
+  # Same metadata the real toolchain reports, but pointing at a directory
+  # whose license file has been removed.
+  "$GUL_TEST_REAL_GO" "$@" | node -e '
+    const fs = require("node:fs");
+    const metadata = JSON.parse(fs.readFileSync(0, "utf8"));
+    metadata.Dir = process.env.GUL_TEST_STRIPPED_DIR;
+    process.stdout.write(JSON.stringify(metadata));
+  '
+  exit 0
+fi
+
+exec "$GUL_TEST_REAL_GO" "$@"
+STRIPPED_GO
+chmod +x "$stripped_go_bin/go"
+
+if GUL_TEST_STRIPPED_MODULE="github.com/adrg/xdg" \
+  GUL_TEST_STRIPPED_DIR="$stripped_module_dir" \
+  GUL_TEST_REAL_GO="$real_go" \
+  PATH="$stripped_go_bin:$PATH" \
+  "$repo_root/scripts/collect-licenses.sh" "$stripped_output" >/dev/null 2>"$test_root/stripped.log"; then
+  echo "collector accepted a Go module without a license file" >&2
+  exit 1
+fi
+grep -Fq 'No license file found for Go module: github.com/adrg/xdg' "$test_root/stripped.log"
+test ! -e "$stripped_output"
+
 if find "$output_dir" -type l -print -quit | grep -q .; then
   echo "license bundle must contain regular files, not symlinks" >&2
   exit 1
