@@ -99,7 +99,8 @@
      gul-in is used with --t-fast (tooltip) and --t-mid (menu, banner) in the
      prototype; animate-in takes the --t-mid flavour, the faster one is a
      one-liner arbitrary value where it is needed. */
-  --animate-halo: gul-halo var(--t-pulse) var(--e-out) infinite;
+  /* The speech halo is not a utility: it needs a paused state and a fade-out,
+     so the ripple and its wrapper live as .gul-halo* in base.css. */
   --animate-bar: gul-bar 620ms var(--e-in-out) infinite;
   --animate-level: gul-level 2600ms var(--e-in-out) infinite;
   --animate-in: gul-in var(--t-mid) var(--e-out);

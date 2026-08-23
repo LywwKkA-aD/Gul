@@ -24,6 +24,22 @@ const (
 var (
 	ErrUnknownGateMode  = config.ErrUnknownGateMode
 	ErrInvalidVADTuning = errors.New("invalid vad tuning")
+	ErrInvalidCueVolume = errors.New("invalid cue volume")
+)
+
+// Cue identifies a UI sound. The engine synthesises the clips and mixes them
+// into the receive path (DECISIONS.md 2026-08-23), so core only names the
+// event; the adapter in main.go translates to the engine's own type.
+type Cue int
+
+const (
+	// CueJoin and CueLeave mark somebody else arriving in or leaving the
+	// channel we are in.
+	CueJoin Cue = iota
+	CueLeave
+	// CueMuted and CueUnmuted confirm our own microphone toggle.
+	CueMuted
+	CueUnmuted
 )
 
 // VoiceEngine is what core needs from the audio engine; the adapter in
@@ -41,6 +57,8 @@ type VoiceEngine interface {
 	SetGateMode(mode GateMode)
 	SetVADTuning(open, close float32, hangoverMs int)
 	SetPTT(held bool)
+	SetCueVolume(volume float32)
+	PlayCue(cue Cue)
 	Devices() (playback, capture []domain.AudioDevice, err error)
 }
 
@@ -84,20 +102,6 @@ func (a *App) stopVoice() {
 	}
 }
 
-// SetMute gates the microphone; the engine closes the transmission.
-func (a *App) SetMute(muted bool) {
-	if v := a.voiceEngine(); v != nil {
-		v.SetMute(muted)
-	}
-}
-
-// SetDeafen silences all remote streams locally.
-func (a *App) SetDeafen(deafened bool) {
-	if v := a.voiceEngine(); v != nil {
-		v.SetDeafen(deafened)
-	}
-}
-
 // SetUserVolume sets the per-user gain by the stable certificate hash, so
 // it survives the peer reconnecting.
 func (a *App) SetUserVolume(hash string, volume float32) {
@@ -117,6 +121,9 @@ func (a *App) SetGateMode(mode string) error {
 		v.SetGateMode(m)
 	}
 	a.updateSettings(func(c *config.Config) { c.Gate.Mode = m })
+	// Only push-to-talk watches a key globally; leaving it means the watch
+	// stops and the transmission it may hold open is closed (hotkey.go).
+	a.applyGlobalPTT()
 	return nil
 }
 
@@ -152,6 +159,36 @@ func applyGate(v VoiceEngine, gate config.Gate) {
 	applyVADTuning(v, gate.OpenThreshold, gate.HangoverMs)
 }
 
+// SetCueVolume sets the loudness of the UI cues and remembers it. The engine
+// clamps as well, but a request it would have to bend is a UI defect, not a
+// setting: report it instead of storing something the user did not ask for.
+func (a *App) SetCueVolume(volume float64) error {
+	if !config.ValidCueVolume(volume) {
+		return fmt.Errorf("%w: cue volume %v outside [0, 1]", ErrInvalidCueVolume, volume)
+	}
+	if v := a.voiceEngine(); v != nil {
+		v.SetCueVolume(float32(volume))
+	}
+	a.updateSettings(func(c *config.Config) { c.Audio.CueVolume = volume })
+	return nil
+}
+
+// playCue asks the engine for a UI sound. Never blocks and never fails: a cue
+// that arrives while the engine is stopped is simply not heard.
+func (a *App) playCue(cue Cue) {
+	if v := a.voiceEngine(); v != nil {
+		v.PlayCue(cue)
+	}
+}
+
+// applyCueVolume pushes a stored cue gain onto the engine.
+func applyCueVolume(v VoiceEngine, volume float64) {
+	if v == nil {
+		return
+	}
+	v.SetCueVolume(float32(volume))
+}
+
 func applyVADTuning(v VoiceEngine, open float64, hangoverMs int) {
 	if v == nil {
 		return
@@ -160,10 +197,20 @@ func applyVADTuning(v VoiceEngine, open float64, hangoverMs int) {
 }
 
 // SetPTT reports whether the push-to-talk key is held. It runs on every key
-// transition and stays a plain forward; the engine only flips an atomic.
+// transition from the window listener and from the global key. Besides the
+// engine atomic it pushes EventAudioPTT so the microphone indicator tracks the
+// global key too (it fires with the window unfocused, where the window
+// listener never runs); the push is deduplicated so a repeated state is silent.
 func (a *App) SetPTT(held bool) {
 	if v := a.voiceEngine(); v != nil {
 		v.SetPTT(held)
+	}
+	a.mu.Lock()
+	changed := a.pttHeld != held
+	a.pttHeld = held
+	a.mu.Unlock()
+	if changed {
+		a.emit(domain.EventAudioPTT, domain.PTTState{Held: held})
 	}
 }
 

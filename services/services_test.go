@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/core"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
@@ -180,13 +181,39 @@ type voiceRecorder struct {
 	modes   []core.GateMode
 	tunings []string
 	ptt     []bool
+	mutes   []bool
+	deafens []bool
+	cues    []core.Cue
+	cueVols []float32
 }
 
 func (v *voiceRecorder) Start(string, string) error { return nil }
 func (v *voiceRecorder) Stop()                      {}
-func (v *voiceRecorder) SetMute(bool)               {}
-func (v *voiceRecorder) SetDeafen(bool)             {}
 func (v *voiceRecorder) SetUserVolume(string, float32) {
+}
+
+func (v *voiceRecorder) SetMute(muted bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.mutes = append(v.mutes, muted)
+}
+
+func (v *voiceRecorder) SetDeafen(deafened bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.deafens = append(v.deafens, deafened)
+}
+
+func (v *voiceRecorder) SetCueVolume(volume float32) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cueVols = append(v.cueVols, volume)
+}
+
+func (v *voiceRecorder) PlayCue(cue core.Cue) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cues = append(v.cues, cue)
 }
 
 func (v *voiceRecorder) SetGateMode(mode core.GateMode) {
@@ -275,13 +302,14 @@ func TestAudioServicePropagatesValidationErrors(t *testing.T) {
 
 func TestSettingsServiceDelegates(t *testing.T) {
 	t.Parallel()
-	app, _ := newAudioApp(t)
+	app, voice := newAudioApp(t)
 	svc := NewSettingsService(app)
 	audio := NewAudioService(app)
 
 	// The snapshot is what the UI starts on, so it has to follow every path
 	// that changes a setting - including the ones on other services.
-	if got := svc.Load(); got.GateMode != string(core.GateModeVAD) || got.PttKey != "Space" {
+	if got := svc.Load(); got.GateMode != string(core.GateModeVAD) || got.PttKey != "Space" ||
+		got.CueVolume != config.DefaultCueVolume {
 		t.Fatalf("Load() = %+v, want the defaults", got)
 	}
 	if err := audio.SetGateMode("ptt"); err != nil {
@@ -294,14 +322,75 @@ func TestSettingsServiceDelegates(t *testing.T) {
 	if err := svc.SetPTTKey("KeyF"); err != nil {
 		t.Fatalf("SetPTTKey: %v", err)
 	}
+	svc.SetGlobalPTT(true)
+	if err := svc.SetCueVolume(0.25); err != nil {
+		t.Fatalf("SetCueVolume: %v", err)
+	}
 
 	got := svc.Load()
 	want := Settings{
 		CaptureID: "aa11", PlaybackID: "bb22",
 		GateMode: string(core.GateModePTT), VadOpen: 0.8, HangoverMs: 700, PttKey: "KeyF",
+		GlobalPtt: true, CueVolume: 0.25,
+		// No monitor is injected in a service test, so the machine reports
+		// what a platform without one would.
+		Hotkey: Hotkey{Mode: "unsupported"},
 	}
 	if got != want {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
+	}
+	// The gain reaches the engine, not just the document.
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.cueVols) != 1 || voice.cueVols[0] != 0.25 {
+		t.Fatalf("cue volumes at the engine = %v, want [0.25]", voice.cueVols)
+	}
+}
+
+func TestSettingsServiceRejectsAnImpossibleCueVolume(t *testing.T) {
+	t.Parallel()
+	app, voice := newAudioApp(t)
+	svc := NewSettingsService(app)
+
+	if err := svc.SetCueVolume(1.5); !errors.Is(err, core.ErrInvalidCueVolume) {
+		t.Fatalf("SetCueVolume err = %v, want %v", err, core.ErrInvalidCueVolume)
+	}
+	if got := svc.Load().CueVolume; got != config.DefaultCueVolume {
+		t.Errorf("cue volume = %v, want it untouched", got)
+	}
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.cueVols) != 0 {
+		t.Fatalf("engine reached despite invalid input: %v", voice.cueVols)
+	}
+}
+
+// Mute and deafen are reachable from the window and from the system tray, so
+// the service has to be a plain forward to the one place that owns the state.
+func TestAudioServiceSelfStateDelegates(t *testing.T) {
+	t.Parallel()
+	app, voice := newAudioApp(t)
+	svc := NewAudioService(app)
+
+	if got := svc.SelfState(); got.Muted || got.Deafened {
+		t.Fatalf("SelfState() = %+v, want everything on", got)
+	}
+	svc.SetMute(true)
+	svc.SetDeafen(true)
+
+	if got := svc.SelfState(); !got.Muted || !got.Deafened {
+		t.Fatalf("SelfState() = %+v, want both off", got)
+	}
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.mutes) != 1 || !voice.mutes[0] {
+		t.Errorf("mutes = %v, want [true]", voice.mutes)
+	}
+	if len(voice.deafens) != 1 || !voice.deafens[0] {
+		t.Errorf("deafens = %v, want [true]", voice.deafens)
+	}
+	if len(voice.cues) != 1 || voice.cues[0] != core.CueMuted {
+		t.Errorf("cues = %v, want [CueMuted]", voice.cues)
 	}
 }
 

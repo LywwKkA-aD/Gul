@@ -13,3 +13,5 @@ export { Spinner } from './Spinner';
 export type { SpinnerProps } from './Spinner';
 export { TextInput } from './TextInput';
 export type { TextInputProps } from './TextInput';
+export { Tooltip } from './Tooltip';
+export type { TooltipProps } from './Tooltip';

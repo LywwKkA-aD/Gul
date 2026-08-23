@@ -11,7 +11,8 @@ import {
   initialsOf,
   tintFor,
 } from '../state/types';
-import { Avatar } from './ui';
+import { Avatar, Tooltip } from './ui';
+import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
 
 export function MemberList({ channel }: { channel: ChannelNode | null }) {
@@ -78,15 +79,23 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   return (
     <li className="group rounded-md transition-colors duration-[var(--t-fast)] hover:bg-bg-0">
       {adjustable ? (
-        <button
-          type="button"
-          onClick={() => setPinned((p) => !p)}
-          aria-expanded={pinned}
-          title={`Громкость: ${user.name}`}
-          className={cx(rowClass, 'cursor-pointer')}
+        // The row is the only affordance for the per-user gain: the slider
+        // below it is revealed by hover, which says nothing to a keyboard.
+        <Tooltip
+          label={pinned ? 'Скрыть громкость' : 'Громкость участника'}
+          className="w-full"
+          delayMs={TOOLTIP_DELAY_ROW_MS}
         >
-          {row}
-        </button>
+          <button
+            type="button"
+            onClick={() => setPinned((p) => !p)}
+            aria-expanded={pinned}
+            aria-label={`Громкость: ${user.name}`}
+            className={cx(rowClass, 'cursor-pointer')}
+          >
+            {row}
+          </button>
+        </Tooltip>
       ) : (
         <div className={rowClass} title={user.name}>
           {row}

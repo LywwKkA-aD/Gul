@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, GUL_RELAY_ADDRESS, normalizeSettings } from './settings.ts';
+import {
+  CUE_VOLUME_DEFAULT,
+  DEFAULT_SETTINGS,
+  GUL_RELAY_ADDRESS,
+  clampCueVolume,
+  normalizeSettings,
+} from './settings.ts';
 import { VAD_HANGOVER_CHOICES, VAD_OPEN_MAX, VAD_OPEN_MIN } from './gate.ts';
+import { DEFAULT_HOTKEY } from './hotkey.ts';
 
 // The snapshot crosses a bridge: what arrives is whatever the running Go
 // build sends, and nothing at all when the call fails. The store has to end
@@ -17,6 +24,8 @@ const snapshot = {
   hangoverMs: 500,
   pttKey: 'KeyF',
   globalPtt: false,
+  cueVolume: 0.35,
+  hotkey: { mode: 'hold', reason: '', error: '' },
 };
 
 test('a complete snapshot is taken as it is', () => {
@@ -66,13 +75,30 @@ test('a missing key falls back to the default binding', () => {
   }
 });
 
-// The global hotkey lands with its own wiring; until then nothing but a
-// literal true may switch it on.
 test('the global push-to-talk flag is off unless it is exactly true', () => {
   for (const globalPtt of ['true', 1, undefined, null]) {
     assert.equal(normalizeSettings({ ...snapshot, globalPtt }).globalPtt, false);
   }
   assert.equal(normalizeSettings({ ...snapshot, globalPtt: true }).globalPtt, true);
+});
+
+// Zero is a choice - it is how the cues are turned off - so only a value that
+// carries no meaning at all may fall back to the shipped gain.
+test('a cue gain outside the accepted range folds into it', () => {
+  assert.equal(normalizeSettings({ ...snapshot, cueVolume: 0 }).cueVolume, 0);
+  assert.equal(normalizeSettings({ ...snapshot, cueVolume: -1 }).cueVolume, 0);
+  assert.equal(normalizeSettings({ ...snapshot, cueVolume: 4 }).cueVolume, 1);
+  for (const cueVolume of ['loud', undefined, null, NaN]) {
+    assert.equal(normalizeSettings({ ...snapshot, cueVolume }).cueVolume, CUE_VOLUME_DEFAULT);
+  }
+  assert.equal(clampCueVolume(0.5), 0.5);
+});
+
+// The hotkey block says what the machine can do with the stored key; a build
+// that does not send it must not read as a machine that watches keys.
+test('a missing hotkey block reads as no global key', () => {
+  assert.deepEqual(normalizeSettings({ ...snapshot, hotkey: undefined }).hotkey, DEFAULT_HOTKEY);
+  assert.deepEqual(normalizeSettings(snapshot).hotkey, snapshot.hotkey);
 });
 
 // The offered relay is the one address the app suggests on its own; anything

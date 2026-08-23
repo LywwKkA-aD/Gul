@@ -14,6 +14,7 @@ import {
   IconButton,
   Spinner,
   TextInput,
+  Tooltip,
   type AvatarSize,
 } from '../ui';
 
@@ -354,6 +355,52 @@ function IconButtons() {
   );
 }
 
+function Tooltips() {
+  // The halo is the one state that cannot be shown standing still: it has to
+  // be switched off to see the phrase end fade out.
+  const [speaking, setSpeaking] = useState(true);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Row label="light">
+        <Tooltip label="Настройки">
+          <IconButton aria-label="Настройки">
+            <GearSixIcon size={16} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip label="Собрать диагностику (логи и версия в zip)">
+          <IconButton aria-label="Диагностика">
+            <SpeakerHighIcon size={16} />
+          </IconButton>
+        </Tooltip>
+      </Row>
+      <div className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-4 rounded-md bg-sb-1 p-4">
+        <span className="font-mono text-xs text-sb-text-3">sidebar</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <Tooltip label="Выключить микрофон">
+            <IconButton surface="sidebar" aria-label="Выключить микрофон">
+              <MicrophoneIcon size={16} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip label="Выключить звук — не слышно никого">
+            <IconButton surface="sidebar" aria-label="Выключить звук">
+              <SpeakerHighIcon size={16} />
+            </IconButton>
+          </Tooltip>
+        </div>
+      </div>
+      <Row label="halo">
+        <Avatar size={36} tint={0} initials="ГУ" speaking={speaking} />
+        <Avatar size={30} tint={2} initials="ГУ" speaking={speaking} haloIndex={1} />
+        <Avatar size={24} tint={4} initials="ГУ" speaking={speaking} haloIndex={2} />
+        <Button variant="quiet" onClick={() => setSpeaking((s) => !s)}>
+          {speaking ? 'Замолчать' : 'Заговорить'}
+        </Button>
+      </Row>
+    </div>
+  );
+}
+
 function Fields() {
   return (
     <div className="flex w-full max-w-[420px] flex-col gap-4 rounded-lg bg-bg-1 p-5 shadow-[var(--sh-md)]">
@@ -410,6 +457,13 @@ export default function Styleguide() {
 
         <Section title="Иконочные кнопки" note="28×28, r-md; tone=danger красит только активное состояние — как мьют и глухота в подвале сайдбара.">
           <IconButtons />
+        </Section>
+
+        <Section
+          title="Тултипы и речь"
+          note="Тултип — тёмная плашка над контролом, появляется через 280 мс наведения и по фокусу с клавиатуры; ореол речи гаснет за --t-slow, а не пропадает."
+        >
+          <Tooltips />
         </Section>
 
         <Section title="Кнопки, бейджи, спиннер">

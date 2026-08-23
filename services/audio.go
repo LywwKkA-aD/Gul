@@ -15,6 +15,13 @@ func NewAudioService(app *core.App) *AudioService {
 	return &AudioService{app: app}
 }
 
+// SelfState is the current microphone and monitor state, for a UI that has
+// just mounted. Later changes arrive as domain.EventAudioSelf, from whichever
+// path made them - the window, the system tray, or core itself.
+func (s *AudioService) SelfState() domain.SelfAudioState {
+	return s.app.SelfAudio()
+}
+
 // SetMute gates the microphone.
 func (s *AudioService) SetMute(muted bool) {
 	s.app.SetMute(muted)

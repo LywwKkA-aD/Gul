@@ -7,7 +7,9 @@ import {
   clampOpenThreshold,
   snapHangoverMs,
 } from './gate.ts';
+import { DEFAULT_HOTKEY, normalizeHotkey } from './hotkey.ts';
 import type { GateMode } from './gate';
+import type { HotkeyStatus } from './hotkey';
 
 // Settings persisted by the Go side (internal/config, config.json) and read
 // once at startup through SettingsService. The frontend never stores them: it
@@ -16,6 +18,19 @@ import type { GateMode } from './gate';
 
 /** The official Gul relay, offered by an explicit action - never prefilled. */
 export const GUL_RELAY_ADDRESS = 'wss://murmur.gulvox.com/mumble';
+
+/** Gain of the UI cues (join, leave, mute, unmute). Mirrors internal/config:
+    the range is [0, 1] and 0 is how the user turns the cues off. */
+export const CUE_VOLUME_MIN = 0;
+export const CUE_VOLUME_MAX = 1;
+export const CUE_VOLUME_DEFAULT = 0.5;
+
+/** Folds a cue gain into the accepted range; a value that carries no meaning
+    at all falls back to the default. Zero is left alone - it is a choice. */
+export function clampCueVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return CUE_VOLUME_DEFAULT;
+  return Math.min(CUE_VOLUME_MAX, Math.max(CUE_VOLUME_MIN, volume));
+}
 
 /** The persisted settings as the store holds them. Mirrors services.Settings
     (bindings: services/models.ts). The server password is not part of it: it
@@ -30,6 +45,10 @@ export interface GulSettings {
   hangoverMs: number;
   pttKey: string;
   globalPtt: boolean;
+  cueVolume: number;
+  /** Runtime state rather than a stored setting: what this machine can do
+      with the key that is stored (services.Settings.Hotkey). */
+  hotkey: HotkeyStatus;
 }
 
 export const DEFAULT_SETTINGS: GulSettings = {
@@ -42,6 +61,8 @@ export const DEFAULT_SETTINGS: GulSettings = {
   hangoverMs: VAD_HANGOVER_DEFAULT,
   pttKey: PTT_KEY_DEFAULT,
   globalPtt: false,
+  cueVolume: CUE_VOLUME_DEFAULT,
+  hotkey: DEFAULT_HOTKEY,
 };
 
 function str(value: unknown, fallback: string): string {
@@ -70,5 +91,7 @@ export function normalizeSettings(raw: unknown): GulSettings {
     hangoverMs: snapHangoverMs(typeof s.hangoverMs === 'number' ? s.hangoverMs : NaN),
     pttKey: str(s.pttKey, DEFAULT_SETTINGS.pttKey) || DEFAULT_SETTINGS.pttKey,
     globalPtt: s.globalPtt === true,
+    cueVolume: clampCueVolume(typeof s.cueVolume === 'number' ? s.cueVolume : NaN),
+    hotkey: normalizeHotkey(s.hotkey),
   };
 }

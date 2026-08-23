@@ -8,7 +8,7 @@ import { LifebuoyIcon } from '@phosphor-icons/react/dist/csr/Lifebuoy';
 import { AudioService, DiagnosticsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { selfUser, useGulStore } from '../state/store';
 import { initialsOf, tintFor } from '../state/types';
-import { Avatar, IconButton } from './ui';
+import { Avatar, IconButton, Tooltip } from './ui';
 
 export function BottomBar() {
   const status = useGulStore((s) => s.status);
@@ -87,58 +87,64 @@ export function BottomBar() {
           <p className="truncate text-sm text-sb-text-1">{self?.user.name ?? '…'}</p>
         </div>
         <div className="flex flex-none items-center gap-0.5">
-          <IconButton
-            surface="sidebar"
-            tone="danger"
-            active={muted}
-            onClick={toggleMic}
-            title={
+          <Tooltip
+            label={
               muted
                 ? 'Включить микрофон'
                 : transmitting
                   ? 'Идёт передача, клавиша PTT зажата'
                   : 'Выключить микрофон'
             }
-            aria-label={muted ? 'Включить микрофон' : 'Выключить микрофон'}
           >
-            {muted ? (
-              <MicrophoneSlashIcon size={16} weight="fill" />
-            ) : (
-              // The colour sits on the icon itself: a text utility on the
-              // button would only compete with the IconButton's own class.
-              <MicrophoneIcon
-                size={16}
-                weight={transmitting ? 'fill' : 'regular'}
-                className={transmitting ? 'text-[var(--speak)]' : undefined}
-              />
-            )}
-          </IconButton>
-          <IconButton
-            surface="sidebar"
-            tone="danger"
-            active={deafened}
-            onClick={toggleDeafen}
-            title={deafened ? 'Включить звук' : 'Выключить звук'}
-            aria-label={deafened ? 'Включить звук' : 'Выключить звук'}
-          >
-            {deafened ? <SpeakerSlashIcon size={16} weight="fill" /> : <HeadphonesIcon size={16} />}
-          </IconButton>
-          <IconButton
-            surface="sidebar"
-            onClick={() => setSettingsOpen(true)}
-            title="Настройки"
-            aria-label="Настройки"
-          >
-            <GearSixIcon size={16} />
-          </IconButton>
-          <IconButton
-            surface="sidebar"
-            onClick={collectDiagnostics}
-            title="Собрать диагностику (логи и версия в zip)"
-            aria-label="Диагностика"
-          >
-            <LifebuoyIcon size={16} />
-          </IconButton>
+            <IconButton
+              surface="sidebar"
+              tone="danger"
+              active={muted}
+              onClick={toggleMic}
+              aria-label={muted ? 'Включить микрофон' : 'Выключить микрофон'}
+            >
+              {muted ? (
+                <MicrophoneSlashIcon size={16} weight="fill" />
+              ) : (
+                // The colour sits on the icon itself: a text utility on the
+                // button would only compete with the IconButton's own class.
+                <MicrophoneIcon
+                  size={16}
+                  weight={transmitting ? 'fill' : 'regular'}
+                  className={transmitting ? 'text-[var(--speak)]' : undefined}
+                />
+              )}
+            </IconButton>
+          </Tooltip>
+          <Tooltip label={deafened ? 'Включить звук' : 'Выключить звук — не слышно никого'}>
+            <IconButton
+              surface="sidebar"
+              tone="danger"
+              active={deafened}
+              onClick={toggleDeafen}
+              aria-label={deafened ? 'Включить звук' : 'Выключить звук'}
+            >
+              {deafened ? (
+                <SpeakerSlashIcon size={16} weight="fill" />
+              ) : (
+                <HeadphonesIcon size={16} />
+              )}
+            </IconButton>
+          </Tooltip>
+          <Tooltip label="Настройки">
+            <IconButton
+              surface="sidebar"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Настройки"
+            >
+              <GearSixIcon size={16} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip label="Собрать диагностику (логи и версия в zip)">
+            <IconButton surface="sidebar" onClick={collectDiagnostics} aria-label="Диагностика">
+              <LifebuoyIcon size={16} />
+            </IconButton>
+          </Tooltip>
         </div>
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-2 pl-10 text-xs">

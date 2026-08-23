@@ -10,7 +10,28 @@ const (
 	EventTofuMismatch      = "tofu:mismatch"      // payload: TofuPrompt
 	EventUserTalking       = "user:talking"       // payload: TalkingEvent
 	EventAudioLevels       = "audio:levels"       // payload: AudioLevels
+	EventAudioSelf         = "audio:self"         // payload: SelfAudioState
+	EventAudioPTT          = "audio:ptt"          // payload: PTTState
 )
+
+// SelfAudioState is the local microphone and monitor state. Mute and deafen
+// are reachable from the window and from the system tray, so core pushes this
+// on every change whichever path made it, and the UI renders what it is told
+// rather than what it last asked for. A request that changes nothing pushes
+// nothing.
+type SelfAudioState struct {
+	Muted    bool `json:"muted"`
+	Deafened bool `json:"deafened"`
+}
+
+// PTTState reports whether push-to-talk is currently transmitting. The window
+// listener sets this directly, but the global key (which fires with the window
+// unfocused) can only reach the UI through this event, so the microphone
+// indicator tracks a global key the same as a focused one. Deduplicated: no
+// event when the held state does not change.
+type PTTState struct {
+	Held bool `json:"held"`
+}
 
 // ConnectionLatency is the smoothed TCP round-trip time of the active Mumble
 // session. Zero is valid on a local server; no event means no sample yet.

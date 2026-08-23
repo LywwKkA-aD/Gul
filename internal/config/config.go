@@ -43,17 +43,11 @@ type Connection struct {
 	LastUsername string `json:"last_username"`
 }
 
-// Audio holds the device selection as the engine reports device ids: opaque
-// hex strings, empty meaning the system default.
-type Audio struct {
-	CaptureID  string `json:"capture_id"`
-	PlaybackID string `json:"playback_id"`
-}
-
 // Defaults returns the settings a fresh installation starts with.
 func Defaults() Config {
 	return Config{
 		Version: SchemaVersion,
+		Audio:   defaultAudio(),
 		Gate:    defaultGate(),
 	}
 }
@@ -66,6 +60,7 @@ func Defaults() Config {
 func (c Config) Sanitized() Config {
 	c.Version = SchemaVersion
 	c.Connection = c.Connection.sanitized()
+	c.Audio = c.Audio.sanitized()
 	c.Gate = c.Gate.sanitized()
 	return c
 }

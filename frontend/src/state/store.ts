@@ -8,8 +8,11 @@ import {
   clampHangoverMs,
   clampOpenThreshold,
 } from './gate';
+import { CUE_VOLUME_DEFAULT, clampCueVolume } from './settings';
+import { DEFAULT_HOTKEY } from './hotkey';
 import type { GateMode } from './gate';
 import type { GulSettings } from './settings';
+import type { HotkeyStatus } from './hotkey';
 
 interface GulState {
   status: ConnectionStatus;
@@ -41,6 +44,8 @@ interface GulState {
   /** Selected devices, "" = system default. */
   captureId: string;
   playbackId: string;
+  /** Gain of the UI cues (join, leave, mute, unmute); 0 turns them off. */
+  cueVolume: number;
   settingsOpen: boolean;
 
   // ── Transmit gate (M3) ──────────────────────────────────────────────────
@@ -58,6 +63,11 @@ interface GulState {
   /** True while the settings field waits for the next key press. The PTT
       listener stands down meanwhile, so binding a key cannot transmit. */
   pttCapturing: boolean;
+  /** Whether the user asked for the key to be watched system wide. */
+  globalPtt: boolean;
+  /** What this machine can do with that key, and what the last attempt to
+      bind it reported. Runtime state from Go, not a stored setting. */
+  hotkey: HotkeyStatus;
 
   setStatus: (status: ConnectionStatus) => void;
   setPingMs: (pingMs: number | null) => void;
@@ -79,6 +89,9 @@ interface GulState {
   setPttKey: (code: string) => void;
   setPttHeld: (held: boolean) => void;
   setPttCapturing: (capturing: boolean) => void;
+  setGlobalPtt: (enabled: boolean) => void;
+  setHotkey: (hotkey: HotkeyStatus) => void;
+  setCueVolume: (volume: number) => void;
   reset: () => void;
 }
 
@@ -106,6 +119,7 @@ export const useGulStore = create<GulState>((set) => ({
   userVolumes: {},
   captureId: '',
   playbackId: '',
+  cueVolume: CUE_VOLUME_DEFAULT,
   settingsOpen: false,
 
   gateMode: 'vad',
@@ -114,6 +128,8 @@ export const useGulStore = create<GulState>((set) => ({
   pttKey: PTT_KEY_DEFAULT,
   pttHeld: false,
   pttCapturing: false,
+  globalPtt: false,
+  hotkey: DEFAULT_HOTKEY,
 
   setStatus: (status) =>
     set((s) => {
@@ -167,6 +183,9 @@ export const useGulStore = create<GulState>((set) => ({
       vadOpen: clampOpenThreshold(settings.vadOpen),
       vadHangoverMs: clampHangoverMs(settings.hangoverMs),
       pttKey: settings.pttKey,
+      globalPtt: settings.globalPtt,
+      hotkey: settings.hotkey,
+      cueVolume: clampCueVolume(settings.cueVolume),
     }),
 
   // The Go side remembers the connect form once the server accepted it; this
@@ -201,6 +220,15 @@ export const useGulStore = create<GulState>((set) => ({
   setPttHeld: (held) => set((s) => (s.pttHeld === held ? s : { pttHeld: held })),
   setPttCapturing: (capturing) => set({ pttCapturing: capturing }),
 
+  // Turning the global key on or off changes who drives the gate, so a key
+  // held right now is released with it (state/hotkey.ts, state/ptt.ts).
+  setGlobalPtt: (enabled) =>
+    set((s) => (s.globalPtt === enabled ? s : { globalPtt: enabled, pttHeld: false })),
+  // Read back from the snapshot after every change that can re-point the
+  // watch: whether the stored key could be bound is decided in Go.
+  setHotkey: (hotkey) => set({ hotkey }),
+  setCueVolume: (volume) => set({ cueVolume: clampCueVolume(volume) }),
+
   reset: () =>
     set({
       status: initialStatus,
@@ -216,6 +244,9 @@ export const useGulStore = create<GulState>((set) => ({
       // Gate settings are settings and stay; what is live does not.
       pttHeld: false,
       pttCapturing: false,
+      // muted and deafened are not session state: core keeps them across
+      // connections and the tray shows them, so clearing them here would put
+      // the window at odds with both (internal/core/selfaudio.go).
     }),
 }));
 

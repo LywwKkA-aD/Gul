@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaperPlaneRightIcon } from '@phosphor-icons/react/dist/csr/PaperPlaneRight';
 import { ChatService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
-import { IconButton, TextInput } from './ui';
+import { IconButton, TextInput, Tooltip } from './ui';
 
 export function Composer({ channelId }: { channelId: number | null }) {
   const [text, setText] = useState('');
@@ -35,14 +35,15 @@ export function Composer({ channelId }: { channelId: number | null }) {
           maxLength={5000}
           className="flex-1"
         />
-        <IconButton
-          aria-label="Отправить"
-          title="Отправить"
-          onClick={send}
-          disabled={channelId === null || !text.trim()}
-        >
-          <PaperPlaneRightIcon size={16} />
-        </IconButton>
+        <Tooltip label="Отправить — Enter">
+          <IconButton
+            aria-label="Отправить"
+            onClick={send}
+            disabled={channelId === null || !text.trim()}
+          >
+            <PaperPlaneRightIcon size={16} />
+          </IconButton>
+        </Tooltip>
       </div>
     </footer>
   );

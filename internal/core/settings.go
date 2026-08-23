@@ -46,6 +46,11 @@ func (a *App) UseSettings(dir string, cfg config.Config, loadErr error) {
 	a.mu.Unlock()
 
 	applyGate(voice, cfg.Gate)
+	applyCueVolume(voice, cfg.Audio.CueVolume)
+	// The stored gate decides whether the global key is watched at all, so
+	// the watch is brought in line here as well. A core without a monitor
+	// (every test that does not inject one) does nothing.
+	a.applyGlobalPTT()
 }
 
 // Settings returns the current configuration snapshot for the UI.
@@ -57,12 +62,17 @@ func (a *App) Settings() config.Config {
 
 // SetPTTKey stores the push-to-talk binding. The value is a
 // KeyboardEvent.code - a physical key, so it does not move with the layout -
-// and it is only ever read by the UI listener until the global shortcut lands.
+// and it is read both by the window-focused listener in the frontend and by
+// the global monitor, which is re-pointed at the new key here.
+//
+// A key this build accepts may still have no global form; that is reported
+// through HotkeyStatus and does not make the key invalid (hotkey.go).
 func (a *App) SetPTTKey(code string) error {
 	if !config.ValidPTTKey(code) {
 		return fmt.Errorf("%w: %q", ErrInvalidPTTKey, code)
 	}
 	a.updateSettings(func(c *config.Config) { c.Gate.PTTKey = code })
+	a.applyGlobalPTT()
 	return nil
 }
 

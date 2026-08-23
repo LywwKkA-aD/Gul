@@ -57,8 +57,9 @@ type Gate struct {
 	OpenThreshold float64  `json:"open_threshold"`
 	HangoverMs    int      `json:"hangover_ms"`
 	PTTKey        string   `json:"ptt_key"`
-	// GlobalPTT is carried but never written by this build: the global
-	// hotkey and its setter arrive with the shortcut wiring (PLAN.md 7 M4).
+	// GlobalPTT asks for the key to be watched system wide. It only has an
+	// effect in Mode ptt and on a machine whose monitor can watch keys at
+	// all; core keeps the watch in line with both (PLAN.md 7 M4).
 	GlobalPTT bool `json:"global_ptt"`
 }
 

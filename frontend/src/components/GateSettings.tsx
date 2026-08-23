@@ -14,6 +14,9 @@ import {
   clampOpenThreshold,
   keyLabel,
 } from '../state/gate';
+import { normalizeSettings } from '../state/settings';
+import { globalPTTRunning } from '../state/hotkey';
+import type { HotkeyMode, HotkeyStatus } from '../state/hotkey';
 import { cx } from './ui/cx';
 import { captionClass, selectClass } from './ui/controlStyles';
 
@@ -23,11 +26,17 @@ import { captionClass, selectClass } from './ui/controlStyles';
 export function GateSettings() {
   const gateMode = useGulStore((s) => s.gateMode);
   const setGateMode = useGulStore((s) => s.setGateMode);
+  const setHotkey = useGulStore((s) => s.setHotkey);
 
   const apply = (mode: GateMode) => {
     if (mode === gateMode) return;
     setGateMode(mode);
-    AudioService.SetGateMode(mode).catch(console.error);
+    // Only push-to-talk watches a key system wide, so the mode decides
+    // whether the watch runs at all - and entering it is where binding the
+    // stored key can fail (internal/core/voice.go SetGateMode).
+    AudioService.SetGateMode(mode)
+      .then(() => refreshHotkey(setHotkey))
+      .catch((e: unknown) => console.error('gate mode:', e));
   };
 
   return (
@@ -48,9 +57,25 @@ export function GateSettings() {
         </div>
       </div>
 
-      {gateMode === 'vad' ? <VadTuning /> : <PttKeyField />}
+      {gateMode === 'vad' ? (
+        <VadTuning />
+      ) : (
+        <>
+          <PttKeyField />
+          <GlobalPttField />
+        </>
+      )}
     </div>
   );
+}
+
+/** Reads the hotkey status back after a change that can re-point the watch.
+    Whether the stored key could actually be bound is decided in Go and only
+    reported through the snapshot (services.Settings.Hotkey). */
+function refreshHotkey(setHotkey: (hotkey: HotkeyStatus) => void): void {
+  SettingsService.Load()
+    .then((settings) => setHotkey(normalizeSettings(settings).hotkey))
+    .catch((e: unknown) => console.error('settings:', e));
 }
 
 /* Prototype segStyle: 28px tall, 6px radius, accent fill when selected. */
@@ -149,6 +174,8 @@ function PttKeyField() {
   const capturing = useGulStore((s) => s.pttCapturing);
   const setPttKey = useGulStore((s) => s.setPttKey);
   const setPttCapturing = useGulStore((s) => s.setPttCapturing);
+  const setHotkey = useGulStore((s) => s.setHotkey);
+  const watched = useGulStore((s) => globalPTTRunning(s.globalPtt, s.hotkey));
 
   // Capture phase: the key being bound must not reach the Escape handler of
   // the modal, a focused button, or the push-to-talk listener itself.
@@ -161,7 +188,12 @@ function PttKeyField() {
       // Escape leaves the current binding alone.
       if (!e.code || e.code === 'Escape') return;
       setPttKey(e.code);
-      SettingsService.SetPTTKey(e.code).catch(console.error);
+      // A new key re-points the global watch, and this build's key vocabulary
+      // is wider there than here: a perfectly valid binding can have no
+      // global form, which only the status says.
+      SettingsService.SetPTTKey(e.code)
+        .then(() => refreshHotkey(setHotkey))
+        .catch((err: unknown) => console.error('ptt key:', err));
     };
     const onBlur = () => setPttCapturing(false);
     window.addEventListener('keydown', onKey, true);
@@ -170,7 +202,7 @@ function PttKeyField() {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('blur', onBlur);
     };
-  }, [capturing, setPttKey, setPttCapturing]);
+  }, [capturing, setPttKey, setPttCapturing, setHotkey]);
 
   // Closing the modal mid-capture must not leave the listener standing down.
   useEffect(() => () => setPttCapturing(false), [setPttCapturing]);
@@ -202,8 +234,58 @@ function PttKeyField() {
         </button>
       </div>
       <p className="text-sm text-text-2">
-        Работает, пока окно в фокусе. Клавиша запоминается между запусками.
+        {watched
+          ? 'Работает и когда окно не в фокусе. Клавиша запоминается между запусками.'
+          : 'Работает, пока окно в фокусе. Клавиша запоминается между запусками.'}
       </p>
+    </div>
+  );
+}
+
+/* What the settings screen says about a mode that has nothing of its own to
+   say. The Go side sends a ready Russian reason whenever the behaviour is not
+   plain hold-to-talk (internal/hotkey), and these cover the rest. */
+const HOTKEY_NOTES: Record<HotkeyMode, string> = {
+  hold: 'Клавиша читается системно: удерживайте её, чтобы говорить, даже когда окно свёрнуто.',
+  toggle: 'Доступен только режим переключения: нажатие включает передачу, повторное — выключает.',
+  unsupported: 'Эта система не даёт следить за клавишей вне окна.',
+};
+
+function GlobalPttField() {
+  const globalPtt = useGulStore((s) => s.globalPtt);
+  const hotkey = useGulStore((s) => s.hotkey);
+  const setGlobalPtt = useGulStore((s) => s.setGlobalPtt);
+  const setHotkey = useGulStore((s) => s.setHotkey);
+
+  const supported = hotkey.mode !== 'unsupported';
+
+  const apply = (enabled: boolean) => {
+    setGlobalPtt(enabled);
+    SettingsService.SetGlobalPTT(enabled)
+      .then(() => refreshHotkey(setHotkey))
+      .catch((e: unknown) => console.error('global ptt:', e));
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label
+        className={cx(
+          'flex items-center gap-2 text-sm text-text-2',
+          supported ? 'cursor-pointer' : 'cursor-default opacity-70',
+        )}
+      >
+        <input
+          type="checkbox"
+          role="switch"
+          className="flex-none"
+          checked={globalPtt}
+          disabled={!supported}
+          onChange={(e) => apply(e.target.checked)}
+        />
+        <span>Глобальная клавиша (работает, когда окно не в фокусе)</span>
+      </label>
+      <p className="text-sm text-text-2">{hotkey.reason || HOTKEY_NOTES[hotkey.mode]}</p>
+      {hotkey.error !== '' && <p className="text-sm text-danger">{hotkey.error}</p>}
     </div>
   );
 }

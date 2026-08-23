@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 )
 
 // ---------------------------------------------------------------------------
@@ -118,6 +120,8 @@ func (v *orderedVoice) SetMute(bool)                  {}
 func (v *orderedVoice) SetDeafen(bool)                {}
 func (v *orderedVoice) SetUserVolume(string, float32) {}
 func (v *orderedVoice) SetPTT(bool)                   {}
+func (v *orderedVoice) SetCueVolume(volume float32)   { v.record("cue volume %g", volume) }
+func (v *orderedVoice) PlayCue(cue Cue)               { v.record("cue %d", cue) }
 func (v *orderedVoice) SetGateMode(mode GateMode)     { v.record("gate %s", mode) }
 func (v *orderedVoice) SetVADTuning(open, closeLevel float32, hangoverMs int) {
 	v.record("vad %g/%g/%d", open, closeLevel, hangoverMs)
@@ -171,7 +175,7 @@ func TestUseSettingsAppliesTheGateBeforeTheEngineStarts(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	stored := config.Defaults()
-	stored.Audio = config.Audio{CaptureID: "aa11", PlaybackID: "bb22"}
+	stored.Audio = config.Audio{CaptureID: "aa11", PlaybackID: "bb22", CueVolume: 0.25}
 	stored.Gate = config.Gate{Mode: config.GateModePTT, OpenThreshold: 0.75, HangoverMs: 500, PTTKey: "KeyF"}
 	if err := config.Save(dir, stored); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -186,20 +190,21 @@ func TestUseSettingsAppliesTheGateBeforeTheEngineStarts(t *testing.T) {
 	}
 	app.UseSettings(dir, cfg, err)
 
-	// The engine has the gate before anything is on the wire.
-	if got := voice.snapshot(); len(got) != 2 || got[0] != "gate ptt" || got[1] != "vad 0.75/0.55/500" {
+	// The engine has the gate and the cue gain before anything is on the wire.
+	if got := voice.snapshot(); len(got) != 3 || got[0] != "gate ptt" ||
+		got[1] != "vad 0.75/0.55/500" || got[2] != "cue volume 0.25" {
 		t.Fatalf("engine calls after UseSettings = %v", got)
 	}
 
 	app.HandleStatus(domain.ConnectionStatus{State: domain.StateConnected})
-	got := awaitCalls(voice, 3)
-	if len(got) != 3 {
+	got := awaitCalls(voice, 4)
+	if len(got) != 4 {
 		t.Fatalf("engine calls = %v, want the gate then one start", got)
 	}
 	// The stored devices are what the engine is started on: a selection
 	// applied after Start would cost a restart on every launch.
-	if got[2] != "start aa11|bb22" {
-		t.Fatalf("start = %q, want the stored devices", got[2])
+	if got[3] != "start aa11|bb22" {
+		t.Fatalf("start = %q, want the stored devices", got[3])
 	}
 }
 
@@ -342,6 +347,10 @@ func TestSettingsRoundTripThroughCore(t *testing.T) {
 	if err := app.SetPTTKey("KeyF"); err != nil {
 		t.Fatalf("SetPTTKey: %v", err)
 	}
+	if err := app.SetCueVolume(0.25); err != nil {
+		t.Fatalf("SetCueVolume: %v", err)
+	}
+	app.SetGlobalPTT(true)
 	app.RememberConnection("  host:64738  ", " gul ")
 	app.FlushSettings()
 
@@ -350,9 +359,10 @@ func TestSettingsRoundTripThroughCore(t *testing.T) {
 	want := config.Config{
 		Version:    config.SchemaVersion,
 		Connection: config.Connection{LastAddress: "host:64738", LastUsername: "gul"},
-		Audio:      config.Audio{CaptureID: "aa11", PlaybackID: "bb22"},
+		Audio:      config.Audio{CaptureID: "aa11", PlaybackID: "bb22", CueVolume: 0.25},
 		Gate: config.Gate{
-			Mode: config.GateModePTT, OpenThreshold: 0.8, HangoverMs: 700, PTTKey: "KeyF",
+			Mode: config.GateModePTT, OpenThreshold: 0.8, HangoverMs: 700,
+			PTTKey: "KeyF", GlobalPTT: true,
 		},
 	}
 	if got.Connection != want.Connection || got.Audio != want.Audio || got.Gate != want.Gate {
@@ -379,6 +389,76 @@ func TestSetPTTKeyValidates(t *testing.T) {
 	}
 	if got := clock.armed(); got != 0 {
 		t.Fatalf("a rejected key opened a write window")
+	}
+}
+
+func TestSetCueVolumeValidatesAndReachesTheEngine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	app, clock := newSettingsApp(t, dir, discardLogger())
+	voice := &orderedVoice{}
+	app.SetVoice(voice)
+
+	for _, volume := range []float64{-0.1, 1.5, math.NaN()} {
+		if err := app.SetCueVolume(volume); !errors.Is(err, ErrInvalidCueVolume) {
+			t.Errorf("SetCueVolume(%v) = %v, want %v", volume, err, ErrInvalidCueVolume)
+		}
+	}
+	if got := app.Settings().Audio.CueVolume; got != config.DefaultCueVolume {
+		t.Errorf("cue volume = %v, want it untouched", got)
+	}
+	if got := clock.armed(); got != 0 {
+		t.Fatal("a rejected cue volume opened a write window")
+	}
+	if got := voice.snapshot(); len(got) != 0 {
+		t.Fatalf("engine calls = %v, want none for a rejected volume", got)
+	}
+
+	// Zero is a decision, not a missing value: it turns the cues off.
+	if err := app.SetCueVolume(0); err != nil {
+		t.Fatalf("SetCueVolume(0): %v", err)
+	}
+	if got := voice.snapshot(); len(got) != 1 || got[0] != "cue volume 0" {
+		t.Fatalf("engine calls = %v, want the gain applied", got)
+	}
+	if got := clock.armed(); got != 1 {
+		t.Fatalf("armed windows = %d, want the change to be written", got)
+	}
+}
+
+// Shutdown is the last thing that runs: the key must stop being watched and
+// the change made inside the debounce window must reach the file.
+func TestShutdownStopsTheWatchAndWritesSettings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	app, clock := newSettingsApp(t, dir, discardLogger())
+	voice := &fakeVoice{}
+	app.SetVoice(voice)
+	if err := app.SetGateMode(string(config.GateModePTT)); err != nil {
+		t.Fatalf("SetGateMode: %v", err)
+	}
+	monitor := &fakeMonitor{capability: hotkey.Capability{Mode: hotkey.ModeHold}}
+	app.SetKeyMonitor(monitor)
+	app.SetGlobalPTT(true)
+	monitor.fire(true)
+
+	app.Shutdown()
+
+	if monitor.isWatching() {
+		t.Error("the key is still watched after shutdown")
+	}
+	if got := voice.snapshot().ptt; len(got) == 0 || got[len(got)-1] {
+		t.Errorf("ptt = %v, want a release on the way out", got)
+	}
+	if got := clock.armed(); got != 0 {
+		t.Errorf("armed windows = %d, want the pending write flushed", got)
+	}
+	stored, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !stored.Gate.GlobalPTT || stored.Gate.Mode != config.GateModePTT {
+		t.Fatalf("stored gate = %+v, want what was set before shutdown", stored.Gate)
 	}
 }
 

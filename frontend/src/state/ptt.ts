@@ -1,10 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import { localPTTActive } from './hotkey';
 import { useGulStore } from './store';
 
 // Push-to-talk while the window has focus. A key pressed with the app in the
 // background belongs to whatever is in front, so nothing here reaches for the
-// OS: the global shortcut is M4 (PLAN.md 7).
+// OS.
+//
+// The system-wide key is watched in Go instead (internal/hotkey), and exactly
+// one of the two may drive the gate: this listener stands down while that
+// watch is running (state/hotkey.ts).
 
 /** True for events that belong to something the user is typing into. */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -17,7 +22,11 @@ function isTypingTarget(target: EventTarget | null): boolean {
 /** Drives AudioService.SetPTT from the configured key while the gate runs in
     push-to-talk mode. Mount once, at the application root. */
 export function usePushToTalk(): void {
-  const active = useGulStore((s) => s.gateMode === 'ptt' && !s.pttCapturing);
+  // A boolean selector: it stays referentially stable while the hotkey status
+  // object behind it is replaced.
+  const active = useGulStore(
+    (s) => s.gateMode === 'ptt' && !s.pttCapturing && localPTTActive(s.globalPtt, s.hotkey),
+  );
   const pttKey = useGulStore((s) => s.pttKey);
 
   // What the engine was last told. The store flag is an indicator and is

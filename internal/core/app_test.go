@@ -158,6 +158,8 @@ type fakeVoice struct {
 	modes    []GateMode
 	tunings  []vadTuning
 	ptt      []bool
+	cues     []Cue
+	cueVols  []float32
 	starts   int
 	stops    int
 	devCalls int
@@ -217,6 +219,18 @@ func (v *fakeVoice) SetPTT(held bool) {
 	v.ptt = append(v.ptt, held)
 }
 
+func (v *fakeVoice) SetCueVolume(volume float32) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cueVols = append(v.cueVols, volume)
+}
+
+func (v *fakeVoice) PlayCue(cue Cue) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cues = append(v.cues, cue)
+}
+
 func (v *fakeVoice) Devices() (playback, capture []domain.AudioDevice, err error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -240,6 +254,8 @@ func (v *fakeVoice) snapshot() fakeVoice {
 		modes:   append([]GateMode(nil), v.modes...),
 		tunings: append([]vadTuning(nil), v.tunings...),
 		ptt:     append([]bool(nil), v.ptt...),
+		cues:    append([]Cue(nil), v.cues...),
+		cueVols: append([]float32(nil), v.cueVols...),
 	}
 }
 

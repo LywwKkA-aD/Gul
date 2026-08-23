@@ -17,8 +17,10 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/core"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/logging"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/tray"
 	"github.com/LywwKkA-aD/Gul/services"
 )
 
@@ -33,6 +35,8 @@ func init() {
 	application.RegisterEvent[domain.TofuPrompt](domain.EventTofuMismatch)
 	application.RegisterEvent[domain.TalkingEvent](domain.EventUserTalking)
 	application.RegisterEvent[domain.AudioLevels](domain.EventAudioLevels)
+	application.RegisterEvent[domain.SelfAudioState](domain.EventAudioSelf)
+	application.RegisterEvent[domain.PTTState](domain.EventAudioPTT)
 }
 
 // voiceAdapter binds core.VoiceEngine to the audio engine, translating the
@@ -87,6 +91,23 @@ func (v *voiceAdapter) SetVADTuning(open, close float32, hangoverMs int) {
 }
 
 func (v *voiceAdapter) SetPTT(held bool) { v.engine.SetPTT(held) }
+
+func (v *voiceAdapter) SetCueVolume(volume float32) { v.engine.SetCueVolume(volume) }
+
+// PlayCue maps the core vocabulary onto the engine's own. An unknown cue is
+// dropped rather than guessed: a wrong beep is worse than a missing one.
+func (v *voiceAdapter) PlayCue(c core.Cue) {
+	switch c {
+	case core.CueJoin:
+		v.engine.PlayCue(audio.CueJoin)
+	case core.CueLeave:
+		v.engine.PlayCue(audio.CueLeave)
+	case core.CueMuted:
+		v.engine.PlayCue(audio.CueMuted)
+	case core.CueUnmuted:
+		v.engine.PlayCue(audio.CueUnmuted)
+	}
+}
 
 func (v *voiceAdapter) Devices() (playback, capture []domain.AudioDevice, err error) {
 	pb, cap, err := v.engine.Devices()
@@ -175,10 +196,11 @@ func main() {
 		// retaining Gul's own DEBUG diagnostics.
 		Logger:   logging.WithMinimumLevel(logger, slog.LevelWarn),
 		LogLevel: slog.LevelWarn,
-		// Settings writes are debounced; a change made inside the last window
-		// would otherwise leave with the process. Runs before the services
-		// are shut down, on Cmd+Q as well as on a window-driven quit.
-		OnShutdown: coreApp.FlushSettings,
+		// Stops the global key watch and writes a settings change still inside
+		// the debounce window, which would otherwise leave with the process.
+		// Runs before the services are shut down, on Cmd+Q as well as on a
+		// window-driven quit.
+		OnShutdown: coreApp.Shutdown,
 		Services: []application.Service{
 			application.NewService(services.NewConnectionService(coreApp)),
 			application.NewService(services.NewChannelsService(coreApp)),
@@ -196,6 +218,17 @@ func main() {
 		},
 	})
 	emitter.app = app
+
+	// The Wayland toggle path registers through Wails; every other backend
+	// polls key state itself and ignores the registrar. A monitor is always
+	// returned - an unsupported platform reports why through the settings
+	// screen - so only rejected options are fatal here.
+	monitor, err := hotkey.New(hotkey.Options{Registrar: app.GlobalShortcut})
+	if err != nil {
+		logger.Error("global hotkey monitor", "error", err)
+		log.Fatal(err)
+	}
+	coreApp.SetKeyMonitor(monitor)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Gul",
@@ -231,9 +264,84 @@ func main() {
 		})
 	}
 
+	setupTray(app, coreApp, win)
+
 	logger.Info("gul starting", "version", core.Version, "config_dir", cfgDir)
 	if err := app.Run(); err != nil {
 		logger.Error("application exited", "error", err)
 		log.Fatal(err)
 	}
+}
+
+// Tray labels. The rest of the user-facing text lives in core with the state
+// it describes.
+const (
+	trayShowLabel   = "Показать Gul"
+	trayMuteLabel   = "Микрофон выключен"
+	trayDeafenLabel = "Звук выключен"
+	trayQuitLabel   = "Выход"
+)
+
+// setupTray builds the system tray and keeps it in step with core. Every item
+// goes through core, which is also what the window calls, so the two can never
+// disagree about what is muted.
+func setupTray(app *application.App, coreApp *core.App, win *application.WebviewWindow) {
+	systemTray := app.SystemTray.New()
+
+	menu := app.NewMenu()
+	menu.Add(trayShowLabel).OnClick(func(*application.Context) { showWindow(app, win) })
+	// Wails flips a checkbox before it calls back, so the clicked state is
+	// the request. Core decides what actually happens and reports it back
+	// through the observer below, which is what re-syncs a stale checkbox.
+	mute := menu.AddCheckbox(trayMuteLabel, false)
+	mute.OnClick(func(ctx *application.Context) { coreApp.SetMute(ctx.ClickedMenuItem().Checked()) })
+	deafen := menu.AddCheckbox(trayDeafenLabel, false)
+	deafen.OnClick(func(ctx *application.Context) { coreApp.SetDeafen(ctx.ClickedMenuItem().Checked()) })
+	menu.AddSeparator()
+	menu.Add(trayQuitLabel).OnClick(func(*application.Context) { app.Quit() })
+	systemTray.SetMenu(menu)
+
+	apply := func(state core.TrayState) {
+		mute.SetChecked(state.Muted)
+		deafen.SetChecked(state.Deafened)
+		systemTray.SetTooltip(state.Tooltip)
+		setTrayIcon(systemTray, state.Icon)
+	}
+
+	// Before Run the tray has no platform implementation and the setters only
+	// record what it will start with. Afterwards each one touches native
+	// state, so a change arriving on a service or menu goroutine is marshalled
+	// onto the main thread.
+	apply(coreApp.TrayState())
+	coreApp.OnTrayState(func(state core.TrayState) {
+		application.InvokeAsync(func() { apply(state) })
+	})
+}
+
+// setTrayIcon paints the tray. macOS wants a template image and tints it for
+// the menu bar itself; the other platforms paint what they are given, so they
+// get a second glyph for dark panels.
+func setTrayIcon(systemTray *application.SystemTray, icon core.TrayIcon) {
+	muted := icon == core.TrayIconMicMuted
+	if runtime.GOOS == "darwin" {
+		systemTray.SetTemplateIcon(tray.Icon(muted))
+		return
+	}
+	systemTray.SetIcon(tray.Icon(muted))
+	systemTray.SetDarkModeIcon(tray.IconLight(muted))
+}
+
+// showWindow brings the window back from wherever it went: hidden by the close
+// button (macOS), minimised, or behind another application.
+func showWindow(app *application.App, win *application.WebviewWindow) {
+	if runtime.GOOS == "darwin" {
+		// The window cannot come forward while the application itself is
+		// hidden (Cmd+H).
+		app.Show()
+	}
+	if win.IsMinimised() {
+		win.Restore()
+	}
+	win.Show()
+	win.Focus()
 }

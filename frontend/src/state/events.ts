@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ConnectionLatency,
   ConnectionStatus,
+  SelfAudioState,
   TalkingEvent,
   TofuPrompt,
   WireChannelNode,
@@ -23,6 +24,8 @@ const CHAT_MESSAGE = 'chat:message';
 const TOFU_MISMATCH = 'tofu:mismatch';
 const USER_TALKING = 'user:talking';
 const AUDIO_LEVELS = 'audio:levels';
+const AUDIO_SELF = 'audio:self';
+const AUDIO_PTT = 'audio:ptt';
 
 let subscribed = false;
 
@@ -70,5 +73,21 @@ export function subscribeGulEvents(): void {
   Events.On(AUDIO_LEVELS, (e) => {
     const levels = e.data as unknown as AudioLevels;
     useGulStore.getState().setLevels(levels.micDb, levels.outDb);
+  });
+  // Mute and deafen are reachable from the system tray as well, so the window
+  // renders what core reports rather than what it last asked for. Core pushes
+  // this from whichever path made the change and stays silent when a request
+  // changes nothing (internal/core/selfaudio.go).
+  Events.On(AUDIO_SELF, (e) => {
+    const self = e.data as unknown as SelfAudioState;
+    useGulStore.getState().setVoiceGates(self.muted === true, self.deafened === true);
+  });
+
+  // The global push-to-talk key fires with the window unfocused, so its held
+  // state can only reach the mic indicator through this event; the window
+  // listener still sets pttHeld directly. setPttHeld dedupes either way.
+  Events.On(AUDIO_PTT, (e) => {
+    const ptt = e.data as unknown as { held?: boolean };
+    useGulStore.getState().setPttHeld(ptt.held === true);
   });
 }

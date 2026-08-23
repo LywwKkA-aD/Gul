@@ -72,6 +72,13 @@ export interface AudioLevels {
   outDb: number;
 }
 
+/** Payload of audio:self - the local microphone and monitor state after a
+    change made anywhere: the window, the system tray or core itself. */
+export interface SelfAudioState {
+  muted: boolean;
+  deafened: boolean;
+}
+
 /** One selectable device; id "" means the system default. */
 export interface AudioDevice {
   id: string;

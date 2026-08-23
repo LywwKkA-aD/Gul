@@ -102,13 +102,16 @@ export function Avatar({
       )}
       style={style}
     >
-      {speaking && (
-        <span
-          aria-hidden="true"
-          className="animate-halo pointer-events-none absolute rounded-pill border border-solid border-speak"
-          style={{ inset: self ? -5 : -4, animationDelay: `${haloIndex * 260}ms` }}
-        />
-      )}
+      {/* Mounted whether or not the user speaks: the halo fades out when a
+          phrase ends, and that needs an element to fade (styles/base.css). */}
+      <span
+        aria-hidden="true"
+        data-speaking={speaking}
+        className="gul-halo pointer-events-none absolute rounded-pill"
+        style={{ inset: self ? -5 : -4 }}
+      >
+        <span className="gul-halo-ring" style={{ animationDelay: `${haloIndex * 260}ms` }} />
+      </span>
 
       {initials && (
         <span

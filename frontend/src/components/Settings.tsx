@@ -3,14 +3,18 @@ import { SlidersHorizontalIcon } from '@phosphor-icons/react/dist/csr/SlidersHor
 import { KeyboardIcon } from '@phosphor-icons/react/dist/csr/Keyboard';
 import { PaletteIcon } from '@phosphor-icons/react/dist/csr/Palette';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
-import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import {
+  AudioService,
+  SettingsService,
+} from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import type { AudioDevice } from '../state/types';
 import { SILENT_DB, meterPercent } from '../state/types';
+import { clampCueVolume } from '../state/settings';
 import { GateSettings } from './GateSettings';
 import { Field } from './ui';
 import { cx } from './ui/cx';
-import { selectClass } from './ui/controlStyles';
+import { captionClass, selectClass } from './ui/controlStyles';
 
 /** Settings modal. M2 ships the "Звук" tab only; the rest of the prototype's
     tabs stay in place as disabled stubs so the layout does not move later. */
@@ -56,10 +60,14 @@ export function Settings() {
       >
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 pt-4 pb-3">
           <span className="font-display text-[13px] font-medium tracking-[.06em]">НАСТРОЙКИ</span>
+          {/* Native title, not the Tooltip primitive: --z-tooltip sits below
+              --z-modal, so a tooltip raised from inside the modal would be
+              drawn under its own dialog (components/ui/Tooltip.tsx). */}
           <button
             type="button"
             onClick={close}
             aria-label="Закрыть"
+            title="Закрыть — Esc"
             className={
               'grid size-7 flex-none cursor-pointer place-items-center rounded-md border-0 ' +
               'bg-transparent text-text-2 transition-[background-color,color] ' +
@@ -179,6 +187,8 @@ function AudioTab() {
 
       <GateSettings />
 
+      <CueVolume />
+
       {failed && (
         <p className="text-sm text-danger">
           Не удалось получить список устройств. Останется системное по умолчанию; подробности в
@@ -216,6 +226,46 @@ function DeviceSelect({
       ))}
       {missing && <option value={value}>Недоступное устройство</option>}
     </select>
+  );
+}
+
+/** Loudness of the join, leave and mute sounds. The clips are synthesised in
+    the engine and mixed into the receive path (DECISIONS.md 2026-08-23), so
+    the gain belongs to the audio tab rather than to a notification setting. */
+function CueVolume() {
+  const cueVolume = useGulStore((s) => s.cueVolume);
+  const setCueVolume = useGulStore((s) => s.setCueVolume);
+
+  const percent = Math.round(cueVolume * 100);
+
+  const apply = (nextPercent: number) => {
+    const gain = clampCueVolume(nextPercent / 100);
+    setCueVolume(gain);
+    SettingsService.SetCueVolume(gain).catch((e: unknown) => console.error('cue volume:', e));
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={captionClass}>Звуки событий</span>
+        <span className="font-mono text-xs text-text-1">{percent} %</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={percent}
+        onChange={(e) => apply(Number(e.target.value))}
+        aria-label="Громкость звуков событий"
+        className="h-[18px] w-full"
+      />
+      <p className="text-sm text-text-2">
+        Короткие сигналы: кто-то вошёл в канал или вышел, микрофон включён или выключен. Идут в
+        выбранное устройство вывода и слышны, даже когда звук собеседников выключен. Ноль —
+        полная тишина.
+      </p>
+    </div>
   );
 }
 

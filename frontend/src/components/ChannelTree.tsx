@@ -3,7 +3,8 @@ import { ChannelsService } from '../../bindings/github.com/LywwKkA-aD/Gul/servic
 import { useGulStore } from '../state/store';
 import type { ChannelNode, UserInfo } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';
-import { Avatar } from './ui';
+import { Avatar, Tooltip } from './ui';
+import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
 
 export function ChannelTree() {
@@ -31,22 +32,27 @@ function ChannelRow({ channel, depth }: { channel: ChannelNode; depth: number })
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={join}
-        onDoubleClick={join}
-        title={active ? channel.name : `Перейти в «${channel.name}»`}
-        style={{ paddingLeft: `${12 + depth * 14}px`, height: 'var(--item-h)' }}
-        className={cx(
-          'flex w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm transition-colors duration-[var(--t-fast)]',
-          active
-            ? 'bg-[var(--sb-active)] text-sb-text-1'
-            : 'text-sb-text-2 hover:bg-sb-2 hover:text-sb-text-1',
-        )}
+      <Tooltip
+        label={active ? `Вы здесь: ${channel.name}` : `Перейти в «${channel.name}»`}
+        className="w-full"
+        delayMs={TOOLTIP_DELAY_ROW_MS}
       >
-        <HashIcon size={14} className="shrink-0 opacity-70" />
-        <span className="min-w-0 flex-1 truncate">{channel.name}</span>
-      </button>
+        <button
+          type="button"
+          onClick={join}
+          onDoubleClick={join}
+          style={{ paddingLeft: `${12 + depth * 14}px`, height: 'var(--item-h)' }}
+          className={cx(
+            'flex w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm transition-colors duration-[var(--t-fast)]',
+            active
+              ? 'bg-[var(--sb-active)] text-sb-text-1'
+              : 'text-sb-text-2 hover:bg-sb-2 hover:text-sb-text-1',
+          )}
+        >
+          <HashIcon size={14} className="shrink-0 opacity-70" />
+          <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+        </button>
+      </Tooltip>
 
       {channel.users.length > 0 && (
         <ul className="mb-1">

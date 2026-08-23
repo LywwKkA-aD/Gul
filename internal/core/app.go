@@ -12,6 +12,7 @@ import (
 
 	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
 )
 
@@ -49,6 +50,12 @@ type App struct {
 
 	notifyMu sync.Mutex
 
+	// hotkeyMu serializes the global push-to-talk watch. It is the outer
+	// lock: mu may be taken under it, never the other way round (hotkey.go).
+	hotkeyMu   sync.Mutex
+	watching   bool
+	watchedKey string
+
 	mu       sync.Mutex
 	ctrl     mumble.Controller
 	status   domain.ConnectionStatus
@@ -62,6 +69,25 @@ type App struct {
 
 	voice                 VoiceEngine
 	captureID, playbackID string
+
+	// Self audio state and its tray observers (selfaudio.go).
+	selfMuted, selfDeafened bool
+	trayObservers           []func(TrayState)
+
+	// pttHeld is the last transmit state pushed to the UI, so a redundant
+	// SetPTT pushes nothing (voice.go).
+	pttHeld bool
+
+	// Baseline of the channel we are in, for the join and leave cues
+	// (cues.go).
+	cueChannel  uint32
+	cueMembers  map[uint32]struct{}
+	cueBaseline bool
+
+	// Global push-to-talk (hotkey.go). The monitor and the last watch error
+	// are guarded by mu; hotkeyMu guards the watch itself.
+	keys      hotkey.Monitor
+	hotkeyErr string
 
 	// Persisted settings (settings.go). cfgDir is empty until UseSettings,
 	// which is what keeps a core built for a test from writing anything.
@@ -278,6 +304,12 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	case s.State == domain.StateDisconnected:
 		a.stopVoice()
 	}
+
+	// A session that is not up has no channel to compare against: the next
+	// tree starts a new baseline instead of announcing everybody again.
+	if s.State != domain.StateConnected {
+		a.resetChannelCues()
+	}
 }
 
 // HandleLatency forwards session telemetry separately from lifecycle status.
@@ -299,6 +331,10 @@ func (a *App) HandleTree(root domain.ChannelNode) {
 	a.mu.Unlock()
 
 	a.emit(domain.EventChannelsTree, root)
+
+	if cue, ok := a.channelCue(root); ok {
+		a.playCue(cue)
+	}
 }
 
 // HandleMessage sanitizes an incoming chat message, appends it to the session
@@ -366,6 +402,14 @@ func (a *App) appendLocked(msg domain.ChatMessage) {
 func (a *App) nextID(at time.Time) string {
 	a.seq++
 	return strconv.FormatInt(at.UnixMilli(), 36) + "-" + strconv.FormatUint(a.seq, 36)
+}
+
+// Shutdown releases what must not outlive the process: the global key watch
+// (and any transmission it opened) and a settings change still inside the
+// debounce window. Runs on the way out, before the services are stopped.
+func (a *App) Shutdown() {
+	a.StopGlobalPTT()
+	a.FlushSettings()
 }
 
 // Collect writes a diagnostics bundle into the application config directory and
