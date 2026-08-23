@@ -314,10 +314,10 @@ mic s16[480]  (из capture ring)
 ### M4 — UX и упаковка (цель: «можно раздать друзьям»)
 - [ ] Глобальный PTT: штатный `app.GlobalShortcut` Wails v3. Windows/X11 — прямо; Wayland — XDG-портал (показывать фактическую комбинацию, путь отказа); macOS — разрешения Accessibility/Input Monitoring с подсказкой в UI.
 - [ ] Полировка UI: анимации подсветки речи, тултипы, тихие звуки join/leave, трей-иконка с mute (штатный `app.SystemTray`).
-- [ ] Настройки сохраняются (config.json), миграция версий конфига.
-- [ ] `wails3 package`: NSIS (Win), .app+dmg (macOS), AppImage+deb (Linux). Артефакты в GitHub Releases по тегу.
+- [x] Настройки сохраняются (config.json, схема v1, таблица миграций, атомарная запись, карантин повреждённого файла, debounce 500 мс + flush при выходе; файл новее сборки или нечитаемый — сессия без персистентности).
+- [ ] `wails3 package`: NSIS (Win), .app+dmg (macOS), AppImage+deb (Linux). Артефакты в GitHub Releases по тегу. Сделано пользователем в alpha.2: .deb, универсальный .dmg, Windows zip + SHA256SUMS + лицензионный бандл по тегу; не хватает AppImage и NSIS-инсталлятора (пока zip).
 - [ ] Дистрибуция: macOS — Apple Developer ID + notarization + stapling (заложить 99 USD/год и время) + NSMicrophoneUsageDescription + обработка отказа в микрофоне; Windows — WebView2 bootstrapper в NSIS, подпись или осознанно принятый SmartScreen; Linux — GTK4/WebKitGTK 6.0, база Ubuntu 24.04+.
-- [ ] Прод-сервер: murmur v1.5.915 на VPS по deploy/murmur, docs/SERVER.md (порт 64738 tcp+udp, superuser, бэкап /data).
+- [x] Прод-сервер: murmur v1.5.915 на VPS + WSS-релей на 443 (пользователь), docs/SERVER.md — топология, порты, секреты, бэкап /data, обновление, наблюдаемость.
 - **Готово, когда:** свежий человек скачивает установщик из Releases, подключается к прод-серверу и разговаривает; onboarding ≤ 2 минуты (с учётом системных диалогов разрешений).
 
 ### M5 — Качество звука 2.0 (по желанию, после реальных прогонов)
