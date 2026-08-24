@@ -26,6 +26,7 @@ const USER_TALKING = 'user:talking';
 const AUDIO_LEVELS = 'audio:levels';
 const AUDIO_SELF = 'audio:self';
 const AUDIO_PTT = 'audio:ptt';
+const AUDIO_SELF_TALKING = 'audio:selftalking';
 
 let subscribed = false;
 
@@ -89,5 +90,12 @@ export function subscribeGulEvents(): void {
   Events.On(AUDIO_PTT, (e) => {
     const ptt = e.data as unknown as { held?: boolean };
     useGulStore.getState().setPttHeld(ptt.held === true);
+  });
+
+  // Our own voice never returns from the server, so the local speaking halo
+  // has no other source than the transmit gate reporting through this event.
+  Events.On(AUDIO_SELF_TALKING, (e) => {
+    const self = e.data as unknown as { talking?: boolean };
+    useGulStore.getState().setSelfTalking(self.talking === true);
   });
 }

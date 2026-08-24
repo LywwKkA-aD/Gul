@@ -1,14 +1,13 @@
-import { useState } from 'react';
 import { MicrophoneIcon } from '@phosphor-icons/react/dist/csr/Microphone';
 import { MicrophoneSlashIcon } from '@phosphor-icons/react/dist/csr/MicrophoneSlash';
 import { HeadphonesIcon } from '@phosphor-icons/react/dist/csr/Headphones';
 import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
 import { GearSixIcon } from '@phosphor-icons/react/dist/csr/GearSix';
-import { LifebuoyIcon } from '@phosphor-icons/react/dist/csr/Lifebuoy';
-import { AudioService, DiagnosticsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { selfUser, useGulStore } from '../state/store';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar, IconButton, Tooltip } from './ui';
+import { cx } from './ui/cx';
 
 export function BottomBar() {
   const status = useGulStore((s) => s.status);
@@ -19,11 +18,13 @@ export function BottomBar() {
   const setVoiceGates = useGulStore((s) => s.setVoiceGates);
   const setSettingsOpen = useGulStore((s) => s.setSettingsOpen);
   const self = selfUser(tree);
-  const selfSpeaking = useGulStore((s) => (self ? s.talkingSessions.has(self.user.session) : false));
+  // Our own voice never comes back from the server, so the halo on this card
+  // is driven by the transmit gate (audio:selftalking) and not by the talking
+  // set - and the user watches this corner while speaking.
+  const selfSpeaking = useGulStore((s) => s.selfTalking);
   // Push-to-talk gives no other feedback that the key actually reached the
   // gate, so the mic button carries it: filled and lit while the key is held.
   const transmitting = useGulStore((s) => s.gateMode === 'ptt' && s.pttHeld && !s.muted);
-  const [diagPath, setDiagPath] = useState<string | null>(null);
 
   const connected = status.state === 'connected';
   const roundedPing = connected && pingMs !== null ? Math.max(0, Math.round(pingMs)) : null;
@@ -35,11 +36,6 @@ export function BottomBar() {
         : roundedPing <= 300
           ? 'text-warning'
           : 'text-[var(--sb-danger)]';
-  const connectionLabel = connected
-    ? 'в сети'
-    : status.state === 'reconnecting'
-      ? 'переподключение'
-      : status.state;
   const latencyTitle =
     roundedPing === null
       ? 'Ожидаем первый замер RTT до сервера'
@@ -59,18 +55,18 @@ export function BottomBar() {
   // Deafen implies a closed mic; lifting it opens the mic back up.
   const toggleDeafen = () => applyGates(!deafened, !deafened);
 
-  const collectDiagnostics = () => {
-    DiagnosticsService.Collect()
-      .then((path) => {
-        setDiagPath(path);
-        setTimeout(() => setDiagPath(null), 6000);
-      })
-      .catch(console.error);
-  };
-
   return (
-    <footer data-sidebar className="shrink-0 bg-sb-0 px-3 py-2.5">
-      <div className="flex items-center gap-2.5">
+    // One row, as in the prototype (prototype-source.html:9802): identity on
+    // the left with the ping under the nick, controls on the right, 46px tall.
+    // Everything the sidebar does not spend here is channel list.
+    <footer
+      data-sidebar
+      className={
+        'grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-sb-0 ' +
+        'py-2 pr-2 pl-3 shadow-[0_-1px_0_var(--sb-line)]'
+      }
+    >
+      <div className="flex min-w-0 items-center gap-2">
         {self ? (
           <Avatar
             size={30}
@@ -83,81 +79,70 @@ export function BottomBar() {
             surface="sidebar"
           />
         ) : null}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm text-sb-text-1">{self?.user.name ?? '…'}</p>
-        </div>
-        <div className="flex flex-none items-center gap-0.5">
-          <Tooltip
-            label={
-              muted
-                ? 'Включить микрофон'
-                : transmitting
-                  ? 'Идёт передача, клавиша PTT зажата'
-                  : 'Выключить микрофон'
-            }
+        {/* leading on every line, not on the column: a Tailwind text-* utility
+            carries its own line-height and would ignore an inherited one. The
+            prototype's 1.25 is what keeps the two lines to the 30px of the
+            avatar beside them, and the bar to 46px. */}
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate text-sm leading-[1.25] text-sb-text-1">
+            {self?.user.name ?? '…'}
+          </span>
+          <span
+            className={cx('truncate font-mono text-xs leading-[1.25] tabular-nums', pingTone)}
+            title={latencyTitle}
           >
-            <IconButton
-              surface="sidebar"
-              tone="danger"
-              active={muted}
-              onClick={toggleMic}
-              aria-label={muted ? 'Включить микрофон' : 'Выключить микрофон'}
-            >
-              {muted ? (
-                <MicrophoneSlashIcon size={16} weight="fill" />
-              ) : (
-                // The colour sits on the icon itself: a text utility on the
-                // button would only compete with the IconButton's own class.
-                <MicrophoneIcon
-                  size={16}
-                  weight={transmitting ? 'fill' : 'regular'}
-                  className={transmitting ? 'text-[var(--speak)]' : undefined}
-                />
-              )}
-            </IconButton>
-          </Tooltip>
-          <Tooltip label={deafened ? 'Включить звук' : 'Выключить звук — не слышно никого'}>
-            <IconButton
-              surface="sidebar"
-              tone="danger"
-              active={deafened}
-              onClick={toggleDeafen}
-              aria-label={deafened ? 'Включить звук' : 'Выключить звук'}
-            >
-              {deafened ? (
-                <SpeakerSlashIcon size={16} weight="fill" />
-              ) : (
-                <HeadphonesIcon size={16} />
-              )}
-            </IconButton>
-          </Tooltip>
-          <Tooltip label="Настройки">
-            <IconButton
-              surface="sidebar"
-              onClick={() => setSettingsOpen(true)}
-              aria-label="Настройки"
-            >
-              <GearSixIcon size={16} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip label="Собрать диагностику (логи и версия в zip)">
-            <IconButton surface="sidebar" onClick={collectDiagnostics} aria-label="Диагностика">
-              <LifebuoyIcon size={16} />
-            </IconButton>
-          </Tooltip>
-        </div>
-      </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 pl-10 text-xs">
-        <span className="min-w-0 truncate text-sb-text-3">{connectionLabel}</span>
-        <span className={`flex-none font-mono tabular-nums ${pingTone}`} title={latencyTitle}>
-          {roundedPing === null ? '— мс' : `${roundedPing} мс`}
+            {roundedPing === null ? '— мс' : `${roundedPing} мс`}
+          </span>
         </span>
       </div>
-      {diagPath && (
-        <p className="mt-2 break-all font-mono text-[10px] leading-snug text-sb-text-3">
-          Диагностика: {diagPath}
-        </p>
-      )}
+
+      <div className="flex flex-none items-center gap-0.5">
+        <Tooltip
+          label={
+            muted
+              ? 'Включить микрофон'
+              : transmitting
+                ? 'Идёт передача, клавиша PTT зажата'
+                : 'Выключить микрофон'
+          }
+        >
+          <IconButton
+            surface="sidebar"
+            tone="danger"
+            active={muted}
+            onClick={toggleMic}
+            aria-label={muted ? 'Включить микрофон' : 'Выключить микрофон'}
+          >
+            {muted ? (
+              <MicrophoneSlashIcon size={16} weight="fill" />
+            ) : (
+              // The colour sits on the icon itself: a text utility on the
+              // button would only compete with the IconButton's own class.
+              <MicrophoneIcon
+                size={16}
+                weight={transmitting ? 'fill' : 'regular'}
+                className={transmitting ? 'text-[var(--speak)]' : undefined}
+              />
+            )}
+          </IconButton>
+        </Tooltip>
+        <Tooltip label={deafened ? 'Включить звук' : 'Выключить звук — не слышно никого'}>
+          <IconButton
+            surface="sidebar"
+            tone="danger"
+            active={deafened}
+            onClick={toggleDeafen}
+            aria-label={deafened ? 'Включить звук' : 'Выключить звук'}
+          >
+            {deafened ? <SpeakerSlashIcon size={16} weight="fill" /> : <HeadphonesIcon size={16} />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip label="Настройки">
+          <IconButton surface="sidebar" onClick={() => setSettingsOpen(true)} aria-label="Настройки">
+            <GearSixIcon size={16} />
+          </IconButton>
+        </Tooltip>
+      </div>
     </footer>
   );
 }

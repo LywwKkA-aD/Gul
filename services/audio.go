@@ -22,6 +22,14 @@ func (s *AudioService) SelfState() domain.SelfAudioState {
 	return s.app.SelfAudio()
 }
 
+// PTTState is the current transmit state, for a UI that has just mounted or
+// has just cleared its voice state on a reconnect. Waiting for the next
+// transition would leave the microphone indicator dark while a held key keeps
+// the gate open.
+func (s *AudioService) PTTState() domain.PTTState {
+	return s.app.PTTState()
+}
+
 // SetMute gates the microphone.
 func (s *AudioService) SetMute(muted bool) {
 	s.app.SetMute(muted)

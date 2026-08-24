@@ -6,6 +6,7 @@ import { useGulStore } from '../state/store';
 import type { ChannelNode, ChatMessage } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar } from './ui';
+import { cx } from './ui/cx';
 import { Composer } from './Composer';
 
 // Consecutive messages of one sender within this window collapse into a group.
@@ -46,24 +47,28 @@ export function Chat({ channel }: { channel: ChannelNode | null }) {
   return (
     <>
       <header
-        className="flex h-12 shrink-0 items-center gap-2 px-4 shadow-[0_1px_0_var(--line)]"
+        className="flex h-[var(--header-h)] shrink-0 items-center gap-2 pr-3 pl-4 shadow-[0_1px_0_var(--line)]"
         style={{ '--wails-draggable': 'drag' } as React.CSSProperties}
       >
-        <HashIcon size={16} className="text-text-3" />
-        <h2 className="min-w-0 truncate text-sm font-medium">{channel?.name ?? '…'}</h2>
+        <HashIcon size={15} className="flex-none text-text-3" />
+        <h2 className="min-w-0 truncate font-medium">{channel?.name ?? '…'}</h2>
       </header>
 
       <div
         ref={scrollRef}
         onScroll={onScroll}
         onClickCapture={onClickCapture}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
-        {rows.length === 0 ? (
-          <EmptyChannel />
-        ) : (
-          rows.map((row) => <MessageRow key={row.message.id} {...row} />)
-        )}
+        {/* Short conversations sit on the composer instead of floating at the
+            top of an empty canvas - the prototype's `margin-top:auto`. */}
+        <div className="mt-auto pt-4 pb-3">
+          {rows.length === 0 ? (
+            <EmptyChannel />
+          ) : (
+            rows.map((row) => <MessageRow key={row.message.id} {...row} />)
+          )}
+        </div>
       </div>
 
       <Composer channelId={channel?.id ?? null} />
@@ -91,28 +96,36 @@ function MessageRow({ message, head }: Row) {
   const time = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   return (
+    // The prototype's message grid: a 36px gutter for the avatar, --s-3 to the
+    // text, --s-4 to the window edge. A follow-up message keeps the gutter, so
+    // every line of a group starts on the same left edge.
     <div
-      className={head ? 'mt-3 flex gap-3' : 'flex gap-3'}
+      className={cx(
+        'grid grid-cols-[36px_minmax(0,1fr)] gap-3 px-4',
+        'transition-colors duration-[var(--t-fast)] hover:bg-bg-0',
+        head && 'mt-2 first:mt-0',
+      )}
       style={{ paddingTop: 'var(--row-pad-y)', paddingBottom: 'var(--row-pad-y)' }}
     >
-      <div className="w-9 shrink-0">
+      <div className="col-start-1">
         {head && (
           <Avatar
             size={36}
             tint={tintFor({ hash: message.senderHash, name: message.sender })}
             initials={initialsOf(message.sender)}
+            className="mt-0.5"
           />
         )}
       </div>
-      <div className="min-w-0 flex-1">
+      <div className="col-start-2 min-w-0">
         {head && (
           <p className="mb-0.5 flex items-baseline gap-2">
-            <span className="text-sm font-medium">{message.sender}</span>
-            <span className="text-xs text-text-3">{time}</span>
+            <span className="min-w-0 truncate font-medium">{message.sender}</span>
+            <span className="flex-none font-mono text-xs text-text-3">{time}</span>
           </p>
         )}
         <div
-          className="chat-html break-words text-sm leading-relaxed text-text-2"
+          className="chat-html text-text-1 [overflow-wrap:anywhere] [text-wrap:pretty]"
           // Safe by contract: sanitized in Go (internal/core/sanitize.go),
           // only b/i/u/br and http(s) links survive.
           dangerouslySetInnerHTML={{ __html: message.html }}
@@ -122,11 +135,19 @@ function MessageRow({ message, head }: Row) {
   );
 }
 
+/* Left aligned and sitting on the composer, exactly where the first message
+   will appear - a centred block would move the eye somewhere the conversation
+   never starts. */
 function EmptyChannel() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 text-text-3">
-      <ChatCircleDotsIcon size={40} weight="light" />
-      <p className="text-sm">Здесь пока тихо. Напишите первым.</p>
+    <div className="flex flex-col items-start gap-2 px-4 py-6">
+      <div className="grid size-[34px] place-items-center rounded-md bg-bg-3 shadow-[var(--sh-sm)]">
+        <ChatCircleDotsIcon size={18} className="text-text-3" />
+      </div>
+      <p className="font-medium">Здесь пока тихо</p>
+      <p className="max-w-[44ch] text-sm text-text-2">
+        Напишите первым — остальные подтянутся.
+      </p>
     </div>
   );
 }

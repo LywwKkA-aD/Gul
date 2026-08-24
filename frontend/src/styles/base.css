@@ -23,10 +23,16 @@
     @keyframes gul-spin { to { transform: rotate(360deg); } }
     @keyframes gul-level { 0% { width: 18%; } 12% { width: 54%; } 24% { width: 31%; } 38% { width: 72%; } 52% { width: 44%; } 66% { width: 88%; } 78% { width: 36%; } 90% { width: 61%; } 100% { width: 22%; } }
     @keyframes gul-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    /* For anything whose own placement already owns `transform` or is carried
+       by left/top: an animated transform overrides an inline one for the whole
+       run, so those elements fade in without moving (ui/Tooltip.tsx). */
+    @keyframes gul-fade-in { from { opacity: 0; } to { opacity: 1; } }
     @keyframes gul-modal { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
-    /* Speech halo. The ring stays mounted and is driven by data-speaking, so
-       the end of a phrase fades instead of cutting: an element removed from
-       the tree cannot animate on its way out. Fading in is quick (--t-fast)
+    /* Speech halo. From the first phrase on, the ring stays mounted and is
+       driven by data-speaking, so the end of a phrase fades instead of
+       cutting: an element removed from the tree cannot animate on its way out.
+       Before that first phrase there is nothing to fade and the ring is not
+       mounted at all (ui/Avatar.tsx). Fading in is quick (--t-fast)
        because speech starts on the first frame; fading out is slow (--t-slow)
        because nothing waits for it. The ripple is paused while silent, so an
        idle member list animates nothing at all, and the reduced-motion block

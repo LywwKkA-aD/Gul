@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'r
 import { SlidersHorizontalIcon } from '@phosphor-icons/react/dist/csr/SlidersHorizontal';
 import { KeyboardIcon } from '@phosphor-icons/react/dist/csr/Keyboard';
 import { PaletteIcon } from '@phosphor-icons/react/dist/csr/Palette';
+import { LifebuoyIcon } from '@phosphor-icons/react/dist/csr/Lifebuoy';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import {
   AudioService,
+  DiagnosticsService,
   SettingsService,
 } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
@@ -43,7 +45,11 @@ export function Settings() {
         if (e.target === e.currentTarget) close();
       }}
       className={
+        // The top padding clears the band macOS gives to its traffic lights:
+        // a click up there drags the window instead of reaching the close
+        // button of a modal that reaches the top edge (tokens.css).
         'animate-in fixed inset-0 z-[var(--z-modal)] grid place-items-center p-6 ' +
+        'pt-[calc(var(--titlebar-h)+var(--s-6))] ' +
         'bg-[color-mix(in_oklab,var(--sb-0)_44%,transparent)]'
       }
     >
@@ -85,6 +91,7 @@ export function Settings() {
             </Tab>
             <Tab icon={<KeyboardIcon size={15} />}>Клавиши</Tab>
             <Tab icon={<PaletteIcon size={15} />}>Внешний вид</Tab>
+            <DiagnosticsAction />
           </div>
 
           <div className="min-h-0 overflow-x-hidden overflow-y-auto border-l border-line px-4 pb-4">
@@ -123,6 +130,61 @@ function Tab({
       <span className="flex-none">{icon}</span>
       <span className="min-w-0 truncate">{children}</span>
     </button>
+  );
+}
+
+/** Support bundle: logs and version in one zip.
+ *
+ * It lives here and not on the bottom bar because the prototype gives that bar
+ * one row and three controls (prototype-source.html:9802); a fourth button
+ * takes 30 of the 94px the nick and the ping have to share, and a bundle
+ * collected once in a session does not earn that. */
+function DiagnosticsAction() {
+  const [path, setPath] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const collect = () => {
+    setFailed(false);
+    DiagnosticsService.Collect()
+      .then((collected) => setPath(collected))
+      .catch((e: unknown) => {
+        console.error('diagnostics:', e);
+        setFailed(true);
+      });
+  };
+
+  return (
+    // Separated from the tab rail above it: this is an action, and the tabs
+    // are navigation. Without the rule and the border it reads as a fourth
+    // section, brighter than the two disabled ones.
+    <div className="mt-auto flex flex-col gap-1 border-t border-line pt-3">
+      <button
+        type="button"
+        onClick={collect}
+        // Native title, not the Tooltip primitive: --z-tooltip sits below
+        // --z-modal (components/ui/Tooltip.tsx).
+        title="Логи и версия в один zip — приложите его к обращению"
+        className={cx(
+          'flex h-8 cursor-pointer items-center gap-2 rounded-md px-3 text-left text-sm',
+          'border border-line bg-bg-1 text-text-2',
+          'transition-[background-color,color] duration-[var(--t-fast)] ease-[var(--e-out)]',
+          'hover:bg-bg-3 hover:text-text-1',
+        )}
+      >
+        <span className="flex-none">
+          <LifebuoyIcon size={15} />
+        </span>
+        <span className="min-w-0 truncate">Диагностика</span>
+      </button>
+      {path && (
+        <p className="px-3 font-mono text-[10px] leading-snug break-all text-text-3">{path}</p>
+      )}
+      {failed && (
+        <p className="px-3 text-xs leading-snug text-danger">
+          Не удалось собрать архив; подробности в логе.
+        </p>
+      )}
+    </div>
   );
 }
 

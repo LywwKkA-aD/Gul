@@ -16,7 +16,9 @@ export function TofuDialog({ prompt }: { prompt: TofuPrompt }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-[color-mix(in_oklab,var(--sb-0)_45%,transparent)]">
+    // The top padding clears the band macOS gives to its traffic lights: a
+    // click there drags the window instead of reaching the dialog (tokens.css).
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-6 pt-[calc(var(--titlebar-h)+var(--s-6))] bg-[color-mix(in_oklab,var(--sb-0)_45%,transparent)]">
       <div
         role="alertdialog"
         aria-labelledby="tofu-title"

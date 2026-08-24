@@ -1,11 +1,20 @@
 import { HashIcon } from '@phosphor-icons/react/dist/csr/Hash';
 import { ChannelsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
+import { useSpeaking } from '../state/speaking';
 import type { ChannelNode, UserInfo } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar, Tooltip } from './ui';
 import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
+
+/* The prototype insets its sidebar rows from the column edge (the scroll area
+   is padded --s-2) and indents each level by 14px; a member sits one avatar
+   further in than the channel it belongs to. Nothing here is full bleed: a
+   selected channel is a rounded block with air around it. */
+const ROW_INSET = 8;
+const DEPTH_STEP = 14;
+const MEMBER_INSET = 26;
 
 export function ChannelTree() {
   const tree = useGulStore((s) => s.tree);
@@ -41,11 +50,12 @@ function ChannelRow({ channel, depth }: { channel: ChannelNode; depth: number })
           type="button"
           onClick={join}
           onDoubleClick={join}
-          style={{ paddingLeft: `${12 + depth * 14}px`, height: 'var(--item-h)' }}
+          style={{ paddingLeft: `${ROW_INSET + depth * DEPTH_STEP}px`, height: 'var(--item-h)' }}
           className={cx(
-            'flex w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm transition-colors duration-[var(--t-fast)]',
+            'mb-px flex w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm',
+            'transition-colors duration-[var(--t-fast)]',
             active
-              ? 'bg-[var(--sb-active)] text-sb-text-1'
+              ? 'bg-[var(--sb-active)] font-medium text-sb-text-1 shadow-[inset_2px_0_0_var(--speak)]'
               : 'text-sb-text-2 hover:bg-sb-2 hover:text-sb-text-1',
           )}
         >
@@ -73,16 +83,16 @@ function ChannelRow({ channel, depth }: { channel: ChannelNode; depth: number })
 }
 
 function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index: number }) {
-  // A boolean selector: the Set itself is replaced on every transition, but
-  // this stays referentially stable, so the row only re-renders on its own
-  // gate. Never return the Set (or a derived array) from here.
-  const speaking = useGulStore((s) => s.talkingSessions.has(user.session));
+  // Ours comes from the transmit gate, everyone else's from user:talking; the
+  // halo is the same either way (state/speaking.ts).
+  const speaking = useSpeaking(user);
 
   return (
     <li
-      style={{ paddingLeft: `${12 + depth * 14 + 20}px`, height: 'var(--item-h)' }}
+      style={{ paddingLeft: `${MEMBER_INSET + depth * DEPTH_STEP}px`, height: 'var(--item-h)' }}
       className={cx(
-        'flex min-w-0 items-center gap-2 pr-2 text-sm transition-colors duration-[var(--t-fast)]',
+        'flex min-w-0 items-center gap-2 rounded-md pr-2 text-sm',
+        'transition-colors duration-[var(--t-fast)] hover:bg-sb-2',
         // The prototype lifts a speaking name to the brightest sidebar text.
         speaking || user.isSelf ? 'text-sb-text-1' : 'text-sb-text-3',
       )}

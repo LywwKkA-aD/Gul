@@ -10,13 +10,9 @@ import {
   type ReactElement,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { titlebarHeight } from '../../app/platform';
 import { cx } from './cx';
-import {
-  TOOLTIP_DELAY_MS,
-  TOOLTIP_GAP,
-  clampTooltipCenter,
-  fitsAbove,
-} from './tooltipPosition';
+import { TOOLTIP_DELAY_MS, TOOLTIP_GAP, placeTooltip } from './tooltipPosition';
 
 /** The prototype's tooltip (docs/design/prototype-source.html, tipStyle): a
  *  dark chip above the control, drawn fixed and portalled to the body so the
@@ -52,20 +48,29 @@ export function Tooltip({ label, children, className, delayMs = TOOLTIP_DELAY_MS
 
   // The rect the tooltip is anchored to; null means it is not shown.
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const [place, setPlace] = useState({ left: 0, below: false });
+  // True from the moment the pointer rests until the chip is shown or given
+  // up on. Escape has to reach a tooltip that is still counting down: by the
+  // time it is on screen the user has been waiting for it (WAI-ARIA tooltip).
+  const [pending, setPending] = useState(false);
+  const [place, setPlace] = useState({ left: 0, top: 0 });
 
   const hide = useCallback(() => {
     clearTimeout(timer.current);
+    setPending(false);
     setAnchor(null);
   }, []);
 
   const show = useCallback(() => {
     clearTimeout(timer.current);
+    setPending(true);
     timer.current = setTimeout(() => {
+      setPending(false);
       const rect = wrapRef.current?.getBoundingClientRect();
       if (!rect) return;
       setAnchor(rect);
-      setPlace({ left: rect.left + rect.width / 2, below: false });
+      // A first guess so the chip is never laid out at the window origin; the
+      // measured placement lands in the same frame, before the paint.
+      setPlace({ left: rect.left, top: rect.top - TOOLTIP_GAP });
     }, delayMs);
   }, [delayMs]);
 
@@ -74,7 +79,7 @@ export function Tooltip({ label, children, className, delayMs = TOOLTIP_DELAY_MS
   // The rect is measured once, so anything that moves the control out from
   // under the tooltip takes the tooltip down with it.
   useEffect(() => {
-    if (!anchor) return;
+    if (!pending && !anchor) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') hide();
     };
@@ -86,18 +91,24 @@ export function Tooltip({ label, children, className, delayMs = TOOLTIP_DELAY_MS
       window.removeEventListener('resize', hide);
       window.removeEventListener('keydown', onKey);
     };
-  }, [anchor, hide]);
+  }, [pending, anchor, hide]);
 
-  // Corrected before the browser paints: the first position is the plain
-  // anchor centre, and the measured one lands in the same frame.
+  // Corrected before the browser paints: the first position is a guess, and
+  // the measured one lands in the same frame. The label is a dependency
+  // because the placement owns the centring: a chip that grows while it is
+  // shown (the microphone button relabels itself the moment transmission
+  // starts) would otherwise keep the left edge computed for the old width.
   useLayoutEffect(() => {
     const tip = tipRef.current;
     if (!anchor || !tip) return;
-    setPlace({
-      left: clampTooltipCenter(anchor.left + anchor.width / 2, tip.offsetWidth, window.innerWidth),
-      below: !fitsAbove(anchor.top, tip.offsetHeight),
-    });
-  }, [anchor]);
+    const box = tip.getBoundingClientRect();
+    setPlace(
+      placeTooltip(anchor, box.width, box.height, {
+        width: window.innerWidth,
+        top: titlebarHeight(),
+      }),
+    );
+  }, [anchor, label]);
 
   const onFocus = (e: FocusEvent<HTMLSpanElement>) => {
     // A tooltip on a control the user has just clicked is noise, and
@@ -124,15 +135,15 @@ export function Tooltip({ label, children, className, delayMs = TOOLTIP_DELAY_MS
             ref={tipRef}
             id={id}
             role="tooltip"
-            style={{
-              left: place.left,
-              top: place.below ? anchor.bottom + TOOLTIP_GAP : anchor.top - TOOLTIP_GAP,
-              transform: place.below ? 'translate(-50%,0)' : 'translate(-50%,-100%)',
-            }}
+            // left/top carry the whole placement, including the centring
+            // offset, and the entry animation touches opacity only. Two
+            // owners of `transform` would fight, and the animation wins:
+            // the chip would be drawn on the control for its whole 90ms.
+            style={{ left: place.left, top: place.top }}
             className={
               'pointer-events-none fixed z-[var(--z-tooltip)] rounded-sm bg-sb-0 px-2 py-1 ' +
               'text-xs whitespace-nowrap text-sb-text-1 shadow-[var(--sh-md)] ' +
-              'animate-[gul-in_var(--t-fast)_var(--e-out)]'
+              'animate-[gul-fade-in_var(--t-fast)_var(--e-out)]'
             }
           >
             {label}

@@ -1,6 +1,6 @@
 import { MicrophoneSlashIcon } from '@phosphor-icons/react/dist/csr/MicrophoneSlash';
 import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { cx } from './cx';
 
 /** The eight muted tints assigned to users by index.
@@ -29,6 +29,8 @@ export interface AvatarProps {
   initials?: string;
   /** Renders the prototype's striped stand-in used when a user has a picture. */
   photo?: boolean;
+  /** Drives the speech halo. Leave it out where a face cannot speak - a chat
+      message head - and the ring is never mounted at all. */
   speaking?: boolean;
   muted?: boolean;
   deaf?: boolean;
@@ -72,6 +74,14 @@ export function Avatar({
   className,
   title,
 }: AvatarProps) {
+  // The halo ring is an infinite CSS animation, and a paused one still costs a
+  // live animation object per avatar - measurable on an unbounded list like the
+  // chat, where an avatar has no `speaking` prop and the ring can never show.
+  // So it is mounted on the first phrase and kept from then on: nothing has to
+  // fade out before someone has spoken, and everything does after.
+  const [everSpoke, setEverSpoke] = useState(speaking);
+  if (speaking && !everSpoke) setEverSpoke(true);
+
   const hex = AVATAR_TINTS[((tint % AVATAR_TINTS.length) + AVATAR_TINTS.length) % AVATAR_TINTS.length];
   const background = photo
     ? `repeating-linear-gradient(135deg, ${hex} 0 4px, color-mix(in oklab, ${hex}, white 12%) 4px 8px)`
@@ -102,16 +112,18 @@ export function Avatar({
       )}
       style={style}
     >
-      {/* Mounted whether or not the user speaks: the halo fades out when a
-          phrase ends, and that needs an element to fade (styles/base.css). */}
-      <span
-        aria-hidden="true"
-        data-speaking={speaking}
-        className="gul-halo pointer-events-none absolute rounded-pill"
-        style={{ inset: self ? -5 : -4 }}
-      >
-        <span className="gul-halo-ring" style={{ animationDelay: `${haloIndex * 260}ms` }} />
-      </span>
+      {/* Kept mounted once it has been shown: the halo fades out when a phrase
+          ends, and that needs an element to fade (styles/base.css). */}
+      {everSpoke && (
+        <span
+          aria-hidden="true"
+          data-speaking={speaking}
+          className="gul-halo pointer-events-none absolute rounded-pill"
+          style={{ inset: self ? -5 : -4 }}
+        >
+          <span className="gul-halo-ring" style={{ animationDelay: `${haloIndex * 260}ms` }} />
+        </span>
+      )}
 
       {initials && (
         <span

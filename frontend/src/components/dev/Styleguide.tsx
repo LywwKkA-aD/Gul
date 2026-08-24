@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GearSixIcon } from '@phosphor-icons/react/dist/csr/GearSix';
 import { MicrophoneIcon } from '@phosphor-icons/react/dist/csr/Microphone';
 import { MicrophoneSlashIcon } from '@phosphor-icons/react/dist/csr/MicrophoneSlash';
+import { PaperPlaneRightIcon } from '@phosphor-icons/react/dist/csr/PaperPlaneRight';
 import { SpeakerHighIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';
 import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
@@ -351,6 +352,14 @@ function IconButtons() {
           </IconButton>
         </div>
       </div>
+      <Row label="accent">
+        <IconButton surface="accent" aria-label="Отправить">
+          <PaperPlaneRightIcon size={15} weight="fill" />
+        </IconButton>
+        <IconButton surface="accent" disabled aria-label="Отправить">
+          <PaperPlaneRightIcon size={15} weight="fill" />
+        </IconButton>
+      </Row>
     </div>
   );
 }

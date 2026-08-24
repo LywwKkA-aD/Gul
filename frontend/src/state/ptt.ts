@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { localPTTActive } from './hotkey';
+import { needsPttReseed } from './pttSeed';
 import { useGulStore } from './store';
+import type { ConnState } from './types';
 
 // Push-to-talk while the window has focus. A key pressed with the app in the
 // background belongs to whatever is in front, so nothing here reaches for the
@@ -10,6 +12,32 @@ import { useGulStore } from './store';
 // The system-wide key is watched in Go instead (internal/hotkey), and exactly
 // one of the two may drive the gate: this listener stands down while that
 // watch is running (state/hotkey.ts).
+
+/** Reads the transmit gate back from the engine.
+ *
+ * The same move main.tsx makes for mute and deafen: what the engine is doing
+ * is asked for, not assumed. Mount once, at the application root. */
+export function usePttSeed(): void {
+  const state = useGulStore((s) => s.status.state);
+  const seen = useRef<ConnState | null>(null);
+
+  useEffect(() => {
+    const previous = seen.current;
+    seen.current = state;
+    if (!needsPttReseed(previous, state)) return;
+    // A key transition that lands while the answer is in flight is newer than
+    // the answer: applying the answer anyway would light the indicator for a
+    // key the user has already let go of, and nothing would correct it. The
+    // seed only speaks when nothing else did.
+    const before = useGulStore.getState().pttHeld;
+    AudioService.PTTState()
+      .then((ptt) => {
+        if (useGulStore.getState().pttHeld !== before) return;
+        useGulStore.getState().setPttHeld(ptt.held === true);
+      })
+      .catch((e: unknown) => console.error('ptt state:', e));
+  }, [state]);
+}
 
 /** True for events that belong to something the user is typing into. */
 function isTypingTarget(target: EventTarget | null): boolean {

@@ -1,7 +1,8 @@
-import { useState, type ChangeEvent } from 'react';
+import { useState, type CSSProperties, type ChangeEvent } from 'react';
 import { SpeakerHighIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
+import { useSpeaking } from '../state/speaking';
 import type { ChannelNode, UserInfo } from '../state/types';
 import {
   VOLUME_MAX,
@@ -15,28 +16,46 @@ import { Avatar, Tooltip } from './ui';
 import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
 
+// Nothing in this header is clickable, so it doubles as window drag surface on
+// the platforms without a native title bar.
+const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
+
 export function MemberList({ channel }: { channel: ChannelNode | null }) {
   const users = (channel?.users ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <aside className="w-[220px] min-w-0 overflow-y-auto bg-bg-1 px-3 py-3 shadow-[-1px_0_0_var(--line)]">
-      <h3 className="mb-2 px-1 text-xs font-medium uppercase tracking-[.08em] text-text-3">
-        Участники — {users.length}
-      </h3>
-      <ul className="space-y-0.5">
-        {users.map((u, i) => (
-          <MemberRow key={u.session} user={u} index={i} />
-        ))}
-      </ul>
+    <aside className="grid min-h-0 grid-rows-[var(--header-h)_minmax(0,1fr)] bg-bg-1 shadow-[-1px_0_0_var(--line)]">
+      {/* Same height and rule as the channel header next to it: the two
+          captions sit on one line across the window. A bare caption, as in the
+          prototype (prototype-source.html:9917) - a number right-aligned at
+          the far edge of a 220px panel reads as an orphan, so the count sits
+          on the group heading below, next to the word it counts. */}
+      <header
+        className="flex items-center px-3 text-xs tracking-[.08em] text-text-3 uppercase shadow-[0_1px_0_var(--line)]"
+        style={DRAG_REGION}
+      >
+        <h3 className="min-w-0 flex-1 truncate">Участники</h3>
+      </header>
+
+      <div className="min-h-0 overflow-x-hidden overflow-y-auto px-2 py-3">
+        <h4 className="px-2 pb-1 text-xs tracking-[.06em] text-text-3 uppercase">
+          В канале — {users.length}
+        </h4>
+        <ul>
+          {users.map((u, i) => (
+            <MemberRow key={u.session} user={u} index={i} />
+          ))}
+        </ul>
+      </div>
     </aside>
   );
 }
 
 function MemberRow({ user, index }: { user: UserInfo; index: number }) {
-  // Boolean selector on purpose: the talking Set is replaced on every gate
-  // transition, so returning it (or anything derived) would re-render the
-  // whole list - and an unstable reference would loop useSyncExternalStore.
-  const speaking = useGulStore((s) => s.talkingSessions.has(user.session));
+  // One indication, two sources: the transmit gate for us, user:talking for
+  // everyone else (state/speaking.ts). Both selectors are booleans on purpose -
+  // returning the Set would re-render the whole list on every gate transition.
+  const speaking = useSpeaking(user);
   const setUserVolume = useGulStore((s) => s.setUserVolume);
 
   // The engine keys per-user gain by the certificate hash, so it survives the
@@ -56,7 +75,8 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   };
 
   const rowClass = cx(
-    'flex w-full min-w-0 items-center gap-2 rounded-md border-0 bg-transparent px-1 py-1 text-left text-sm',
+    'flex h-[var(--item-h)] w-full min-w-0 items-center gap-2 rounded-md border-0 bg-transparent',
+    'px-2 text-left text-sm',
     speaking ? 'text-text-1' : 'text-text-2',
   );
   const row = (
@@ -105,7 +125,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
       {adjustable && (
         <div
           className={cx(
-            'items-center gap-2 px-1 pb-1.5',
+            'items-center gap-2 px-2 pb-2',
             pinned ? 'flex' : 'hidden group-hover:flex',
           )}
         >
@@ -120,7 +140,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             aria-label={`Персональная громкость: ${user.name}`}
             className="h-[18px] min-w-0 flex-1"
           />
-          <span className="w-9 shrink-0 text-right font-mono text-xs text-text-3">
+          <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums text-text-3">
             {Math.round(volume * 100)}%
           </span>
         </div>

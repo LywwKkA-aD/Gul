@@ -13,7 +13,9 @@ export function ReconnectBanner({ server, note }: { server: string; note?: strin
       className="pointer-events-auto fixed inset-x-0 top-0 z-[var(--z-modal)] flex justify-center"
       style={{ animation: 'gul-in var(--t-mid) var(--e-out)' }}
     >
-      <div className="mt-3 flex items-center gap-3 rounded-lg bg-bg-1 px-4 py-2.5 shadow-[var(--sh-lg)]">
+      {/* Clear of the band macOS gives to its traffic lights: a click up there
+          drags the window instead of reaching "Отменить" (tokens.css). */}
+      <div className="mt-[calc(var(--titlebar-h)+var(--s-3))] flex items-center gap-3 rounded-lg bg-bg-1 px-4 py-2.5 shadow-[var(--sh-lg)]">
         <Spinner size={14} />
         <div className="text-sm">
           <span className="text-text-1">Переподключение к </span>

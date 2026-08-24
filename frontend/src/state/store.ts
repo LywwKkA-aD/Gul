@@ -33,6 +33,12 @@ interface GulState {
   // ── Voice (M2) ──────────────────────────────────────────────────────────
   /** Sessions currently speaking, from user:talking. Replaced, never mutated. */
   talkingSessions: ReadonlySet<number>;
+  /**
+   * Our own microphone transmitting, from audio:selftalking. Our voice never
+   * comes back from the server, so this is the only source of the local
+   * speaking indication.
+   */
+  selfTalking: boolean;
   /** Latest meters from audio:levels, dBFS; SILENT_DB while the engine is idle. */
   micDb: number;
   outDb: number;
@@ -79,6 +85,7 @@ interface GulState {
   applySettings: (settings: GulSettings) => void;
   setRememberedConnection: (address: string, username: string) => void;
   setTalking: (session: number, talking: boolean) => void;
+  setSelfTalking: (talking: boolean) => void;
   setLevels: (micDb: number, outDb: number) => void;
   setVoiceGates: (muted: boolean, deafened: boolean) => void;
   setUserVolume: (hash: string, volume: number) => void;
@@ -112,6 +119,7 @@ export const useGulStore = create<GulState>((set) => ({
   lastUsername: '',
 
   talkingSessions: NO_TALKING,
+  selfTalking: false,
   micDb: SILENT_DB,
   outDb: SILENT_DB,
   muted: false,
@@ -148,6 +156,7 @@ export const useGulStore = create<GulState>((set) => ({
               ? null
               : s.activeChannelId,
         talkingSessions: live ? s.talkingSessions : NO_TALKING,
+        selfTalking: live ? s.selfTalking : false,
         micDb: live ? s.micDb : SILENT_DB,
         outDb: live ? s.outDb : SILENT_DB,
         // Nothing is on the wire while the session is down, so the indicator
@@ -204,6 +213,7 @@ export const useGulStore = create<GulState>((set) => ({
       else next.delete(session);
       return { talkingSessions: next };
     }),
+  setSelfTalking: (talking) => set((s) => (s.selfTalking === talking ? s : { selfTalking: talking })),
   setLevels: (micDb, outDb) => set({ micDb, outDb }),
   setVoiceGates: (muted, deafened) => set({ muted, deafened }),
   setUserVolume: (hash, volume) =>
@@ -238,6 +248,7 @@ export const useGulStore = create<GulState>((set) => ({
       tofu: null,
       activeChannelId: null,
       talkingSessions: NO_TALKING,
+      selfTalking: false,
       micDb: SILENT_DB,
       outDb: SILENT_DB,
       settingsOpen: false,
