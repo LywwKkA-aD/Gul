@@ -3,7 +3,7 @@ module github.com/LywwKkA-aD/Gul
 go 1.26.7
 
 require (
-	github.com/LywwKkA-aD/gumble v0.0.0-20260822211756-970c56146e90
+	github.com/LywwKkA-aD/gumble v0.0.0-20260824160029-7999640c1fef
 	github.com/coder/websocket v1.8.15
 	github.com/pion/opus v0.1.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.11

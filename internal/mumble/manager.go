@@ -56,11 +56,11 @@ type Manager struct {
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
-	dialFn         func(DialConfig, sessionHooks) (*Session, error)
-	backoffFn      func(int) time.Duration
-	deriveFn       func([]byte) relayproto.Credential
-	statsInterval  time.Duration
-	requestStatsFn func(*gumble.Client)
+	dialFn          func(DialConfig, sessionHooks) (*Session, error)
+	backoffFn       func(int) time.Duration
+	deriveFn        func([]byte) relayproto.Credential
+	statsInterval   time.Duration
+	sampleLatencyFn func(*gumble.Client) // seam for tests; nil means sampleLatency
 
 	// voice is the transport for raw Opus. It outlives sessions: the audio
 	// pipeline holds its channels while connections come and go.
@@ -95,17 +95,16 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 	}
 
 	m := &Manager{
-		log:            log,
-		cb:             cb,
-		tofu:           tofu,
-		cert:           cert,
-		backoffFn:      defaultBackoff,
-		deriveFn:       relayproto.Derive,
-		statsInterval:  statsPollInterval,
-		requestStatsFn: requestSelfStats,
-		accept:         make(chan struct{}, 1),
-		status:         domain.ConnectionStatus{State: domain.StateDisconnected},
-		voice:          newVoiceIO(log),
+		log:           log,
+		cb:            cb,
+		tofu:          tofu,
+		cert:          cert,
+		backoffFn:     defaultBackoff,
+		deriveFn:      relayproto.Derive,
+		statsInterval: statsPollInterval,
+		accept:        make(chan struct{}, 1),
+		status:        domain.ConnectionStatus{State: domain.StateDisconnected},
+		voice:         newVoiceIO(log),
 	}
 	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
 		return dial(cfg, m.tofu, hooks, m.log)
@@ -380,11 +379,11 @@ func (m *Manager) waitSession(
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	request := m.requestStatsFn
-	if request == nil {
-		request = requestSelfStats
+	sample := m.sampleLatencyFn
+	if sample == nil {
+		sample = m.sampleLatency
 	}
-	request(client)
+	sample(client)
 
 	for {
 		select {
@@ -393,20 +392,36 @@ func (m *Manager) waitSession(
 		case event := <-dropped:
 			return event, false
 		case <-ticker.C:
-			request(client)
+			sample(client)
 		}
 	}
 }
 
-func requestSelfStats(client *gumble.Client) {
-	if client == nil {
+// requestSelfStats samples the round-trip time the client measured itself and
+// publishes it.
+//
+// It replaced a UserStats request to the server. UserStats.TCPPingAverage is
+// the server's average over the whole session and never decays, so a single
+// stall - a tunnel, a train, a lost minute of signal - left the number high
+// for the rest of the session and told the user nothing about the link they
+// have now. gumble times its own pings and keeps a sliding window; the newest
+// sample is what a person means by "the ping".
+func (m *Manager) sampleLatency(client *gumble.Client) {
+	if client == nil || m.cb.OnLatency == nil {
 		return
 	}
-	client.Do(func() {
-		if client.Self != nil {
-			client.Self.RequestStatsOnly()
-		}
-	})
+	if activeClient := m.currentClient(); activeClient != client {
+		return
+	}
+	last, _, ok := client.TCPPing()
+	if !ok {
+		return
+	}
+	pingMS := float64(last)
+	if math.IsNaN(pingMS) || math.IsInf(pingMS, 0) || pingMS < 0 {
+		return
+	}
+	m.cb.OnLatency(domain.ConnectionLatency{PingMS: pingMS})
 }
 
 func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent) (*Session, error) {
@@ -501,11 +516,10 @@ func (m *Manager) onUserChange(e *gumble.UserChangeEvent, server string) {
 	if e == nil {
 		return
 	}
-	if e.Type.Has(gumble.UserChangeStats) {
-		m.publishLatency(e)
-		if e.Type == gumble.UserChangeStats {
-			return
-		}
+	if e.Type == gumble.UserChangeStats {
+		// Stats alone say nothing the tree needs, and the latency now comes
+		// from the client's own ping (sampleLatency).
+		return
 	}
 
 	m.pushTree(e.Client)
@@ -525,25 +539,6 @@ func (m *Manager) onUserChange(e *gumble.UserChangeEvent, server string) {
 
 	// The status carries SelfChannel, so refresh it.
 	m.emitStatus(m.connectedStatus(e.Client, server))
-}
-
-func (m *Manager) publishLatency(e *gumble.UserChangeEvent) {
-	if m.cb.OnLatency == nil || e.Client == nil || e.Client.Self == nil || e.User == nil ||
-		e.User.Session != e.Client.Self.Session || e.User.Stats == nil || e.User.Stats.TCPPackets == 0 {
-		return
-	}
-	// Listener callbacks can still be queued while a dropped session is being
-	// replaced or after it has been cleared. Only the currently active client
-	// may publish a latency sample.
-	if activeClient := m.currentClient(); activeClient != e.Client {
-		return
-	}
-
-	pingMS := float64(e.User.Stats.TCPPingAverage)
-	if math.IsNaN(pingMS) || math.IsInf(pingMS, 0) || pingMS < 0 {
-		return
-	}
-	m.cb.OnLatency(domain.ConnectionLatency{PingMS: pingMS})
 }
 
 func (m *Manager) onTextMessage(e *gumble.TextMessageEvent) {

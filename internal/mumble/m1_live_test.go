@@ -47,8 +47,12 @@ func TestTwoManagersChat(t *testing.T) {
 	t.Fatalf("B never received A's message; got: %+v", b.messages())
 }
 
-// TestManagerReportsLatency verifies the public UserStats path used by the UI.
-// It measures RTT on the already-open TLS/TCP session, not a separate UDP ping.
+// TestManagerReportsLatency verifies the latency path the UI shows. The number
+// is the client's own round trip on the already-open TLS/TCP session (not a
+// separate UDP ping, and not the server's session-long average, which never
+// decays). On the loopback stand it has to be small - a server-side average
+// would also pass a "is it a number" check, so the bound is what makes this
+// test able to tell the two apart.
 func TestManagerReportsLatency(t *testing.T) {
 	c := newLiveManager(t, "gul-latency")
 	defer c.mgr.Close()
@@ -61,6 +65,9 @@ func TestManagerReportsLatency(t *testing.T) {
 		if latency, ok := c.connectionLatency(); ok {
 			if math.IsNaN(latency.PingMS) || math.IsInf(latency.PingMS, 0) || latency.PingMS < 0 {
 				t.Fatalf("invalid TCP RTT: %f ms", latency.PingMS)
+			}
+			if latency.PingMS > 100 {
+				t.Fatalf("TCP RTT %.2f ms on loopback: too high for a fresh sample", latency.PingMS)
 			}
 			t.Logf("TCP RTT: %.2f ms", latency.PingMS)
 			return
