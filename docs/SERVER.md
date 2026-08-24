@@ -63,6 +63,42 @@ murmur) по расписанию, хранить минимум две копи
 `mumble.key` = смена отпечатка у всех клиентов (TOFU-предупреждение и
 переподтверждение у каждого) — это самый дорогой файл на сервере.
 
+## Обновление релея: пошагово
+
+Проверено на проде 2026-08-24 (переход alpha.2 → hardened). Всё выполняется
+под пользователем `murmur`; `XDG_RUNTIME_DIR=/run/user/1001` обязателен, иначе
+podman не найдёт сокет. Заходить лучше через `runuser -u murmur --`, при этом
+`podman exec` и `podman healthcheck run` вручную падают на cgroup (нет
+systemd-сессии) — это не поломка, штатные проверки контейнера идут своим
+путём и возвращают 0.
+
+1. Собрать статический бинарь и лицензионный бандл на рабочей машине:
+   `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=$(bash scripts/check-version.sh --print app)" -o gul-relay ./cmd/gul-relay`
+   и `bash scripts/collect-licenses.sh legal`.
+2. Перенести `gul-relay`, `legal/` и `deploy/relay/Containerfile` на сервер,
+   собрать образ: `podman build -t gul-wss-relay:<tag> -f Containerfile .`
+3. Взять digest: `podman inspect --format "{{.Digest}}" localhost/gul-wss-relay:<tag>`.
+4. **Пересоздать секрет** (обязательно при переходе на bearer v2 — без строки
+   `v2.` релей не стартует). Значение не должно попадать в терминал:
+   ```sh
+   podman run --rm \
+     --secret MUMBLE_CONFIG_SERVER_PASSWORD,type=mount,target=MUMBLE_CONFIG_SERVER_PASSWORD,uid=10000,gid=10000,mode=0400 \
+     --entrypoint /usr/local/bin/gul-relay localhost/gul-wss-relay:<tag> \
+     derive-credential --secret-file /run/secrets/MUMBLE_CONFIG_SERVER_PASSWORD > /tmp/cred.txt
+   podman secret rm GUL_RELAY_BEARER; podman secret create GUL_RELAY_BEARER /tmp/cred.txt; shred -u /tmp/cred.txt
+   ```
+   Проверка без раскрытия значения: `wc -l` = 2 и `head -c3` = `v2.`.
+5. В `~/.config/containers/systemd/gul-relay.container` заменить `Image=` на
+   новый digest и дописать в `Exec=` флаги `--accept-legacy-bearer=true
+   --log-level info`. Старый файл сохранить рядом как `.bak-<дата>` — это и
+   есть путь отката (вернуть файл, `daemon-reload`, `restart`).
+6. `systemctl --user daemon-reload && systemctl --user restart gul-relay.service`
+7. Проверить: `podman ps` показывает `(healthy)`, а в журнале появляется
+   `relay ready` с `accept_legacy_bearer=true`. Подключиться клиентом; в
+   журнале должны быть `relay session opened` / `closed` с байтами и причиной.
+   Клиент версии alpha.2 даст дополнительную строку `relay accepted legacy
+   bearer credential` с адресом источника — по ней видно, кому ещё обновляться.
+
 ## Обновление
 
 - Образ murmur запинен тегом `v1.5.915` (PLAN §2); ветка 1.6 — RC, не брать.
