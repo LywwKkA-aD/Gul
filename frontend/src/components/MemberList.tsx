@@ -12,7 +12,7 @@ import {
   initialsOf,
   tintFor,
 } from '../state/types';
-import { Avatar, Tooltip } from './ui';
+import { Avatar, Tooltip, VoiceStateIcon } from './ui';
 import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
 
@@ -20,16 +20,31 @@ import { cx } from './ui/cx';
 // the platforms without a native title bar.
 const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
 
+/** What a screen reader hears for one member row: the name, then the gates
+    that are closed. The visible glyph carries the same fact for everyone
+    else. */
+function memberRowLabel(user: UserInfo): string {
+  const state = user.selfDeaf
+    ? ', звук выключен, микрофон тоже'
+    : user.selfMute
+      ? ', микрофон выключен'
+      : '';
+  return `Громкость: ${user.name}${state}`;
+}
+
 export function MemberList({ channel }: { channel: ChannelNode | null }) {
   const users = (channel?.users ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <aside className="grid min-h-0 grid-rows-[var(--header-h)_minmax(0,1fr)] bg-bg-1 shadow-[-1px_0_0_var(--line)]">
+    <aside className="grid min-h-0 grid-rows-[var(--top-header-h)_minmax(0,1fr)] bg-bg-1 shadow-[-1px_0_0_var(--line)]">
       {/* Same height and rule as the channel header next to it: the two
-          captions sit on one line across the window. A bare caption, as in the
-          prototype (prototype-source.html:9917) - a number right-aligned at
-          the far edge of a 220px panel reads as an orphan, so the count sits
-          on the group heading below, next to the word it counts. */}
+          captions sit on one line across the window, and both start at the top
+          edge - a caption is not a control, so it may sit inside the macOS
+          drag band as long as it covers all of it (--top-header-h in
+          styles/tokens.css). A bare caption, as in the prototype
+          (prototype-source.html:9917) - a number right-aligned at the far edge
+          of a 220px panel reads as an orphan, so the count sits on the group
+          heading below, next to the word it counts. */}
       <header
         className="flex items-center px-3 text-xs tracking-[.08em] text-text-3 uppercase shadow-[0_1px_0_var(--line)]"
         style={DRAG_REGION}
@@ -86,13 +101,13 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
         tint={tintFor(user)}
         initials={initialsOf(user.name)}
         speaking={speaking}
-        muted={user.selfMute}
-        deaf={user.selfDeaf}
         self={user.isSelf}
-        surface="light"
         haloIndex={index}
       />
       <span className="min-w-0 flex-1 truncate">{user.name}</span>
+      {/* After the name, never over the face: the name gives up its own
+          characters first (min-w-0 truncate against a flex-none glyph). */}
+      <VoiceStateIcon muted={user.selfMute} deaf={user.selfDeaf} surface="light" />
     </>
   );
 
@@ -110,7 +125,10 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             type="button"
             onClick={() => setPinned((p) => !p)}
             aria-expanded={pinned}
-            aria-label={`Громкость: ${user.name}`}
+            // The button's label replaces its whole subtree for assistive
+            // tech, so the glyph's own label would never be heard: the state
+            // is spelled into the name instead.
+            aria-label={memberRowLabel(user)}
             className={cx(rowClass, 'cursor-pointer')}
           >
             {row}

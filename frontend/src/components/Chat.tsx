@@ -46,8 +46,14 @@ export function Chat({ channel }: { channel: ChannelNode | null }) {
 
   return (
     <>
+      {/* Starts at the top edge of the window: on macOS the first
+          --titlebar-h pixels are a window drag handle, and a channel name is a
+          label, not a control - so it may live there, as long as the header
+          covers the whole band (--top-header-h in styles/tokens.css). Off
+          macOS the band is zero and this is a plain 46px header that carries
+          the drag region itself. */}
       <header
-        className="flex h-[var(--header-h)] shrink-0 items-center gap-2 pr-3 pl-4 shadow-[0_1px_0_var(--line)]"
+        className="flex h-[var(--top-header-h)] shrink-0 items-center gap-2 pr-3 pl-4 shadow-[0_1px_0_var(--line)]"
         style={{ '--wails-draggable': 'drag' } as React.CSSProperties}
       >
         <HashIcon size={15} className="flex-none text-text-3" />

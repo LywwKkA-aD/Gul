@@ -16,6 +16,7 @@ import {
   Spinner,
   TextInput,
   Tooltip,
+  VoiceStateIcon,
   type AvatarSize,
 } from '../ui';
 
@@ -195,6 +196,15 @@ function Radii() {
 
 const AVATAR_SIZES: AvatarSize[] = [20, 24, 30, 36];
 
+/* One row per voice state, plus a name long enough that it has to truncate
+   before the glyph after it gives up a single pixel. */
+const STATE_ROWS = [
+  { name: 'Говорит', tint: 1, muted: false, deaf: false },
+  { name: 'Микрофон выключен', tint: 3, muted: true, deaf: false },
+  { name: 'Ничего не слышит', tint: 4, muted: true, deaf: true },
+  { name: 'Александра Константинопольская-Задунайская', tint: 6, muted: true, deaf: false },
+] as const;
+
 function Avatars() {
   return (
     <div className="flex flex-col gap-6">
@@ -221,52 +231,43 @@ function Avatars() {
       </div>
 
       <div className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium text-text-2">Мьют / глухота на светлом</h3>
-        {AVATAR_SIZES.map((size) => (
-          <Row key={size} label={`muted/deaf ${size}`}>
-            {AVATAR_TINTS.map((_, tint) => (
-              <Avatar
-                key={tint}
-                size={size}
-                tint={tint}
-                initials="ГУ"
-                muted={tint % 2 === 0}
-                deaf={tint % 3 === 0}
-              />
-            ))}
-          </Row>
-        ))}
+        <h3 className="text-sm font-medium text-text-2">
+          Мьют и глухота — после имени, не на аватаре; глухота показывается одна
+        </h3>
+        <div className="flex w-[220px] flex-col rounded-md bg-bg-1 p-2 shadow-[var(--sh-sm)]">
+          {STATE_ROWS.map((row) => (
+            <div
+              key={row.name}
+              className="flex h-[var(--item-h)] min-w-0 items-center gap-2 rounded-md px-2 text-sm text-text-2"
+            >
+              <Avatar size={24} tint={row.tint} initials="ГУ" />
+              <span className="min-w-0 flex-1 truncate">{row.name}</span>
+              <VoiceStateIcon muted={row.muted} deaf={row.deaf} surface="light" />
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 rounded-md bg-sb-1 p-4">
-        <h3 className="text-sm font-medium text-sb-text-2">Мьют / глухота на сайдбаре</h3>
-        {AVATAR_SIZES.map((size) => (
-          <div key={size} className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-4">
-            <span className="font-mono text-xs text-sb-text-3">{`sidebar ${size}`}</span>
-            <div className="flex flex-wrap items-center gap-3">
-              {AVATAR_TINTS.map((_, tint) => (
-                <Avatar
-                  key={tint}
-                  size={size}
-                  tint={tint}
-                  initials="ГУ"
-                  surface="sidebar"
-                  muted={tint % 2 === 0}
-                  deaf={tint % 3 === 0}
-                  speaking={tint === 1}
-                  haloIndex={tint}
-                />
-              ))}
+        <h3 className="text-sm font-medium text-sb-text-2">То же на тёмной шкале сайдбара</h3>
+        <div className="flex w-[220px] flex-col">
+          {STATE_ROWS.map((row, i) => (
+            <div
+              key={row.name}
+              className="flex h-[var(--item-h)] min-w-0 items-center gap-2 rounded-md px-2 text-sm text-sb-text-3"
+            >
+              <Avatar size={20} tint={row.tint} initials="ГУ" speaking={i === 0} haloIndex={i} />
+              <span className="min-w-0 flex-1 truncate">{row.name}</span>
+              <VoiceStateIcon muted={row.muted} deaf={row.deaf} surface="sidebar" />
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       <Row label="photo / self">
         <Avatar size={36} tint={2} initials="ГУ" photo />
         <Avatar size={36} tint={5} initials="ГУ" photo speaking />
         <Avatar size={30} tint={0} initials="ИГ" self speaking />
-        <Avatar size={30} tint={0} initials="ИГ" self muted />
       </Row>
     </div>
   );

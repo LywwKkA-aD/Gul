@@ -4,7 +4,7 @@ import { useGulStore } from '../state/store';
 import { useSpeaking } from '../state/speaking';
 import type { ChannelNode, UserInfo } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';
-import { Avatar, Tooltip } from './ui';
+import { Avatar, Tooltip, VoiceStateIcon } from './ui';
 import { TOOLTIP_DELAY_ROW_MS } from './ui/tooltipPosition';
 import { cx } from './ui/cx';
 
@@ -102,13 +102,13 @@ function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index:
         tint={tintFor(user)}
         initials={initialsOf(user.name)}
         speaking={speaking}
-        muted={user.selfMute}
-        deaf={user.selfDeaf}
         self={user.isSelf}
-        surface="sidebar"
         haloIndex={index}
       />
       <span className="min-w-0 flex-1 truncate">{user.name}</span>
+      {/* Same order as the prototype's sidebar row: name, then the gates
+          (prototype-source.html:9792). */}
+      <VoiceStateIcon muted={user.selfMute} deaf={user.selfDeaf} surface="sidebar" />
     </li>
   );
 }

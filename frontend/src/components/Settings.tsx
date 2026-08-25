@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { SlidersHorizontalIcon } from '@phosphor-icons/react/dist/csr/SlidersHorizontal';
 import { KeyboardIcon } from '@phosphor-icons/react/dist/csr/Keyboard';
-import { PaletteIcon } from '@phosphor-icons/react/dist/csr/Palette';
 import { LifebuoyIcon } from '@phosphor-icons/react/dist/csr/Lifebuoy';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import {
@@ -13,18 +19,47 @@ import { useGulStore } from '../state/store';
 import type { AudioDevice } from '../state/types';
 import { SILENT_DB, meterPercent } from '../state/types';
 import { clampCueVolume } from '../state/settings';
-import { GateSettings } from './GateSettings';
+import { TransmitSettings, VadSettings } from './GateSettings';
 import { Field } from './ui';
 import { cx } from './ui/cx';
 import { captionClass, selectClass } from './ui/controlStyles';
 
-/** Settings modal. M2 ships the "Звук" tab only; the rest of the prototype's
-    tabs stay in place as disabled stubs so the layout does not move later. */
+/* Every tab here has something behind it. The prototype also drew "Внешний
+   вид" (accent / density / glow), but none of it is wired to anything yet, and
+   a rail of greyed-out rows teaches the user that this rail does not answer -
+   so it is left out until there is a screen to open. */
+const TABS = [
+  { id: 'audio', title: 'Звук', icon: <SlidersHorizontalIcon size={15} /> },
+  { id: 'keys', title: 'Клавиши', icon: <KeyboardIcon size={15} /> },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
+const tabId = (id: TabId) => `settings-tab-${id}`;
+const panelId = (id: TabId) => `settings-panel-${id}`;
+
+/** Settings modal: a vertical tab rail and one panel. */
 export function Settings() {
   const setSettingsOpen = useGulStore((s) => s.setSettingsOpen);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const [tab, setTab] = useState<TabId>('audio');
 
   const close = () => setSettingsOpen(false);
+
+  // Arrow keys move between tabs, as the tab pattern expects; selection
+  // follows focus, so one press both moves and opens.
+  const onRailKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1
+      : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1
+      : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const order = TABS.map((t) => t.id);
+    const next = order[(order.indexOf(tab) + step + order.length) % order.length];
+    setTab(next);
+    railRef.current?.querySelector<HTMLButtonElement>(`#${tabId(next)}`)?.focus();
+  };
 
   // Escape closes from anywhere, including when focus never entered the modal.
   useEffect(() => {
@@ -60,7 +95,10 @@ export function Settings() {
         aria-label="Настройки"
         tabIndex={-1}
         className={
-          'animate-modal grid max-h-[min(560px,100%)] w-[min(720px,100%)] ' +
+          // One height across tabs: without a floor the dialog collapses to
+          // its shortest panel and the whole modal, tab rail included, jumps
+          // out from under the pointer that just clicked a tab.
+          'animate-modal grid h-[min(560px,100%)] w-[min(720px,100%)] ' +
           'grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg bg-bg-1 shadow-[var(--sh-lg)]'
         }
       >
@@ -85,17 +123,37 @@ export function Settings() {
         </div>
 
         <div className="grid min-h-0 grid-cols-[168px_minmax(0,1fr)]">
-          <div className="flex min-h-0 flex-col gap-0.5 pr-2 pb-4 pl-3">
-            <Tab active icon={<SlidersHorizontalIcon size={15} />}>
-              Звук
-            </Tab>
-            <Tab icon={<KeyboardIcon size={15} />}>Клавиши</Tab>
-            <Tab icon={<PaletteIcon size={15} />}>Внешний вид</Tab>
+          <div className="flex min-h-0 flex-col pr-2 pb-4 pl-3">
+            <div
+              ref={railRef}
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label="Разделы настроек"
+              onKeyDown={onRailKeyDown}
+              className="flex flex-col gap-0.5"
+            >
+              {TABS.map((t) => (
+                <Tab
+                  key={t.id}
+                  id={t.id}
+                  active={tab === t.id}
+                  icon={t.icon}
+                  onSelect={() => setTab(t.id)}
+                >
+                  {t.title}
+                </Tab>
+              ))}
+            </div>
             <DiagnosticsAction />
           </div>
 
-          <div className="min-h-0 overflow-x-hidden overflow-y-auto border-l border-line px-4 pb-4">
-            <AudioTab />
+          <div
+            role="tabpanel"
+            id={panelId(tab)}
+            aria-labelledby={tabId(tab)}
+            className="min-h-0 overflow-x-hidden overflow-y-auto border-l border-line px-4 pb-4"
+          >
+            {tab === 'audio' ? <AudioTab /> : <KeysTab />}
           </div>
         </div>
       </div>
@@ -104,24 +162,34 @@ export function Settings() {
 }
 
 function Tab({
-  active = false,
+  id,
+  active,
   icon,
+  onSelect,
   children,
 }: {
-  active?: boolean;
+  id: TabId;
+  active: boolean;
   icon: ReactNode;
+  onSelect: () => void;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
-      disabled={!active}
-      aria-current={active ? 'page' : undefined}
-      title={active ? undefined : 'Появится в следующих милстоунах'}
+      id={tabId(id)}
+      role="tab"
+      aria-selected={active}
+      // Only the open panel is rendered, so pointing at a hidden one would be
+      // a dangling reference: the attribute is set on the selected tab alone.
+      aria-controls={active ? panelId(id) : undefined}
+      // Roving tabindex: Tab enters the rail on the open section, the arrow
+      // keys walk it from there.
+      tabIndex={active ? 0 : -1}
+      onClick={onSelect}
       className={cx(
         'flex h-8 cursor-pointer items-center gap-2 rounded-md border-0 px-3 text-left text-sm',
         'transition-[background-color,color] duration-[var(--t-fast)] ease-[var(--e-out)]',
-        'disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent',
         active
           ? 'bg-[var(--accent-weak)] font-medium text-text-1'
           : 'bg-transparent text-text-2 hover:bg-bg-3 hover:text-text-1',
@@ -130,6 +198,15 @@ function Tab({
       <span className="flex-none">{icon}</span>
       <span className="min-w-0 truncate">{children}</span>
     </button>
+  );
+}
+
+/** "Клавиши": what opens the microphone (components/GateSettings.tsx). */
+function KeysTab() {
+  return (
+    <div className="flex flex-col gap-5 pt-0.5">
+      <TransmitSettings />
+    </div>
   );
 }
 
@@ -247,7 +324,7 @@ function AudioTab() {
 
       <OutputMeter />
 
-      <GateSettings />
+      <VadSettings />
 
       <CueVolume />
 

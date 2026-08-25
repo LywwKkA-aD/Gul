@@ -15,3 +15,5 @@ export { TextInput } from './TextInput';
 export type { TextInputProps } from './TextInput';
 export { Tooltip } from './Tooltip';
 export type { TooltipProps } from './Tooltip';
+export { VoiceStateIcon } from './VoiceStateIcon';
+export type { VoiceStateIconProps, VoiceStateSurface } from './VoiceStateIcon';

@@ -6,7 +6,8 @@ import { GearSixIcon } from '@phosphor-icons/react/dist/csr/GearSix';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { selfUser, useGulStore } from '../state/store';
 import { initialsOf, tintFor } from '../state/types';
-import { Avatar, IconButton, Tooltip } from './ui';
+import { Avatar, IconButton, Tooltip, VoiceStateIcon } from './ui';
+import { pingTone, type PingTone } from './pingTone';
 import { cx } from './ui/cx';
 
 export function BottomBar() {
@@ -28,14 +29,18 @@ export function BottomBar() {
 
   const connected = status.state === 'connected';
   const roundedPing = connected && pingMs !== null ? Math.max(0, Math.round(pingMs)) : null;
-  const pingTone =
-    roundedPing === null
-      ? 'text-sb-text-3'
-      : roundedPing <= 150
-        ? 'text-sb-text-3'
-        : roundedPing <= 300
-          ? 'text-warning'
-          : 'text-[var(--sb-danger)]';
+  // Tinted by what the number means for a conversation. ITU-T G.114 puts the
+  // limit of "transparent" interactive speech at 150 ms one way, mouth to ear,
+  // and our own path already spends 60-80 ms of that before the network gets a
+  // turn (10 ms frames, APM, jitter buffer, decode, playback). This number is
+  // a round trip, so half of it is the network's share: at 100 ms RTT the
+  const pingTint: Record<PingTone, string> = {
+    none: 'text-sb-text-3',
+    good: 'text-success',
+    usable: 'text-warning',
+    bad: 'text-[var(--sb-danger)]',
+  };
+  const pingToneClass = pingTint[pingTone(roundedPing)];
   const latencyTitle =
     roundedPing === null
       ? 'Ожидаем первый замер RTT до сервера'
@@ -73,10 +78,7 @@ export function BottomBar() {
             tint={tintFor(self.user)}
             initials={initialsOf(self.user.name)}
             speaking={selfSpeaking}
-            muted={muted}
-            deaf={deafened}
             self
-            surface="sidebar"
           />
         ) : null}
         {/* leading on every line, not on the column: a Tailwind text-* utility
@@ -84,11 +86,17 @@ export function BottomBar() {
             prototype's 1.25 is what keeps the two lines to the 30px of the
             avatar beside them, and the bar to 46px. */}
         <span className="flex min-w-0 flex-col">
-          <span className="truncate text-sm leading-[1.25] text-sb-text-1">
-            {self?.user.name ?? '…'}
+          {/* The same glyph everyone else sees against our name in their own
+              member list. The buttons on the right are the switch; this is the
+              state, and it is what makes the self card read like a row. */}
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="min-w-0 truncate text-sm leading-[1.25] text-sb-text-1">
+              {self?.user.name ?? '…'}
+            </span>
+            <VoiceStateIcon muted={muted} deaf={deafened} surface="sidebar" />
           </span>
           <span
-            className={cx('truncate font-mono text-xs leading-[1.25] tabular-nums', pingTone)}
+            className={cx('truncate font-mono text-xs leading-[1.25] tabular-nums', pingToneClass)}
             title={latencyTitle}
           >
             {roundedPing === null ? '— мс' : `${roundedPing} мс`}

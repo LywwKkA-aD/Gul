@@ -1,5 +1,3 @@
-import { MicrophoneSlashIcon } from '@phosphor-icons/react/dist/csr/MicrophoneSlash';
-import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
 import { useState, type CSSProperties } from 'react';
 import { cx } from './cx';
 
@@ -32,12 +30,8 @@ export interface AvatarProps {
   /** Drives the speech halo. Leave it out where a face cannot speak - a chat
       message head - and the ring is never mounted at all. */
   speaking?: boolean;
-  muted?: boolean;
-  deaf?: boolean;
   /** The self card uses a slightly wider halo (inset -5 instead of -4). */
   self?: boolean;
-  /** Picks the danger colour and the badge backdrop for the surface below. */
-  surface?: 'light' | 'sidebar';
   /** Staggers the speech halo by 260ms per row, as the prototype does with the
       list index, so neighbouring halos do not pulse in lockstep. */
   haloIndex?: number;
@@ -48,28 +42,19 @@ export interface AvatarProps {
 /* Initials keep the prototype's per-size mono cap heights. */
 const initialsSize: Record<AvatarSize, number> = { 20: 9, 24: 10, 30: 10, 36: 11 };
 
-/* Mute / deaf chips are not in the prototype markup (there they sit next to the
-   name in the row); sized here to stay legible down to a 20px avatar. */
-const badgeSize: Record<AvatarSize, { box: number; icon: number }> = {
-  20: { box: 12, icon: 8 },
-  24: { box: 13, icon: 9 },
-  30: { box: 15, icon: 10 },
-  36: { box: 17, icon: 12 },
-};
-
 const SPEAKING_SHADOW = '0 0 0 2px var(--speak), 0 0 var(--glow-spread) -1px var(--speak-halo)';
 const RESTING_SHADOW = '0 0 0 1px color-mix(in oklab, black 12%, transparent)';
 
+/** A face and nothing else. Speech is the one state it carries, because speech
+ *  is the one state that is about the face; mute and deafen belong to the row,
+ *  after the name (components/ui/VoiceStateIcon.tsx). */
 export function Avatar({
   size = 24,
   tint,
   initials,
   photo = false,
   speaking = false,
-  muted = false,
-  deaf = false,
   self = false,
-  surface = 'light',
   haloIndex = 0,
   className,
   title,
@@ -92,14 +77,6 @@ export function Avatar({
     height: size,
     background,
     boxShadow: speaking ? SPEAKING_SHADOW : RESTING_SHADOW,
-  };
-
-  const badge = badgeSize[size];
-  const badgeStyle: CSSProperties = {
-    width: badge.box,
-    height: badge.box,
-    background: surface === 'sidebar' ? 'var(--sb-1)' : 'var(--bg-1)',
-    color: surface === 'sidebar' ? 'var(--sb-danger)' : 'var(--danger)',
   };
 
   return (
@@ -131,28 +108,6 @@ export function Avatar({
           style={{ fontSize: initialsSize[size], letterSpacing: '.02em', lineHeight: 1 }}
         >
           {initials}
-        </span>
-      )}
-
-      {muted && (
-        <span
-          aria-label="микрофон выключен"
-          role="img"
-          className="absolute -right-px -bottom-px grid place-items-center rounded-pill"
-          style={badgeStyle}
-        >
-          <MicrophoneSlashIcon size={badge.icon} weight="fill" />
-        </span>
-      )}
-
-      {deaf && (
-        <span
-          aria-label="звук выключен"
-          role="img"
-          className="absolute -bottom-px -left-px grid place-items-center rounded-pill"
-          style={badgeStyle}
-        >
-          <SpeakerSlashIcon size={badge.icon} weight="fill" />
         </span>
       )}
     </span>

@@ -9,7 +9,6 @@ import { BottomBar } from '../components/BottomBar';
 import { ReconnectBanner } from '../components/ReconnectBanner';
 import { Tooltip } from '../components/ui';
 import { cx } from '../components/ui/cx';
-import { IS_MAC } from './platform';
 import { useFullscreen } from './fullscreen';
 import { serverLabel } from './serverLabel';
 
@@ -41,9 +40,10 @@ export function MainScreen() {
   const activeChannelId = useGulStore((s) => s.activeChannelId);
   const setActiveChannel = useGulStore((s) => s.setActiveChannel);
   const setHistory = useGulStore((s) => s.setHistory);
-  // macOS hides its traffic lights in fullscreen, so the band we keep clear
-  // for them stops being anything but dead pixels (app/fullscreen.ts).
-  const fullscreen = useFullscreen();
+  // Publishes the fullscreen state on the root element: macOS hides its
+  // traffic lights there, so --titlebar-h collapses and the band inside the
+  // sidebar disappears on its own (app/fullscreen.ts, styles/tokens.css).
+  useFullscreen();
 
   const reconnecting = status.state === 'reconnecting';
   const self = selfUser(tree);
@@ -70,8 +70,6 @@ export function MainScreen() {
 
   return (
     <div className="fixed inset-0 flex flex-col bg-bg-0 text-ui text-text-1">
-      {IS_MAC && !fullscreen && <TitleBarStrip />}
-
       <div
         className={cx(
           'grid min-h-0 flex-1',
@@ -83,6 +81,7 @@ export function MainScreen() {
           data-sidebar
           className="flex min-h-0 flex-col bg-sb-1 text-sb-text-1 shadow-[1px_0_0_var(--sb-line)]"
         >
+          <TrafficLightBand />
           <header
             className="flex h-[var(--header-h)] shrink-0 items-center px-3 shadow-[0_1px_0_var(--sb-line)]"
             style={DRAG_REGION}
@@ -137,16 +136,19 @@ export function MainScreen() {
   );
 }
 
-/** The band macOS keeps for its traffic lights. It stays empty on purpose:
- *  Wails turns those pixels into a window drag handle, so a control placed
- *  there would start dragging the window instead of reacting. Each cell keeps
- *  its column's surface, so the strip reads as an inset and not as a bar. */
-function TitleBarStrip() {
-  return (
-    <div className={cx('grid h-[var(--titlebar-h)] shrink-0', COLUMNS)} style={DRAG_REGION}>
-      <div className="bg-sb-1 shadow-[1px_0_0_var(--sb-line)]" />
-      <div className="bg-bg-2" />
-      <div className="bg-bg-1 shadow-[-1px_0_0_var(--line)]" />
-    </div>
-  );
+/** The clearance macOS needs for its traffic lights, and only where they are.
+ *
+ *  The buttons float over the top-left corner, which is the sidebar, so this
+ *  is the one column that pays for them; the chat and the member list start at
+ *  the top edge of the window and put their own captions in the band instead
+ *  (--top-header-h in styles/tokens.css). It stays empty on purpose: Wails
+ *  turns these pixels into a window drag handle, so a control here would drag
+ *  the window instead of reacting.
+ *
+ *  Height comes from the token, which is zero off macOS and in fullscreen, so
+ *  the element simply collapses instead of being conditionally mounted. It
+ *  still carries the drag region: on Windows and Linux the band has no height,
+ *  and on macOS AppKit is dragging anyway. */
+function TrafficLightBand() {
+  return <div className="h-[var(--titlebar-h)] shrink-0" style={DRAG_REGION} />;
 }

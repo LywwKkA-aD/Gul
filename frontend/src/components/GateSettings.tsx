@@ -20,10 +20,16 @@ import type { HotkeyMode, HotkeyStatus } from '../state/hotkey';
 import { cx } from './ui/cx';
 import { captionClass, selectClass } from './ui/controlStyles';
 
-/** Transmit gate section of the "Звук" tab: what opens the microphone
-    (PLAN.md 4.3). Every control writes through a service: core applies the
-    change to the engine and persists it (config.json). */
-export function GateSettings() {
+/* The transmit gate (PLAN.md 4.3), split across the two settings tabs the way
+   a user looks for it: what opens the microphone is a keyboard question and
+   lives in "Клавиши"; how loud speech has to be before the gate agrees is a
+   sound question and stays in "Звук". Both halves keep writing through the
+   same services - core applies the change to the engine and persists it
+   (config.json) - so the split is a matter of composition only. */
+
+/** "Клавиши": the transmit mode, the push-to-talk key, and whether that key
+    is watched system wide. */
+export function TransmitSettings() {
   const gateMode = useGulStore((s) => s.gateMode);
   const setGateMode = useGulStore((s) => s.setGateMode);
   const setHotkey = useGulStore((s) => s.setHotkey);
@@ -55,58 +61,28 @@ export function GateSettings() {
             Push-to-talk
           </ModeButton>
         </div>
+        <p className="text-sm text-text-2">
+          {gateMode === 'vad'
+            ? 'Микрофон открывается сам, когда вы говорите. Порог и задержка — на вкладке «Звук». Клавиша ниже вступит в силу, если переключиться на push-to-talk.'
+            : 'Микрофон открыт, пока зажата клавиша.'}
+        </p>
       </div>
 
-      {gateMode === 'vad' ? (
-        <VadTuning />
-      ) : (
-        <>
-          <PttKeyField />
-          <GlobalPttField />
-        </>
-      )}
+      {/* The key is shown in both modes. It is a setting, not live state:
+          a tab named "Клавиши" that shows no key in the mode the app starts
+          in is a dead end, and hiding it also made the dialog collapse and
+          jump on every tab switch. The note above says when it applies. */}
+      <PttKeyField />
+      <GlobalPttField />
     </div>
   );
 }
 
-/** Reads the hotkey status back after a change that can re-point the watch.
-    Whether the stored key could actually be bound is decided in Go and only
-    reported through the snapshot (services.Settings.Hotkey). */
-function refreshHotkey(setHotkey: (hotkey: HotkeyStatus) => void): void {
-  SettingsService.Load()
-    .then((settings) => setHotkey(normalizeSettings(settings).hotkey))
-    .catch((e: unknown) => console.error('settings:', e));
-}
-
-/* Prototype segStyle: 28px tall, 6px radius, accent fill when selected. */
-function ModeButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cx(
-        'h-7 flex-none cursor-pointer rounded-[6px] border-0 px-3 text-sm',
-        'transition-[background-color,color] duration-[var(--t-fast)] ease-[var(--e-out)]',
-        active
-          ? 'bg-accent font-medium text-on-accent'
-          : 'bg-transparent text-text-2 hover:text-text-1',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function VadTuning() {
+/** "Звук": the two numbers that decide when voice activation opens and closes
+    the gate. They are persisted settings, not live state, so they are shown in
+    either mode - only the note below changes. */
+export function VadSettings() {
+  const gateMode = useGulStore((s) => s.gateMode);
   const vadOpen = useGulStore((s) => s.vadOpen);
   const vadHangoverMs = useGulStore((s) => s.vadHangoverMs);
   const setVadTuning = useGulStore((s) => s.setVadTuning);
@@ -125,6 +101,13 @@ function VadTuning() {
 
   return (
     <>
+      {gateMode === 'ptt' && (
+        <p className="text-sm text-text-2">
+          Сейчас выбран push-to-talk, и эти две настройки ни на что не влияют. Они запомнены и
+          вступят в силу, когда на вкладке «Клавиши» вернётся активация по голосу.
+        </p>
+      )}
+
       <div className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
           <span className={captionClass}>Порог срабатывания</span>
@@ -166,6 +149,43 @@ function VadTuning() {
         </p>
       </div>
     </>
+  );
+}
+
+/** Reads the hotkey status back after a change that can re-point the watch.
+    Whether the stored key could actually be bound is decided in Go and only
+    reported through the snapshot (services.Settings.Hotkey). */
+function refreshHotkey(setHotkey: (hotkey: HotkeyStatus) => void): void {
+  SettingsService.Load()
+    .then((settings) => setHotkey(normalizeSettings(settings).hotkey))
+    .catch((e: unknown) => console.error('settings:', e));
+}
+
+/* Prototype segStyle: 28px tall, 6px radius, accent fill when selected. */
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cx(
+        'h-7 flex-none cursor-pointer rounded-[6px] border-0 px-3 text-sm',
+        'transition-[background-color,color] duration-[var(--t-fast)] ease-[var(--e-out)]',
+        active
+          ? 'bg-accent font-medium text-on-accent'
+          : 'bg-transparent text-text-2 hover:text-text-1',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
