@@ -23,7 +23,12 @@ func (s *ConnectionService) Connect(address, username, password string) error {
 // with and, when one is stored, its password. The password is looked up in
 // core and never travels to the UI, so the picker needs nothing but the
 // address.
-func (s *ConnectionService) ConnectSaved(address string) error {
+//
+// The result says why a click did not start a connect, as a reason the UI can
+// switch on: the server is no longer remembered, or its password could not be
+// read (a locked credential store), which falls back to the manual form.
+// Anything else is an error, like any other failed call.
+func (s *ConnectionService) ConnectSaved(address string) (domain.SavedConnect, error) {
 	return s.app.ConnectSaved(address)
 }
 

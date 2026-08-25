@@ -119,6 +119,7 @@ func (v *orderedVoice) Stop()                         { v.record("stop") }
 func (v *orderedVoice) SetMute(bool)                  {}
 func (v *orderedVoice) SetDeafen(bool)                {}
 func (v *orderedVoice) SetUserVolume(string, float32) {}
+func (v *orderedVoice) SetUserMute(string, bool)      {}
 func (v *orderedVoice) SetPTT(bool)                   {}
 func (v *orderedVoice) SetCueVolume(volume float32)   { v.record("cue volume %g", volume) }
 func (v *orderedVoice) PlayCue(cue Cue)               { v.record("cue %d", cue) }

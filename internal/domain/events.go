@@ -13,7 +13,24 @@ const (
 	EventAudioSelf         = "audio:self"         // payload: SelfAudioState
 	EventAudioPTT          = "audio:ptt"          // payload: PTTState
 	EventAudioSelfTalking  = "audio:selftalking"  // payload: SelfTalkingState
+	EventUpdateAvailable   = "update:available"   // payload: UpdateAvailable
 )
+
+// UpdateAvailable announces a release newer than the one running. It is
+// pushed at most once per run, only when there is something to say, and the
+// user can silence that version for good (internal/core/update.go).
+//
+// The zero value means "nothing to show", which is what a UI that mounts
+// after the check has already finished reads from PendingUpdate.
+type UpdateAvailable struct {
+	// Version is how the release is written everywhere else in the
+	// application: no leading "v".
+	Version string `json:"version"`
+	// Tag is the git tag, which is what a dismissal is keyed on.
+	Tag string `json:"tag"`
+	// URL is the release page, for a human to read.
+	URL string `json:"url"`
+}
 
 // SelfAudioState is the local microphone and monitor state. Mute and deafen
 // are reachable from the window and from the system tray, so core pushes this

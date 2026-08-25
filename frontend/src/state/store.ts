@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { SILENT_DB } from './types';
-import type { ChannelNode, ChatMessage, ConnectionStatus, TofuPrompt } from './types';
+import type {
+  ChannelNode,
+  ChatMessage,
+  ConnectionStatus,
+  TofuPrompt,
+  UpdateAvailable,
+} from './types';
 import {
   PTT_KEY_DEFAULT,
   VAD_HANGOVER_DEFAULT,
@@ -23,6 +29,10 @@ interface GulState {
   messages: Record<number, ChatMessage[]>;
   tofu: TofuPrompt | null;
   activeChannelId: number | null;
+  /** A release newer than the one running, from the one check at startup.
+      Null means there is nothing to say - which is also what every failure of
+      that check looks like (internal/core/update.go). */
+  update: UpdateAvailable | null;
 
   // ── Persisted settings (M4) ─────────────────────────────────────────────
   /** What the connect form starts on: the last connection the server
@@ -47,6 +57,10 @@ interface GulState {
   deafened: boolean;
   /** Per-user gain by certificate hash, 1.0 = unity. Survives reconnects. */
   userVolumes: Record<string, number>;
+  /** Participants silenced on this machine, by the same certificate hash.
+      Separate from the gain on purpose: unmuting gives back the gain the user
+      chose, and the engine is what keeps it (internal/audio/users.go). */
+  mutedUsers: Record<string, boolean>;
   /** Selected devices, "" = system default. */
   captureId: string;
   playbackId: string;
@@ -81,6 +95,7 @@ interface GulState {
   appendMessage: (message: ChatMessage) => void;
   setHistory: (channelId: number, messages: ChatMessage[]) => void;
   setTofu: (prompt: TofuPrompt | null) => void;
+  setUpdate: (update: UpdateAvailable | null) => void;
   setActiveChannel: (channelId: number | null) => void;
   applySettings: (settings: GulSettings) => void;
   setRememberedConnection: (address: string, username: string) => void;
@@ -89,6 +104,7 @@ interface GulState {
   setLevels: (micDb: number, outDb: number) => void;
   setVoiceGates: (muted: boolean, deafened: boolean) => void;
   setUserVolume: (hash: string, volume: number) => void;
+  setUserMuted: (hash: string, muted: boolean) => void;
   setDevices: (captureId: string, playbackId: string) => void;
   setSettingsOpen: (open: boolean) => void;
   setGateMode: (mode: GateMode) => void;
@@ -114,6 +130,7 @@ export const useGulStore = create<GulState>((set) => ({
   messages: {},
   tofu: null,
   activeChannelId: null,
+  update: null,
 
   lastAddress: '',
   lastUsername: '',
@@ -125,6 +142,7 @@ export const useGulStore = create<GulState>((set) => ({
   muted: false,
   deafened: false,
   userVolumes: {},
+  mutedUsers: {},
   captureId: '',
   playbackId: '',
   cueVolume: CUE_VOLUME_DEFAULT,
@@ -177,6 +195,7 @@ export const useGulStore = create<GulState>((set) => ({
   setHistory: (channelId, messages) =>
     set((s) => ({ messages: { ...s.messages, [channelId]: messages } })),
   setTofu: (prompt) => set({ tofu: prompt }),
+  setUpdate: (update) => set({ update }),
   setActiveChannel: (channelId) => set({ activeChannelId: channelId }),
 
   // Fetched once, before the first render: the connect form and the settings
@@ -218,6 +237,8 @@ export const useGulStore = create<GulState>((set) => ({
   setVoiceGates: (muted, deafened) => set({ muted, deafened }),
   setUserVolume: (hash, volume) =>
     set((s) => ({ userVolumes: { ...s.userVolumes, [hash]: volume } })),
+  setUserMuted: (hash, muted) =>
+    set((s) => ({ mutedUsers: { ...s.mutedUsers, [hash]: muted } })),
   setDevices: (captureId, playbackId) => set({ captureId, playbackId }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
 

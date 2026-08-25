@@ -8,6 +8,7 @@ import { MainScreen } from './app/MainScreen';
 import { TofuDialog } from './components/TofuDialog';
 import { Settings } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { UpdateNotice } from './components/UpdateNotice';
 
 function App() {
   const state = useGulStore((s) => s.status.state);
@@ -35,7 +36,13 @@ function App() {
 
   return (
     <ErrorBoundary>
-      {showMain ? <MainScreen /> : <ConnectScreen />}
+      {/* The window is a column: the screen fills it, and the update line -
+          when there is one - takes a strip at the bottom rather than floating
+          over something. Both screens size themselves to this box. */}
+      <div className="fixed inset-0 flex flex-col">
+        <div className="min-h-0 flex-1">{showMain ? <MainScreen /> : <ConnectScreen />}</div>
+        <UpdateNotice />
+      </div>
       {/* Modals live outside the screens: the main grid dims itself while
           reconnecting, and a dialog must stay usable on top of that. */}
       {settingsOpen && <Settings />}

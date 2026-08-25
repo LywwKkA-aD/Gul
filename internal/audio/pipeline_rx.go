@@ -2,7 +2,6 @@ package audio
 
 import (
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
@@ -118,7 +117,7 @@ func (r *rxPipeline) ingest(p mumble.VoicePacket) {
 // since the last tick (underruns): the speaker really played them, so the
 // echo canceller has to see them too, or its reference timeline slips one
 // frame behind reality per underrun.
-func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map, extraSilence int) {
+func (r *rxPipeline) tick(sink FrameSink, deafened bool, users *userAudioState, extraSilence int) {
 	now := time.Now()
 	for session, s := range r.streams {
 		switch s.jit.Pop(r.frame) {
@@ -141,11 +140,15 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, volumes *sync.Map, extr
 		if deafened {
 			continue
 		}
-		volume := float32(1.0)
-		if v, ok := volumes.Load(s.hash); ok {
-			volume = v.(float32)
+		// The stream is still decoded, still popped from its jitter buffer
+		// and still reported as talking: a locally silenced person is
+		// speaking, we have simply chosen not to hear them. Only the mix
+		// skips them, and their gain is kept for the unmute (users.go).
+		treatment := users.get(s.hash)
+		if treatment.muted {
+			continue
 		}
-		r.mixer.Add(r.frame, volume)
+		r.mixer.Add(r.frame, treatment.volume)
 	}
 
 	// DECISION: cues are mixed after the deafen check, so they play while

@@ -12,13 +12,14 @@ import "github.com/LywwKkA-aD/Gul/internal/domain"
 // move we just asked for.
 
 // channelCue decides what the new tree snapshot sounds like, and adopts it as
-// the baseline for the next one.
+// the baseline for the next one. The name it returns is the person the cue is
+// about, which is also what a notification has to say (notify.go).
 //
 // Nothing is played when there is no baseline to compare against (the first
 // snapshot of a session) or when the baseline describes another channel (we
 // moved): both are a new room, and everybody already in it has not just
 // arrived.
-func (a *App) channelCue(root domain.ChannelNode) (Cue, bool) {
+func (a *App) channelCue(root domain.ChannelNode) (Cue, string, bool) {
 	channelID, members, found := selfChannelMembers(root)
 
 	a.mu.Lock()
@@ -28,29 +29,29 @@ func (a *App) channelCue(root domain.ChannelNode) (Cue, bool) {
 		// No self in the tree: nothing can be said about our channel, and the
 		// next snapshot that carries us starts a fresh baseline.
 		a.cueChannel, a.cueMembers, a.cueBaseline = 0, nil, false
-		return 0, false
+		return 0, "", false
 	}
 
 	previous, previousChannel, haveBaseline := a.cueMembers, a.cueChannel, a.cueBaseline
 	a.cueChannel, a.cueMembers, a.cueBaseline = channelID, members, true
 	if !haveBaseline || previousChannel != channelID {
-		return 0, false
+		return 0, "", false
 	}
 
 	// Arrivals are announced ahead of departures: a snapshot that carries both
 	// is one sound to the ear anyway (the engine keeps at most one cue
 	// pending), and the person who just walked in is the one worth hearing.
-	for session := range members {
+	for session, name := range members {
 		if _, was := previous[session]; !was {
-			return CueJoin, true
+			return CueJoin, name, true
 		}
 	}
-	for session := range previous {
+	for session, name := range previous {
 		if _, still := members[session]; !still {
-			return CueLeave, true
+			return CueLeave, name, true
 		}
 	}
-	return 0, false
+	return 0, "", false
 }
 
 // resetChannelCues drops the baseline. Called whenever the session stops being
@@ -63,18 +64,21 @@ func (a *App) resetChannelCues() {
 }
 
 // selfChannelMembers finds the channel containing self and returns the other
-// sessions in it. found is false when the snapshot does not carry self, which
-// happens between a connection being up and the server having told us who we
-// are.
-func selfChannelMembers(node domain.ChannelNode) (channelID uint32, members map[uint32]struct{}, found bool) {
+// sessions in it, by name. found is false when the snapshot does not carry
+// self, which happens between a connection being up and the server having told
+// us who we are.
+//
+// The name is kept beside the session because the diff is the only place that
+// knows who arrived: the next snapshot no longer contains whoever left.
+func selfChannelMembers(node domain.ChannelNode) (channelID uint32, members map[uint32]string, found bool) {
 	for _, user := range node.Users {
 		if !user.IsSelf {
 			continue
 		}
-		members = make(map[uint32]struct{}, len(node.Users)-1)
+		members = make(map[uint32]string, len(node.Users)-1)
 		for _, other := range node.Users {
 			if !other.IsSelf {
-				members[other.Session] = struct{}{}
+				members[other.Session] = other.Name
 			}
 		}
 		return node.ID, members, true

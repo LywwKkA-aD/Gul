@@ -54,6 +54,7 @@ type VoiceEngine interface {
 	SetMute(muted bool)
 	SetDeafen(deafened bool)
 	SetUserVolume(hash string, volume float32)
+	SetUserMute(hash string, muted bool)
 	SetGateMode(mode GateMode)
 	SetVADTuning(open, close float32, hangoverMs int)
 	SetPTT(held bool)
@@ -107,6 +108,26 @@ func (a *App) stopVoice() {
 func (a *App) SetUserVolume(hash string, volume float32) {
 	if v := a.voiceEngine(); v != nil {
 		v.SetUserVolume(hash, volume)
+	}
+}
+
+// SetUserMute silences one participant locally, or lets them back in, keyed
+// by the same certificate hash as the gain.
+//
+// It is not the gain set to zero: the engine keeps the gain the user chose and
+// gives it back on unmute (internal/audio/users.go). It is not the Mumble mute
+// on the wire either - nothing is sent, and the other person is never told.
+//
+// NOT persisted, on purpose and by precedent: per-user gain is not persisted
+// either. Both live in the running engine and survive a peer reconnecting
+// within the session, and both start clean on the next run. Persisting the
+// mute alone would leave a client that silently drops somebody with no visible
+// reason after a restart, while the volume the user set beside it came back at
+// unity. If one of them ever earns a home in the settings document, they take
+// it together, keyed per server.
+func (a *App) SetUserMute(hash string, muted bool) {
+	if v := a.voiceEngine(); v != nil {
+		v.SetUserMute(hash, muted)
 	}
 }
 

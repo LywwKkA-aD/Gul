@@ -1,5 +1,8 @@
 import { Events } from '@wailsio/runtime';
-import { SettingsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import {
+  SettingsService,
+  UpdateService,
+} from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from './store';
 import { normalizeSettings } from './settings';
 import { normalizeTree } from './types';
@@ -11,6 +14,7 @@ import type {
   SelfAudioState,
   TalkingEvent,
   TofuPrompt,
+  UpdateAvailable,
   WireChannelNode,
 } from './types';
 
@@ -27,6 +31,7 @@ const AUDIO_LEVELS = 'audio:levels';
 const AUDIO_SELF = 'audio:self';
 const AUDIO_PTT = 'audio:ptt';
 const AUDIO_SELF_TALKING = 'audio:selftalking';
+const UPDATE_AVAILABLE = 'update:available';
 
 let subscribed = false;
 
@@ -98,4 +103,31 @@ export function subscribeGulEvents(): void {
     const self = e.data as unknown as { talking?: boolean };
     useGulStore.getState().setSelfTalking(self.talking === true);
   });
+
+  // The version check runs once at startup and can finish before this
+  // subscription exists, so the event is only half of it: the snapshot below
+  // covers the answer that already arrived. Both are the same value, and the
+  // store takes whichever lands last.
+  Events.On(UPDATE_AVAILABLE, (e) => {
+    useGulStore.getState().setUpdate(availableUpdate(e.data));
+  });
+  UpdateService.Available()
+    .then((available) => {
+      const update = availableUpdate(available);
+      if (update) useGulStore.getState().setUpdate(update);
+    })
+    .catch((err: unknown) => console.error('update:', err));
+}
+
+/** The zero value from Go means "nothing to show", and a check that failed is
+    exactly that: every failure of the version check is silence
+    (internal/core/update.go). */
+function availableUpdate(raw: unknown): UpdateAvailable | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const u = raw as Partial<Record<keyof UpdateAvailable, unknown>>;
+  const version = typeof u.version === 'string' ? u.version : '';
+  const tag = typeof u.tag === 'string' ? u.tag : '';
+  const url = typeof u.url === 'string' ? u.url : '';
+  if (version === '' || tag === '' || url === '') return null;
+  return { version, tag, url };
 }

@@ -145,8 +145,12 @@ func TestConnectionServiceDelegatesTheServerPicker(t *testing.T) {
 		t.Errorf("HasPassword is true without a credential store")
 	}
 
-	if err := svc.ConnectSaved("localhost:64738"); err != nil {
+	result, err := svc.ConnectSaved("localhost:64738")
+	if err != nil {
 		t.Fatalf("ConnectSaved: %v", err)
+	}
+	if result.Reason != domain.SavedConnectStarted {
+		t.Fatalf("result = %+v, want a started connect", result)
 	}
 	rec.mu.Lock()
 	connects := append([]string(nil), rec.connects...)
@@ -163,13 +167,25 @@ func TestConnectionServiceDelegatesTheServerPicker(t *testing.T) {
 	}
 }
 
-func TestConnectionServicePropagatesAnUnknownServer(t *testing.T) {
+// An address that is no longer in the picker comes back as a reason the UI
+// switches on, not as a sentence it has to match.
+func TestConnectionServiceReportsAnUnknownServer(t *testing.T) {
 	t.Parallel()
 	app, rec := newApp(t)
 	svc := NewConnectionService(app)
 
-	if err := svc.ConnectSaved("stranger.example:64738"); !errors.Is(err, core.ErrUnknownServer) {
-		t.Fatalf("err = %v, want %v", err, core.ErrUnknownServer)
+	result, err := svc.ConnectSaved("stranger.example:64738")
+	if err != nil {
+		t.Fatalf("ConnectSaved: %v", err)
+	}
+	if result.Reason != domain.SavedConnectUnknown {
+		t.Fatalf("reason = %q, want %q", result.Reason, domain.SavedConnectUnknown)
+	}
+	if result.Message == "" {
+		t.Error("no message for the user")
+	}
+	if result.Address != "stranger.example:64738" {
+		t.Errorf("address = %q, want the one that was clicked", result.Address)
 	}
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -244,13 +260,24 @@ type voiceRecorder struct {
 	ptt     []bool
 	mutes   []bool
 	deafens []bool
+	volumes []string
+	userMut []string
 	cues    []core.Cue
 	cueVols []float32
 }
 
 func (v *voiceRecorder) Start(string, string) error { return nil }
 func (v *voiceRecorder) Stop()                      {}
-func (v *voiceRecorder) SetUserVolume(string, float32) {
+func (v *voiceRecorder) SetUserVolume(hash string, volume float32) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.volumes = append(v.volumes, fmt.Sprintf("%s|%g", hash, volume))
+}
+
+func (v *voiceRecorder) SetUserMute(hash string, muted bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.userMut = append(v.userMut, fmt.Sprintf("%s|%v", hash, muted))
 }
 
 func (v *voiceRecorder) SetMute(muted bool) {
@@ -339,6 +366,28 @@ func TestAudioServiceGateControlsDelegate(t *testing.T) {
 	}
 	if len(voice.ptt) != 2 || !voice.ptt[0] || voice.ptt[1] {
 		t.Errorf("ptt = %v, want [true false]", voice.ptt)
+	}
+}
+
+// The per-user controls cross the binding boundary as a hash plus a value.
+// The gain narrows from the float64 the bindings marshal a JS number into;
+// the mute is its own call, so silencing somebody never costs their gain.
+func TestAudioServiceUserControlsDelegate(t *testing.T) {
+	t.Parallel()
+	app, voice := newAudioApp(t)
+	svc := NewAudioService(app)
+
+	svc.SetUserVolume("deadbeef", 0.4)
+	svc.SetUserMute("deadbeef", true)
+	svc.SetUserMute("deadbeef", false)
+
+	voice.mu.Lock()
+	defer voice.mu.Unlock()
+	if len(voice.volumes) != 1 || voice.volumes[0] != "deadbeef|0.4" {
+		t.Errorf("volumes = %v, want [deadbeef|0.4]", voice.volumes)
+	}
+	if len(voice.userMut) != 2 || voice.userMut[0] != "deadbeef|true" || voice.userMut[1] != "deadbeef|false" {
+		t.Errorf("mutes = %v, want [deadbeef|true deadbeef|false]", voice.userMut)
 	}
 }
 

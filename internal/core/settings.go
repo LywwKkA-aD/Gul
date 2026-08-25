@@ -138,6 +138,7 @@ func (a *App) updateSettings(fn func(*config.Config)) {
 	changed := a.cfg.Connection != before.Connection ||
 		a.cfg.Audio != before.Audio ||
 		a.cfg.Gate != before.Gate ||
+		a.cfg.Update != before.Update ||
 		!slices.Equal(a.cfg.Servers, before.Servers)
 	a.mu.Unlock()
 

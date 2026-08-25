@@ -1,9 +1,11 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/notify"
 	"github.com/LywwKkA-aD/Gul/internal/secret"
 )
 
@@ -37,6 +40,11 @@ var (
 	ErrEmptyMessage  = errors.New("message is empty")
 	ErrMessageTooBig = errors.New("message is too long")
 	ErrUnknownServer = errors.New("server is not remembered")
+	// ErrPasswordUnreadable reports a credential store that could not
+	// answer - typically a locked keyring. It is not "there is no
+	// password": the connect stops rather than dialling without one
+	// (servers.go).
+	ErrPasswordUnreadable = errors.New("stored password could not be read")
 )
 
 // App owns the application state and orchestrates the layers beneath the Wails
@@ -100,13 +108,27 @@ type App struct {
 	// Baseline of the channel we are in, for the join and leave cues
 	// (cues.go).
 	cueChannel  uint32
-	cueMembers  map[uint32]struct{}
+	cueMembers  map[uint32]string
 	cueBaseline bool
 
 	// Global push-to-talk (hotkey.go). The monitor and the last watch error
 	// are guarded by mu; hotkeyMu guards the watch itself.
 	keys      hotkey.Monitor
 	hotkeyErr string
+
+	// System notifications for a window nobody is looking at (notify.go).
+	// The decider always exists; the notifier is nil until main.go injects
+	// one, which is what keeps every test off the notification centre.
+	notifier      Notifier
+	notifications *notify.Decider
+
+	// Startup version check (update.go). The endpoint and client are empty
+	// in production, where the package defaults apply; only tests point them
+	// somewhere else.
+	updateEndpoint string
+	updateClient   *http.Client
+	updateCancel   context.CancelFunc
+	pendingUpdate  domain.UpdateAvailable
 
 	// Persisted settings (settings.go). cfgDir is empty until UseSettings,
 	// which is what keeps a core built for a test from writing anything.
@@ -124,11 +146,12 @@ func New(log *slog.Logger, emitter domain.Emitter) *App {
 		log = slog.Default()
 	}
 	a := &App{
-		log:     log,
-		emitter: emitter,
-		status:  domain.ConnectionStatus{State: domain.StateDisconnected},
-		history: make(map[uint32][]domain.ChatMessage),
-		cfg:     config.Defaults(),
+		log:           log,
+		emitter:       emitter,
+		status:        domain.ConnectionStatus{State: domain.StateDisconnected},
+		history:       make(map[uint32][]domain.ChatMessage),
+		cfg:           config.Defaults(),
+		notifications: notify.New(0, 0),
 	}
 	a.saver = newSettingsSaver(settingsSaveWindow, a.saveSettings)
 	return a
@@ -248,11 +271,11 @@ func (a *App) SendMessage(channelID uint32, text string) error {
 	a.mu.Lock()
 	sender := a.username
 	a.mu.Unlock()
-	a.HandleMessage(mumble.RawMessage{
+	a.handleMessage(mumble.RawMessage{
 		ChannelID: channelID,
 		Sender:    sender,
 		HTML:      EscapePlain(text),
-	})
+	}, true)
 	return nil
 }
 
@@ -361,14 +384,24 @@ func (a *App) HandleTree(root domain.ChannelNode) {
 	a.emit(domain.EventChannelsTree, root)
 	a.reconcileSelfAudio(root)
 
-	if cue, ok := a.channelCue(root); ok {
+	if cue, who, ok := a.channelCue(root); ok {
 		a.playCue(cue)
+		// The cue is the half the user hears; a notification is the other
+		// half, for a window they are not looking at (notify.go).
+		a.notifyChannelCue(cue, who)
 	}
 }
 
 // HandleMessage sanitizes an incoming chat message, appends it to the session
 // history and pushes it to the UI.
 func (a *App) HandleMessage(raw mumble.RawMessage) {
+	a.handleMessage(raw, false)
+}
+
+// handleMessage is HandleMessage plus the one fact only the caller knows:
+// whether this is our own message, echoed locally because Mumble servers never
+// deliver a text message back to its sender. Our own words must not notify us.
+func (a *App) handleMessage(raw mumble.RawMessage, local bool) {
 	a.notifyMu.Lock()
 	defer a.notifyMu.Unlock()
 
@@ -384,9 +417,18 @@ func (a *App) HandleMessage(raw mumble.RawMessage) {
 		At:         at,
 	}
 	a.appendLocked(msg)
+	selfChannel, connected := a.status.SelfChannel, a.status.State == domain.StateConnected
 	a.mu.Unlock()
 
 	a.emit(domain.EventChatMessage, msg)
+
+	// Only the channel we are in, and only somebody else's words. The server
+	// delivers text for our own channel anyway; the check is what keeps a
+	// message replayed for another channel out of the notification centre
+	// (notify.go).
+	if !local && connected && msg.ChannelID == selfChannel {
+		a.notifyMessage(msg.Sender, msg.HTML)
+	}
 }
 
 // HandleTofu pushes a certificate mismatch prompt to the UI. The connection
@@ -434,10 +476,12 @@ func (a *App) nextID(at time.Time) string {
 }
 
 // Shutdown releases what must not outlive the process: the global key watch
-// (and any transmission it opened) and a settings change still inside the
-// debounce window. Runs on the way out, before the services are stopped.
+// (and any transmission it opened), a version check still waiting on GitHub,
+// and a settings change still inside the debounce window. Runs on the way out,
+// before the services are stopped.
 func (a *App) Shutdown() {
 	a.StopGlobalPTT()
+	a.stopUpdateCheck()
 	a.FlushSettings()
 }
 

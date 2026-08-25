@@ -69,7 +69,7 @@ export function MainScreen() {
   const address = status.server || 'Сервер не выбран';
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-bg-0 text-ui text-text-1">
+    <div className="flex h-full flex-col bg-bg-0 text-ui text-text-1">
       <div
         className={cx(
           'grid min-h-0 flex-1',

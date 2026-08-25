@@ -389,8 +389,8 @@ func TestConnectSavedDialsWithTheStoredPassword(t *testing.T) {
 	f.storedPassword(t, "mumble.example:64738")
 	f.app.HandleStatus(domain.ConnectionStatus{State: domain.StateDisconnected})
 
-	if err := f.app.ConnectSaved(" mumble.example:64738 "); err != nil {
-		t.Fatalf("ConnectSaved: %v", err)
+	if _, err := f.app.connectSaved(" mumble.example:64738 "); err != nil {
+		t.Fatalf("connectSaved: %v", err)
 	}
 
 	calls := f.ctrl.snapshot().connects
@@ -407,8 +407,8 @@ func TestConnectSavedWithoutAStoredPasswordDialsWithoutOne(t *testing.T) {
 	f := newServersApp(t)
 	f.connected(t, "mumble.example:64738", "gul", "")
 
-	if err := f.app.ConnectSaved("mumble.example:64738"); err != nil {
-		t.Fatalf("ConnectSaved: %v", err)
+	if _, err := f.app.connectSaved("mumble.example:64738"); err != nil {
+		t.Fatalf("connectSaved: %v", err)
 	}
 	calls := f.ctrl.snapshot().connects
 	if calls[len(calls)-1].password != "" {
@@ -428,8 +428,8 @@ func TestConnectSavedStopsWhenThePasswordCannotBeRead(t *testing.T) {
 	f.app.HandleStatus(domain.ConnectionStatus{State: domain.StateDisconnected})
 	f.keys.getErr = errors.New("keyring is locked")
 
-	if err := f.app.ConnectSaved("mumble.example:64738"); err == nil {
-		t.Fatal("ConnectSaved dialled despite a failed password lookup")
+	if _, err := f.app.connectSaved("mumble.example:64738"); !errors.Is(err, ErrPasswordUnreadable) {
+		t.Fatalf("connectSaved = %v, want ErrPasswordUnreadable", err)
 	}
 	if calls := f.ctrl.snapshot().connects; len(calls) != 1 {
 		t.Fatalf("connects = %+v, want only the original", calls)
@@ -446,13 +446,80 @@ func TestConnectSavedRejectsAnUnknownServer(t *testing.T) {
 	t.Parallel()
 	f := newServersApp(t)
 
-	err := f.app.ConnectSaved("stranger.example:64738")
+	_, err := f.app.connectSaved("stranger.example:64738")
 	if !errors.Is(err, ErrUnknownServer) {
 		t.Fatalf("error = %v, want ErrUnknownServer", err)
 	}
 	if calls := f.ctrl.snapshot().connects; len(calls) != 0 {
 		t.Fatalf("an unknown server was dialled: %+v", calls)
 	}
+}
+
+// The two failures the connect screen has to tell apart, in the form it tells
+// them apart by. A reason, not a sentence: rewording a message must not break
+// a screen.
+func TestConnectSavedReportsWhyItCouldNotStart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a server that is no longer remembered", func(t *testing.T) {
+		t.Parallel()
+		f := newServersApp(t)
+
+		got, err := f.app.ConnectSaved("stranger.example:64738")
+		if err != nil {
+			t.Fatalf("ConnectSaved: %v", err)
+		}
+		if got.Reason != domain.SavedConnectUnknown {
+			t.Fatalf("reason = %q, want %q", got.Reason, domain.SavedConnectUnknown)
+		}
+		if got.Address != "stranger.example:64738" || got.Message == "" {
+			t.Errorf("result = %+v", got)
+		}
+	})
+
+	// The one that must not be a dead end: the password is still there, the
+	// store simply would not open. The form takes over with the address and
+	// the nickname already filled in.
+	t.Run("a locked credential store", func(t *testing.T) {
+		t.Parallel()
+		f := newServersApp(t)
+		f.connected(t, "mumble.example:64738", "gul", "hunter2")
+		f.storedPassword(t, "mumble.example:64738")
+		f.app.HandleStatus(domain.ConnectionStatus{State: domain.StateDisconnected})
+		f.keys.getErr = errors.New("keyring is locked")
+
+		got, err := f.app.ConnectSaved("mumble.example:64738")
+		if err != nil {
+			t.Fatalf("ConnectSaved: %v", err)
+		}
+		if got.Reason != domain.SavedConnectPassword {
+			t.Fatalf("reason = %q, want %q", got.Reason, domain.SavedConnectPassword)
+		}
+		if got.Address != "mumble.example:64738" || got.Username != "gul" {
+			t.Errorf("the fallback form would start on %+v", got)
+		}
+		if got.Message == "" {
+			t.Error("no explanation for the user")
+		}
+		if calls := f.ctrl.snapshot().connects; len(calls) != 1 {
+			t.Fatalf("connects = %+v, want only the original", calls)
+		}
+	})
+
+	t.Run("a connect that starts", func(t *testing.T) {
+		t.Parallel()
+		f := newServersApp(t)
+		f.connected(t, "mumble.example:64738", "gul", "hunter2")
+		f.storedPassword(t, "mumble.example:64738")
+
+		got, err := f.app.ConnectSaved("mumble.example:64738")
+		if err != nil {
+			t.Fatalf("ConnectSaved: %v", err)
+		}
+		if got.Reason != domain.SavedConnectStarted || got.Message != "" {
+			t.Fatalf("result = %+v, want a started connect", got)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -72,6 +72,18 @@ export interface AudioLevels {
   outDb: number;
 }
 
+/** Payload of update:available - a release newer than the one running. Pushed
+    at most once per run, and readable as a snapshot for a window that mounted
+    after the check had already finished (internal/core/update.go). */
+export interface UpdateAvailable {
+  /** How the version is written everywhere else: no leading "v". */
+  version: string;
+  /** The git tag, which is what a dismissal is keyed on. */
+  tag: string;
+  /** The release page, for a human to read. */
+  url: string;
+}
+
 /** Payload of audio:self - the local microphone and monitor state after a
     change made anywhere: the window, the system tray or core itself. */
 export interface SelfAudioState {

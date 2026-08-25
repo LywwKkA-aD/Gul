@@ -3,6 +3,7 @@ package core
 import (
 	"net/url"
 	"strings"
+	"unicode"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -200,6 +201,87 @@ func stripURLNoise(s string) string {
 		b.WriteRune(r)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// PlainText reduces chat HTML to the words in it, for places that take text
+// and not markup - a system notification, which is the operating system's UI
+// and would either escape the tags or render them.
+//
+// It is the tokenizer again, so what counts as text here is what a browser
+// would call text: markup is dropped, entities are resolved, and the content
+// of the opaque elements SanitizeHTML refuses is dropped with them rather than
+// leaking a script body into the notification centre. Line breaks and runs of
+// whitespace collapse into single spaces: a notification is one line.
+func PlainText(in string) string {
+	if len(in) > maxIncomingHTML {
+		in = in[:maxIncomingHTML]
+	}
+
+	var (
+		b      strings.Builder
+		z      = html.NewTokenizer(strings.NewReader(in))
+		opaque []string // same nesting discipline as SanitizeHTML
+	)
+	b.Grow(len(in))
+
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return collapseSpaces(b.String())
+
+		case html.TextToken:
+			if len(opaque) == 0 {
+				// Text() is already entity-decoded.
+				b.Write(z.Text())
+			}
+
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, _ := z.TagName()
+			a := atom.Lookup(name)
+			if opaqueTags[a] {
+				// Pushed even when self-closing, for the reason SanitizeHTML
+				// documents: the tokenizer switches to raw text either way.
+				opaque = append(opaque, string(name))
+				continue
+			}
+			// A line break is the one element that carries meaning as text,
+			// and it arrives both ways: "<br/>" from Mumble's own escaping,
+			// "<br>" from other clients.
+			if a == atom.Br && len(opaque) == 0 {
+				b.WriteByte(' ')
+			}
+
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			if n := len(opaque); n > 0 && opaque[n-1] == string(name) {
+				opaque = opaque[:n-1]
+			}
+		}
+	}
+}
+
+// collapseSpaces folds every run of whitespace into one plain space and trims
+// the ends.
+//
+// unicode.IsSpace, not a list of ASCII characters: chat HTML is full of
+// &nbsp;, and a non-breaking space that survived into a notification body
+// would be an invisible character in a system UI that is one line anyway.
+func collapseSpaces(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	space := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			space = true
+			continue
+		}
+		if space && b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		space = false
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // EscapePlain prepares outgoing user text for Mumble, which transports chat as

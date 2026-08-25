@@ -74,7 +74,9 @@ type engineState struct {
 	muted    atomic.Bool
 	deafened atomic.Bool
 	ptt      atomic.Bool
-	volumes  sync.Map // user hash -> float32
+	// users is the per-peer treatment: gain and local mute, keyed by the
+	// stable certificate hash (users.go).
+	users userAudioState
 
 	// cue is the pending UI sound, encoded as Cue+1 so that 0 means empty.
 	// PlayCue fills it from any goroutine, the DSP goroutine drains it.
@@ -210,6 +212,10 @@ func (e *Engine) SetDeafen(deafened bool) { e.state.deafened.Store(deafened) }
 
 // SetUserVolume sets a per-user gain (1.0 = unity) keyed by the stable
 // certificate hash; survives the peer reconnecting.
+//
+// It does not un-silence anybody: a listener who muted this peer and then
+// moved their slider has changed what they will hear on unmute, not asked to
+// hear them now.
 func (e *Engine) SetUserVolume(hash string, volume float32) {
 	if volume < 0 {
 		volume = 0
@@ -217,7 +223,17 @@ func (e *Engine) SetUserVolume(hash string, volume float32) {
 	if volume > 4 {
 		volume = 4
 	}
-	e.state.volumes.Store(hash, volume)
+	e.state.users.setVolume(hash, volume)
+}
+
+// SetUserMute silences one peer locally, or lets them back in, keyed by the
+// same certificate hash as the gain.
+//
+// This is not "volume zero": the gain the listener chose is kept untouched
+// and is exactly what they hear again on unmute. It is also not the Mumble
+// mute on the wire - nothing is sent, and the person is never told.
+func (e *Engine) SetUserMute(hash string, muted bool) {
+	e.state.users.setMuted(hash, muted)
 }
 
 // SetPTT reports whether the push-to-talk key is currently held. Only
@@ -318,7 +334,7 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 			extraSilence = 1
 			pendingSilence--
 		}
-		rx.tick(sink, e.state.deafened.Load(), &e.state.volumes, extraSilence)
+		rx.tick(sink, e.state.deafened.Load(), &e.state.users, extraSilence)
 
 		if tick%5 == 0 && e.cfg.Callbacks.OnLevels != nil {
 			e.cfg.Callbacks.OnLevels(DBFS(tx.micRMS), DBFS(rx.outRMS))

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -165,27 +166,72 @@ func (a *App) passwordFor(address string) (string, bool, error) {
 	return value, found, nil
 }
 
+// Russian, ready to render: the two ways a click on the picker can fail are
+// the user's problem to solve, so they carry the sentence that says how. The
+// UI switches on the reason, never on this text.
+const (
+	unknownServerMessage = "Этот сервер больше не в списке. Введите адрес вручную."
+	lockedKeyringMessage = "Не удалось прочитать сохранённый пароль: хранилище ключей " +
+		"недоступно или заблокировано. Введите пароль вручную — он не потерян."
+)
+
 // ConnectSaved dials a remembered server with the nickname it was last used
-// with and, when one is stored, its password. The lookup happens here rather
+// with and, when one is stored, its password. The lookup happens in Go rather
 // than in the UI: a click on the picker must not send a secret through the
 // webview and back.
 //
-// A lookup that failed stops the connect instead of dialling without a
-// password. Dialling would be indistinguishable from the user choosing to
-// have no password, and RememberServer would then drop the stored one on the
-// next successful connect - a locked keyring would quietly destroy the
-// password it merely could not read.
-func (a *App) ConnectSaved(address string) error {
+// The two ways this can fail are told apart by their reason, not by their
+// text, because they need different screens: an address that is no longer
+// remembered is a stale list, while a password that could not be read is a
+// locked keyring and has to fall back to the manual form. Anything else - an
+// address the validator refuses, no controller yet - comes back as an error,
+// which is what the generic failure path already renders.
+func (a *App) ConnectSaved(address string) (domain.SavedConnect, error) {
+	entry, err := a.connectSaved(address)
+	switch {
+	case err == nil:
+		return domain.SavedConnect{
+			Address:  entry.Address,
+			Username: entry.Username,
+		}, nil
+	case errors.Is(err, ErrUnknownServer):
+		return domain.SavedConnect{
+			Reason:  domain.SavedConnectUnknown,
+			Address: strings.TrimSpace(address),
+			Message: unknownServerMessage,
+		}, nil
+	case errors.Is(err, ErrPasswordUnreadable):
+		return domain.SavedConnect{
+			Reason:   domain.SavedConnectPassword,
+			Address:  entry.Address,
+			Username: entry.Username,
+			Message:  lockedKeyringMessage,
+		}, nil
+	default:
+		return domain.SavedConnect{}, err
+	}
+}
+
+// connectSaved is ConnectSaved in the vocabulary of the rest of core: typed
+// errors. It returns the entry it worked on even when it failed, so the
+// fallback form can start on the nickname the user connected with last time.
+//
+// A password lookup that failed stops the connect instead of dialling without
+// one. Dialling would be indistinguishable from the user choosing to have no
+// password, and RememberServer would then drop the stored one on the next
+// successful connect - a locked keyring would quietly destroy the password it
+// merely could not read.
+func (a *App) connectSaved(address string) (config.Server, error) {
 	address = strings.TrimSpace(address)
 	entry, ok := a.savedServer(address)
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrUnknownServer, address)
+		return config.Server{}, fmt.Errorf("%w: %q", ErrUnknownServer, address)
 	}
 	password, _, err := a.passwordFor(entry.Address)
 	if err != nil {
-		return fmt.Errorf("the stored password could not be read: %w", err)
+		return entry, fmt.Errorf("%w: %w", ErrPasswordUnreadable, err)
 	}
-	return a.Connect(entry.Address, entry.Username, password)
+	return entry, a.Connect(entry.Address, entry.Username, password)
 }
 
 // savedServer looks one entry up by its exact (trimmed) address - the same

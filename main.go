@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -48,6 +49,7 @@ func init() {
 	application.RegisterEvent[domain.SelfAudioState](domain.EventAudioSelf)
 	application.RegisterEvent[domain.PTTState](domain.EventAudioPTT)
 	application.RegisterEvent[domain.SelfTalkingState](domain.EventAudioSelfTalking)
+	application.RegisterEvent[domain.UpdateAvailable](domain.EventUpdateAvailable)
 }
 
 // voiceAdapter binds core.VoiceEngine to the audio engine, translating the
@@ -86,6 +88,9 @@ func (v *voiceAdapter) SetMute(muted bool)      { v.engine.SetMute(muted) }
 func (v *voiceAdapter) SetDeafen(deafened bool) { v.engine.SetDeafen(deafened) }
 func (v *voiceAdapter) SetUserVolume(hash string, volume float32) {
 	v.engine.SetUserVolume(hash, volume)
+}
+func (v *voiceAdapter) SetUserMute(hash string, muted bool) {
+	v.engine.SetUserMute(hash, muted)
 }
 
 // SetGateMode maps the validated core mode onto the engine's own type.
@@ -210,6 +215,13 @@ func main() {
 		logger.Warn("no credential store on this machine, server passwords will not be remembered")
 	}
 
+	// System notifications for a window nobody is looking at. Deliberately not
+	// an application.Service: a service whose startup fails aborts the whole
+	// application, and this one fails by design on an unpackaged macOS build
+	// (notifier.go).
+	notifier := newSystemNotifier(logger)
+	coreApp.SetNotifier(notifier)
+
 	app := application.New(application.Options{
 		Name:        "Gul",
 		Description: "Voice chat for friends on top of Mumble",
@@ -222,7 +234,10 @@ func main() {
 		// the debounce window, which would otherwise leave with the process.
 		// Runs before the services are shut down, on Cmd+Q as well as on a
 		// window-driven quit.
-		OnShutdown: coreApp.Shutdown,
+		OnShutdown: func() {
+			coreApp.Shutdown()
+			notifier.stop()
+		},
 		Services: []application.Service{
 			application.NewService(services.NewConnectionService(coreApp)),
 			application.NewService(services.NewChannelsService(coreApp)),
@@ -230,6 +245,7 @@ func main() {
 			application.NewService(services.NewDiagnosticsService(coreApp)),
 			application.NewService(services.NewAudioService(coreApp)),
 			application.NewService(services.NewSettingsService(coreApp)),
+			application.NewService(services.NewUpdateService(coreApp)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -287,12 +303,60 @@ func main() {
 	}
 
 	setupTray(app, coreApp, win)
+	watchWindowAttention(coreApp, win)
+
+	// Two things that must not be on the startup path: the notification
+	// backend, which puts a permission dialog on screen on macOS, and the
+	// version check, which talks to GitHub. Both run once the window is up and
+	// neither is waited for.
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		go notifier.start(context.Background())
+		coreApp.StartUpdateCheck()
+	})
 
 	logger.Info("gul starting", "version", core.Version, "config_dir", cfgDir)
 	if err := app.Run(); err != nil {
 		logger.Error("application exited", "error", err)
 		log.Fatal(err)
 	}
+}
+
+// watchWindowAttention keeps core informed about whether the user is looking
+// at the window, which is the whole condition for a system notification
+// (internal/notify).
+//
+// Focus is the load-bearing signal and the one every backend maps onto the
+// common events (pkg/events/defaults.go: Mac.WindowDidBecomeKey,
+// Windows.WindowSetFocus, Linux.WindowFocusIn). Visibility is tracked beside
+// it because a window hidden by the close button on macOS keeps the process
+// alive; where a platform does not report hiding, the lost focus that came
+// with it already says enough.
+//
+// The seed is "attended". A platform that never reported focus would then stay
+// silent, which is the failure this feature has to fail towards: a missed
+// notification is a nuisance, a notification over a window the user is reading
+// is a defect.
+func watchWindowAttention(coreApp *core.App, win *application.WebviewWindow) {
+	var visible, focused atomic.Bool
+	visible.Store(true)
+	focused.Store(true)
+
+	publish := func() { coreApp.SetWindowState(visible.Load(), focused.Load()) }
+	// OnWindowEvent, not RegisterHook: this only observes, and a hook is for
+	// changing what the event does.
+	track := func(event events.WindowEventType, flag *atomic.Bool, value bool) {
+		win.OnWindowEvent(event, func(*application.WindowEvent) {
+			flag.Store(value)
+			publish()
+		})
+	}
+	track(events.Common.WindowFocus, &focused, true)
+	track(events.Common.WindowLostFocus, &focused, false)
+	track(events.Common.WindowShow, &visible, true)
+	track(events.Common.WindowHide, &visible, false)
+	track(events.Common.WindowRestore, &visible, true)
+	track(events.Common.WindowMinimise, &visible, false)
+	publish()
 }
 
 // Tray labels. The rest of the user-facing text lives in core with the state

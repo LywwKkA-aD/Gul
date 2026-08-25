@@ -46,6 +46,13 @@ func (s *AudioService) SetUserVolume(hash string, volume float64) {
 	s.app.SetUserVolume(hash, float32(volume))
 }
 
+// SetUserMute silences one participant on this machine only, keyed by the
+// same certificate hash as the gain. Unmuting restores the gain the user
+// chose; nothing is sent to the server and the other person is never told.
+func (s *AudioService) SetUserMute(hash string, muted bool) {
+	s.app.SetUserMute(hash, muted)
+}
+
 // SetGateMode selects what opens the microphone: "vad" (voice activation) or
 // "ptt" (push-to-talk).
 func (s *AudioService) SetGateMode(mode string) error {

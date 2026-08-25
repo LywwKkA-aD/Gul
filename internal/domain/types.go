@@ -63,6 +63,36 @@ type SavedServer struct {
 	HasPassword bool   `json:"hasPassword"`
 }
 
+// SavedConnectReason names why a connect from the picker did not start. It is
+// a value the UI switches on rather than a sentence it matches: the two cases
+// need different screens, and matching on message text would make a reworded
+// message a broken screen.
+type SavedConnectReason string
+
+const (
+	// SavedConnectStarted means the connect is under way; progress arrives
+	// through EventConnectionState like any other attempt.
+	SavedConnectStarted SavedConnectReason = ""
+	// SavedConnectUnknown means the address is not in the picker any more.
+	SavedConnectUnknown SavedConnectReason = "unknown"
+	// SavedConnectPassword means the stored password could not be read - a
+	// locked or unavailable credential store. The UI falls back to the manual
+	// form with the address filled in; typing the password always works.
+	SavedConnectPassword SavedConnectReason = "password"
+)
+
+// SavedConnect is the answer to a click on the picker.
+type SavedConnect struct {
+	Reason SavedConnectReason `json:"reason"`
+	// Address and Username are what the fallback form starts on. They are
+	// echoed back rather than assumed by the UI, so the row that was clicked
+	// and the form that opens cannot describe two different servers.
+	Address  string `json:"address"`
+	Username string `json:"username"`
+	// Message is Russian and ready to render; empty when the connect started.
+	Message string `json:"message"`
+}
+
 // TofuPrompt is pushed when a known server presents a new certificate.
 // The UI must ask the user explicitly; AcceptFingerprint confirms.
 type TofuPrompt struct {

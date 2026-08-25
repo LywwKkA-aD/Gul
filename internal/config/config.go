@@ -38,6 +38,8 @@ type Config struct {
 	// Servers is the remembered picker list, newest first (servers.go).
 	// Never a password: those live in internal/secret, keyed by Address.
 	Servers []Server `json:"servers"`
+	// Update is what the startup version check remembers (update.go).
+	Update Update `json:"update"`
 
 	// extra is the document as it was read, so fields written by a build that
 	// knows more of this schema version than we do survive a round trip
@@ -77,6 +79,7 @@ func (c Config) Sanitized() Config {
 	c.Audio = c.Audio.sanitized()
 	c.Gate = c.Gate.sanitized()
 	c.Servers = sanitizeServers(c.Servers)
+	c.Update = c.Update.sanitized()
 	return c
 }
 

@@ -1,5 +1,6 @@
 import { useState, type CSSProperties, type ChangeEvent } from 'react';
 import { SpeakerHighIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';
+import { SpeakerSimpleXIcon } from '@phosphor-icons/react/dist/csr/SpeakerSimpleX';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import { useSpeaking } from '../state/speaking';
@@ -20,16 +21,18 @@ import { cx } from './ui/cx';
 // the platforms without a native title bar.
 const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
 
-/** What a screen reader hears for one member row: the name, then the gates
-    that are closed. The visible glyph carries the same fact for everyone
-    else. */
-function memberRowLabel(user: UserInfo): string {
+/** What a screen reader hears for one member row: the name, the gates that
+    person closed, and whether we have silenced them here. The visible glyphs
+    carry the same two facts, and they stay two facts: their microphone being
+    off is theirs, our silence is ours. */
+function memberRowLabel(user: UserInfo, mutedHere: boolean): string {
   const state = user.selfDeaf
     ? ', звук выключен, микрофон тоже'
     : user.selfMute
       ? ', микрофон выключен'
       : '';
-  return `Громкость: ${user.name}${state}`;
+  const local = mutedHere ? ', заглушён для вас' : '';
+  return `Громкость: ${user.name}${state}${local}`;
 }
 
 export function MemberList({ channel }: { channel: ChannelNode | null }) {
@@ -79,6 +82,11 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   const hash = user.hash ?? '';
   const adjustable = !user.isSelf && hash !== '';
   const volume = useGulStore((s) => s.userVolumes[hash] ?? VOLUME_UNITY);
+  // Local mute is its own state next to the gain, keyed by the same hash: the
+  // engine keeps the gain while somebody is silenced and gives it back on
+  // unmute (internal/audio/users.go). Nothing about this reaches the server.
+  const mutedHere = useGulStore((s) => s.mutedUsers[hash] === true);
+  const setUserMuted = useGulStore((s) => s.setUserMuted);
 
   // Clicking the row pins the slider open; otherwise it follows the hover.
   const [pinned, setPinned] = useState(false);
@@ -87,6 +95,12 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
     const next = Number(e.target.value);
     setUserVolume(hash, next);
     AudioService.SetUserVolume(hash, next).catch(console.error);
+  };
+
+  const toggleMute = () => {
+    const next = !mutedHere;
+    setUserMuted(hash, next);
+    AudioService.SetUserMute(hash, next).catch(console.error);
   };
 
   const rowClass = cx(
@@ -104,9 +118,20 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
         self={user.isSelf}
         haloIndex={index}
       />
-      <span className="min-w-0 flex-1 truncate">{user.name}</span>
-      {/* After the name, never over the face: the name gives up its own
-          characters first (min-w-0 truncate against a flex-none glyph). */}
+      <span className={cx('min-w-0 flex-1 truncate', mutedHere && 'line-through opacity-60')}>
+        {user.name}
+      </span>
+      {/* Two different facts, two different marks. VoiceStateIcon draws the
+          gates THIS PERSON closed, in the danger scale; a person we silenced
+          locally is our own doing and gets the muted foreground instead - a
+          red glyph would read as something wrong with them. */}
+      {mutedHere && (
+        <SpeakerSimpleXIcon
+          size={13}
+          className="flex-none text-text-3"
+          aria-hidden="true"
+        />
+      )}
       <VoiceStateIcon muted={user.selfMute} deaf={user.selfDeaf} surface="light" />
     </>
   );
@@ -128,7 +153,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             // The button's label replaces its whole subtree for assistive
             // tech, so the glyph's own label would never be heard: the state
             // is spelled into the name instead.
-            aria-label={memberRowLabel(user)}
+            aria-label={memberRowLabel(user, mutedHere)}
             className={cx(rowClass, 'cursor-pointer')}
           >
             {row}
@@ -147,7 +172,28 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             pinned ? 'flex' : 'hidden group-hover:flex',
           )}
         >
-          <SpeakerHighIcon size={13} className="shrink-0 text-text-3" />
+          {/* Silencing somebody is not their volume at zero: the slider keeps
+              the value the user chose and it comes back on unmute, so the two
+              controls sit side by side rather than one standing for both. */}
+          <Tooltip label={mutedHere ? 'Вернуть звук' : 'Заглушить для себя'}>
+            <button
+              type="button"
+              onClick={toggleMute}
+              aria-pressed={mutedHere}
+              aria-label={
+                mutedHere ? `Вернуть звук: ${user.name}` : `Заглушить для себя: ${user.name}`
+              }
+              // Sized to the slider beside it rather than to the 28px control
+              // grid: this is a control inside a row, not a row of its own.
+              className={cx(
+                'grid size-[18px] flex-none cursor-pointer place-items-center rounded-sm border-0',
+                'bg-transparent transition-colors duration-[var(--t-fast)] hover:bg-bg-4',
+                mutedHere ? 'text-text-1' : 'text-text-3',
+              )}
+            >
+              {mutedHere ? <SpeakerSimpleXIcon size={13} /> : <SpeakerHighIcon size={13} />}
+            </button>
+          </Tooltip>
           <input
             type="range"
             min={VOLUME_MIN}
@@ -155,10 +201,19 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             step={VOLUME_STEP}
             value={volume}
             onChange={onVolume}
+            // Not disabled while muted: the engine keeps this gain as what the
+            // listener comes back at (internal/audio/users.go), so setting it now is
+            // a legitimate thing to do before unmuting.
+            
             aria-label={`Персональная громкость: ${user.name}`}
-            className="h-[18px] min-w-0 flex-1"
+            className="h-[18px] min-w-0 flex-1 disabled:opacity-50"
           />
-          <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums text-text-3">
+          <span
+            className={cx(
+              'w-9 shrink-0 text-right font-mono text-xs tabular-nums text-text-3',
+              mutedHere && 'opacity-50',
+            )}
+          >
             {Math.round(volume * 100)}%
           </span>
         </div>

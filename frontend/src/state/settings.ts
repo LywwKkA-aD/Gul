@@ -16,9 +16,6 @@ import type { HotkeyStatus } from './hotkey';
 // writes every change through a service and gets the snapshot back on the
 // next start.
 
-/** The official Gul relay, offered by an explicit action - never prefilled. */
-export const GUL_RELAY_ADDRESS = 'wss://murmur.gulvox.com/mumble';
-
 /** Gain of the UI cues (join, leave, mute, unmute). Mirrors internal/config:
     the range is [0, 1] and 0 is how the user turns the cues off. */
 export const CUE_VOLUME_MIN = 0;

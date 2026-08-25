@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   CUE_VOLUME_DEFAULT,
   DEFAULT_SETTINGS,
-  GUL_RELAY_ADDRESS,
   clampCueVolume,
   normalizeSettings,
 } from './settings.ts';
@@ -99,10 +98,4 @@ test('a cue gain outside the accepted range folds into it', () => {
 test('a missing hotkey block reads as no global key', () => {
   assert.deepEqual(normalizeSettings({ ...snapshot, hotkey: undefined }).hotkey, DEFAULT_HOTKEY);
   assert.deepEqual(normalizeSettings(snapshot).hotkey, snapshot.hotkey);
-});
-
-// The offered relay is the one address the app suggests on its own; anything
-// but wss:// would be rejected by the Go endpoint parser before it dialed.
-test('the offered relay is a WSS address', () => {
-  assert.match(GUL_RELAY_ADDRESS, /^wss:\/\//);
 });

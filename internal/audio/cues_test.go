@@ -3,7 +3,6 @@ package audio
 import (
 	"log/slog"
 	"math"
-	"sync"
 	"testing"
 	"time"
 )
@@ -30,7 +29,7 @@ type cueRig struct {
 	rx   *rxPipeline
 	rec  *collectSink
 	sink FrameSink
-	vols sync.Map
+	vols userAudioState
 }
 
 func newCueRig(t *testing.T) *cueRig {

@@ -165,6 +165,7 @@ type fakeVoice struct {
 	mutes    []bool
 	deafens  []bool
 	volumes  []volumeCall
+	userMute []muteCall
 	modes    []GateMode
 	tunings  []vadTuning
 	ptt      []bool
@@ -178,6 +179,11 @@ type fakeVoice struct {
 type volumeCall struct {
 	hash   string
 	volume float32
+}
+
+type muteCall struct {
+	hash  string
+	muted bool
 }
 
 func (v *fakeVoice) Start(string, string) error {
@@ -209,6 +215,12 @@ func (v *fakeVoice) SetUserVolume(hash string, volume float32) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.volumes = append(v.volumes, volumeCall{hash, volume})
+}
+
+func (v *fakeVoice) SetUserMute(hash string, muted bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.userMute = append(v.userMute, muteCall{hash, muted})
 }
 
 func (v *fakeVoice) SetGateMode(mode GateMode) {
@@ -258,14 +270,15 @@ func (v *fakeVoice) snapshot() fakeVoice {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return fakeVoice{
-		mutes:   append([]bool(nil), v.mutes...),
-		deafens: append([]bool(nil), v.deafens...),
-		volumes: append([]volumeCall(nil), v.volumes...),
-		modes:   append([]GateMode(nil), v.modes...),
-		tunings: append([]vadTuning(nil), v.tunings...),
-		ptt:     append([]bool(nil), v.ptt...),
-		cues:    append([]Cue(nil), v.cues...),
-		cueVols: append([]float32(nil), v.cueVols...),
+		mutes:    append([]bool(nil), v.mutes...),
+		deafens:  append([]bool(nil), v.deafens...),
+		volumes:  append([]volumeCall(nil), v.volumes...),
+		userMute: append([]muteCall(nil), v.userMute...),
+		modes:    append([]GateMode(nil), v.modes...),
+		tunings:  append([]vadTuning(nil), v.tunings...),
+		ptt:      append([]bool(nil), v.ptt...),
+		cues:     append([]Cue(nil), v.cues...),
+		cueVols:  append([]float32(nil), v.cueVols...),
 	}
 }
 
@@ -519,6 +532,35 @@ func TestVoiceGatesAndVolumeDelegate(t *testing.T) {
 	if len(snap.volumes) != 1 || snap.volumes[0] != (volumeCall{"deadbeef", 1.5}) {
 		t.Errorf("volumes = %v, want [{deadbeef 1.5}]", snap.volumes)
 	}
+}
+
+// Local mute is a separate fact from the gain and reaches the engine as one:
+// core forwards it and nothing else, because the engine is where the gain is
+// kept for the unmute (internal/audio/users.go).
+func TestSetUserMuteDelegates(t *testing.T) {
+	t.Parallel()
+	app, voice := newVoiceApp(t)
+
+	app.SetUserVolume("deadbeef", 0.4)
+	app.SetUserMute("deadbeef", true)
+	app.SetUserMute("deadbeef", false)
+
+	snap := voice.snapshot()
+	want := []muteCall{{"deadbeef", true}, {"deadbeef", false}}
+	if len(snap.userMute) != len(want) || snap.userMute[0] != want[0] || snap.userMute[1] != want[1] {
+		t.Fatalf("mutes = %v, want %v", snap.userMute, want)
+	}
+	// Muting does not touch the gain on the way through.
+	if len(snap.volumes) != 1 || snap.volumes[0] != (volumeCall{"deadbeef", 0.4}) {
+		t.Errorf("volumes = %v, want the single change the user made", snap.volumes)
+	}
+}
+
+// A core with no engine yet (the connect screen) must not panic on a mute.
+func TestSetUserMuteWithoutAnEngineIsANoOp(t *testing.T) {
+	t.Parallel()
+	app, _, _ := newTestApp(t)
+	app.SetUserMute("deadbeef", true)
 }
 
 func TestSetGateModeDelegates(t *testing.T) {
