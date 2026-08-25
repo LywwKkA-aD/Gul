@@ -53,6 +53,16 @@ type ConnectionStatus struct {
 	SelfChannel uint32    `json:"selfChannel,omitempty"`
 }
 
+// SavedServer is one remembered server as the connect picker reads it. It
+// carries whether a password is stored, never the password: the value itself
+// lives in the operating system's credential store and has no reason to cross
+// into the webview - a connect from the picker is made in Go.
+type SavedServer struct {
+	Address     string `json:"address"`
+	Username    string `json:"username"`
+	HasPassword bool   `json:"hasPassword"`
+}
+
 // TofuPrompt is pushed when a known server presents a new certificate.
 // The UI must ask the user explicitly; AcceptFingerprint confirms.
 type TofuPrompt struct {

@@ -19,6 +19,27 @@ func (s *ConnectionService) Connect(address, username, password string) error {
 	return s.app.Connect(address, username, password)
 }
 
+// ConnectSaved dials a server from the picker: the nickname it was last used
+// with and, when one is stored, its password. The password is looked up in
+// core and never travels to the UI, so the picker needs nothing but the
+// address.
+func (s *ConnectionService) ConnectSaved(address string) error {
+	return s.app.ConnectSaved(address)
+}
+
+// Servers returns the remembered servers, newest first. HasPassword says
+// whether a click on one is enough; the password itself stays in Go.
+func (s *ConnectionService) Servers() []domain.SavedServer {
+	return s.app.Servers()
+}
+
+// ForgetServer drops a server from the picker and its password from the
+// credential store. The error reports a password that survived, which is
+// exactly what the user asked to be rid of.
+func (s *ConnectionService) ForgetServer(address string) error {
+	return s.app.ForgetServer(address)
+}
+
 func (s *ConnectionService) Disconnect() error {
 	s.app.Disconnect()
 	return nil

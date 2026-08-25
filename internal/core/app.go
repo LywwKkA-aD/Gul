@@ -14,6 +14,7 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/secret"
 )
 
 // Version is the application version reported in diagnostics and the about
@@ -35,6 +36,7 @@ var (
 	ErrEmptyAddress  = errors.New("server address is required")
 	ErrEmptyMessage  = errors.New("message is empty")
 	ErrMessageTooBig = errors.New("message is too long")
+	ErrUnknownServer = errors.New("server is not remembered")
 )
 
 // App owns the application state and orchestrates the layers beneath the Wails
@@ -66,6 +68,16 @@ type App struct {
 	// address of the attempt in flight, remembered only once the server has
 	// accepted it (settings.go).
 	address string
+	// pendingPassword is the password of the attempt in flight. It is held
+	// only until the server accepts the attempt, so that a password typed
+	// wrongly is never written to the credential store, and is dropped the
+	// moment it is committed or the session ends (servers.go).
+	pendingPassword string
+
+	// secrets is the credential store remembered passwords live in. Nil
+	// until SetSecrets, which is what keeps a core built for a test from
+	// touching the machine's keychain (servers.go).
+	secrets secret.Store
 
 	voice                 VoiceEngine
 	captureID, playbackID string
@@ -73,6 +85,11 @@ type App struct {
 	// Self audio state and its tray observers (selfaudio.go).
 	selfMuted, selfDeafened bool
 	trayObservers           []func(TrayState)
+
+	// connectionCommitted keeps the accepted-connect commit to once per
+	// session: StateConnected is re-emitted on every self channel change
+	// (settings.go).
+	connectionCommitted bool
 
 	// pttMu guards pttHeld AND is held across its event, so a press can
 	// never be published after the release that followed it (voice.go). It
@@ -177,6 +194,8 @@ func (a *App) Connect(address, username, password string) error {
 	a.history = make(map[uint32][]domain.ChatMessage)
 	a.username = username
 	a.address = address
+	a.pendingPassword = password
+	a.connectionCommitted = false
 	a.mu.Unlock()
 
 	// Address and username are deliberately omitted: malformed WSS URLs may
@@ -304,7 +323,14 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 		a.commitConnection()
 		a.startVoice()
 	case s.State == domain.StateDisconnected:
+		a.mu.Lock()
+		a.connectionCommitted = false
+		a.mu.Unlock()
 		a.stopVoice()
+		// A connect the server refused ends here, never at commitConnection,
+		// so this is where a password that was never accepted stops being
+		// held.
+		a.dropPendingPassword()
 	}
 
 	// A session that is not up has no channel to compare against: the next

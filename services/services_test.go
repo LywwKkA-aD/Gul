@@ -118,6 +118,66 @@ func TestConnectionServiceReportsState(t *testing.T) {
 	}
 }
 
+// The picker surface is a pass-through like everything else here: core owns
+// the remembered list, the credential store and the decision to dial.
+func TestConnectionServiceDelegatesTheServerPicker(t *testing.T) {
+	t.Parallel()
+	app, rec := newApp(t)
+	svc := NewConnectionService(app)
+
+	if got := svc.Servers(); len(got) != 0 {
+		t.Fatalf("Servers() = %+v, want none before any connect", got)
+	}
+
+	// A connect the server accepted is what fills the picker.
+	if err := svc.Connect("localhost:64738", "bob", "pw"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	app.HandleStatus(domain.ConnectionStatus{State: domain.StateConnected})
+
+	got := svc.Servers()
+	if len(got) != 1 || got[0].Address != "localhost:64738" || got[0].Username != "bob" {
+		t.Fatalf("Servers() = %+v", got)
+	}
+	// No credential store is injected here, so nothing claims to hold a
+	// password - and none is exposed on the binding surface either way.
+	if got[0].HasPassword {
+		t.Errorf("HasPassword is true without a credential store")
+	}
+
+	if err := svc.ConnectSaved("localhost:64738"); err != nil {
+		t.Fatalf("ConnectSaved: %v", err)
+	}
+	rec.mu.Lock()
+	connects := append([]string(nil), rec.connects...)
+	rec.mu.Unlock()
+	if len(connects) != 2 || connects[1] != "localhost:64738|bob|" {
+		t.Fatalf("connects = %v", connects)
+	}
+
+	if err := svc.ForgetServer("localhost:64738"); err != nil {
+		t.Fatalf("ForgetServer: %v", err)
+	}
+	if got := svc.Servers(); len(got) != 0 {
+		t.Fatalf("Servers() after forget = %+v", got)
+	}
+}
+
+func TestConnectionServicePropagatesAnUnknownServer(t *testing.T) {
+	t.Parallel()
+	app, rec := newApp(t)
+	svc := NewConnectionService(app)
+
+	if err := svc.ConnectSaved("stranger.example:64738"); !errors.Is(err, core.ErrUnknownServer) {
+		t.Fatalf("err = %v, want %v", err, core.ErrUnknownServer)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.connects) != 0 {
+		t.Fatalf("an unknown server was dialled: %v", rec.connects)
+	}
+}
+
 func TestChannelsServiceDelegates(t *testing.T) {
 	t.Parallel()
 	app, rec := newApp(t)

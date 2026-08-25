@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -91,12 +92,31 @@ func (a *App) RememberConnection(address, username string) {
 	})
 }
 
-// commitConnection remembers the attempt the server has just accepted.
+// commitConnection remembers the attempt the server has just accepted: the
+// pair the connect form starts on, and the picker entry with its password
+// (servers.go). Both are committed here and nowhere else, so nothing the
+// server refused is ever remembered.
+//
+// The password stops being held the moment it has been used: it is only in
+// memory to survive the round trip from Connect to the server's acceptance.
 func (a *App) commitConnection() {
 	a.mu.Lock()
-	address, username := a.address, a.username
+	// Once per accepted connect. StateConnected is re-emitted whenever self
+	// changes channel (manager.go publishes the status again to refresh
+	// SelfChannel), and a second run would arrive with pendingPassword
+	// already spent - which is to say it would overwrite the stored password
+	// with nothing and quietly forget it.
+	if a.connectionCommitted {
+		a.mu.Unlock()
+		return
+	}
+	a.connectionCommitted = true
+	address, username, password := a.address, a.username, a.pendingPassword
+	a.pendingPassword = ""
 	a.mu.Unlock()
+
 	a.RememberConnection(address, username)
+	a.RememberServer(address, username, password)
 }
 
 // FlushSettings writes a pending change immediately. Call on shutdown: the
@@ -117,7 +137,8 @@ func (a *App) updateSettings(fn func(*config.Config)) {
 	a.cfg = a.cfg.Sanitized()
 	changed := a.cfg.Connection != before.Connection ||
 		a.cfg.Audio != before.Audio ||
-		a.cfg.Gate != before.Gate
+		a.cfg.Gate != before.Gate ||
+		!slices.Equal(a.cfg.Servers, before.Servers)
 	a.mu.Unlock()
 
 	if changed {

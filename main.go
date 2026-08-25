@@ -21,12 +21,21 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/logging"
 	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/secret"
 	"github.com/LywwKkA-aD/Gul/internal/tray"
 	"github.com/LywwKkA-aD/Gul/services"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// secretService names Gul's items in the operating system's credential store:
+// the keychain entry the user sees in Keychain Access, the target prefix in
+// the Windows Credential Manager, the attribute a Secret Service item is
+// found by. It is the product identifier from build/config.yml, so it is
+// unique and stable across releases - changing it would orphan every password
+// already stored.
+const secretService = "io.github.lywwkkaad.gul"
 
 func init() {
 	application.RegisterEvent[domain.ConnectionStatus](domain.EventConnectionState)
@@ -190,6 +199,16 @@ func main() {
 	// start - core logs what was lost and runs on defaults.
 	settings, settingsErr := config.Load(cfgDir)
 	coreApp.UseSettings(cfgDir, settings, settingsErr)
+
+	// Passwords of remembered servers live in the operating system's own
+	// credential store, never in config.json. A machine without one is
+	// supported: the servers are still remembered and the user types the
+	// password (internal/secret).
+	store := secret.New(secretService)
+	coreApp.SetSecrets(store)
+	if !store.Available() {
+		logger.Warn("no credential store on this machine, server passwords will not be remembered")
+	}
 
 	app := application.New(application.Options{
 		Name:        "Gul",

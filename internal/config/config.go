@@ -16,7 +16,8 @@ import (
 // or removed field, a changed meaning, or a new field whose absence is not
 // the same as its default. Adding a field that Defaults() fills is not such a
 // change - Load decodes over Defaults, so an older document simply gets the
-// default (cue_volume was added this way, with a test pinning it).
+// default (cue_volume and the servers list were both added this way, each
+// with a test pinning it).
 const SchemaVersion = 1
 
 const (
@@ -34,6 +35,9 @@ type Config struct {
 	Connection Connection `json:"connection"`
 	Audio      Audio      `json:"audio"`
 	Gate       Gate       `json:"gate"`
+	// Servers is the remembered picker list, newest first (servers.go).
+	// Never a password: those live in internal/secret, keyed by Address.
+	Servers []Server `json:"servers"`
 
 	// extra is the document as it was read, so fields written by a build that
 	// knows more of this schema version than we do survive a round trip
@@ -41,8 +45,10 @@ type Config struct {
 	extra map[string]any
 }
 
-// Connection is what the connect form starts on. The password is never part
-// of it: it lives in the form for exactly one attempt.
+// Connection is what the connect form starts on, and stays the last-used
+// pair even after the picker (Servers) was added. The password is never part
+// of it: config.json holds no secrets at all, and a remembered password lives
+// in the operating system's credential store instead (internal/secret).
 type Connection struct {
 	LastAddress  string `json:"last_address"`
 	LastUsername string `json:"last_username"`
@@ -62,11 +68,15 @@ func Defaults() Config {
 // and a remembered connection that could not be dialled is forgotten. Applied
 // on load, and again on every mutation, so nothing hand-edited reaches the
 // engine.
+//
+// Config is a value and callers hold snapshots of it, so the slice field is
+// rebuilt rather than filtered in place - see sanitizeServers.
 func (c Config) Sanitized() Config {
 	c.Version = SchemaVersion
 	c.Connection = c.Connection.sanitized()
 	c.Audio = c.Audio.sanitized()
 	c.Gate = c.Gate.sanitized()
+	c.Servers = sanitizeServers(c.Servers)
 	return c
 }
 
