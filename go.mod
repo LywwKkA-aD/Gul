@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect

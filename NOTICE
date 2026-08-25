@@ -40,7 +40,9 @@ BSD-3-Clause license in the generated bundle.
 
 Other Go runtime dependencies include the Go standard library, Wails v3,
 coder/websocket, adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty,
-golang.org/x/net, golang.org/x/sys and google.golang.org/protobuf. Their
+golang.org/x/net, golang.org/x/sys, google.golang.org/protobuf and, on
+Windows only, go-toast (Unlicense or MIT), which Wails' notification service
+uses to raise toasts. Their
 versions and complete license texts are included in the generated bundle.
 Wails also contains
 attributed runtime code derived from ringqueue, atotto/clipboard and

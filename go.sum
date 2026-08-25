@@ -1,3 +1,5 @@
+git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 h1:N3IGoHHp9pb6mj1cbXbuaSXV/UMKwmbKLf53nQmtqMA=
+git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3/go.mod h1:QtOLZGz8olr4qH2vWK0QH0w0O4T9fEIjMuWpKUsH7nc=
 github.com/LywwKkA-aD/gumble v0.0.0-20260824160029-7999640c1fef h1:66bjSCEn0UTKmUCS8D4YD61VKkvS2glDUaZIbO+ycVA=
 github.com/LywwKkA-aD/gumble v0.0.0-20260824160029-7999640c1fef/go.mod h1:6RKYoODABXwmTm3bYZZUMQ9KMuhm9D7UjwrUTqMu2ds=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
