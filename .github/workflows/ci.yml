@@ -57,12 +57,6 @@ jobs:
         # derives every packaging representation and fails on any disagreement.
         run: bash scripts/check-version.sh
 
-      - name: Check the module graph of every shipped platform
-        # A platform-only dependency (the Wails notification service pulls a
-        # Windows toast library) is missing from go.sum until `go mod tidy`
-        # runs; the host build never notices.
-        run: bash scripts/check-cross-platform.sh
-
       - name: Verify the version checker
         run: bash scripts/check-version_test.sh
 
@@ -179,6 +173,14 @@ jobs:
           set -euo pipefail
           mkdir -p frontend/dist
           touch frontend/dist/.gitkeep
+
+      - name: Check the module graph of every shipped platform
+        # A platform-only dependency (the Wails notification service pulls a
+        # Windows toast library) is missing from go.sum until `go mod tidy`
+        # runs, and the host build never notices. Runs after the placeholder
+        # above: main.go embeds frontend/dist, so loading any package needs it
+        # to exist, on every target this walks.
+        run: bash scripts/check-cross-platform.sh
 
       - name: Generate Wails bindings
         # frontend/bindings is gitignored and the frontend imports from it,

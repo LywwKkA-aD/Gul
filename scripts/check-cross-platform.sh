@@ -25,7 +25,9 @@ for target in "${targets[@]}"; do
 done
 
 if [[ "$failed" -ne 0 ]]; then
-  echo "check-cross-platform: run 'go mod tidy' - it records every platform's modules" >&2
+  echo "check-cross-platform: a missing module means 'go mod tidy' has not seen" >&2
+  echo "  this platform yet; 'pattern all:frontend/dist' instead means the embedded" >&2
+  echo "  bundle is absent - build the frontend, or seed the placeholder CI uses." >&2
   exit 1
 fi
 
