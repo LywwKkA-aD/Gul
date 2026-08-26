@@ -2,9 +2,11 @@ package relayproto
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
 	"net"
 	"sync"
+	"syscall"
 
 	"golang.org/x/crypto/blake2b"
 )
@@ -175,6 +177,43 @@ func (c *ObfuscatedPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	// The caller is told what it handed over, not what went on the wire: the
 	// salt is ours, not part of its packet.
 	return len(p), nil
+}
+
+// SetReadBuffer and SetWriteBuffer let QUIC size the socket, which it warns
+// about loudly when it cannot. Only the buffers pass through: the wrapper hides
+// the socket from everything else on purpose (see the note below).
+func (c *ObfuscatedPacketConn) SetReadBuffer(bytes int) error {
+	if conn, ok := c.PacketConn.(interface{ SetReadBuffer(int) error }); ok {
+		return conn.SetReadBuffer(bytes)
+	}
+	return nil
+}
+
+func (c *ObfuscatedPacketConn) SetWriteBuffer(bytes int) error {
+	if conn, ok := c.PacketConn.(interface{ SetWriteBuffer(int) error }); ok {
+		return conn.SetWriteBuffer(bytes)
+	}
+	return nil
+}
+
+// SyscallConn is exposed for one reason: QUIC uses it to set the don't-fragment
+// bit, which is what keeps a packet from being split on the way.
+//
+// DO NOT add ReadMsgUDP or WriteMsgUDP here, however tempting the batching and
+// the ECN bits look. Together with the two methods above and this one they
+// satisfy quic.OOBCapablePacketConn, and QUIC then reads and writes through
+// THOSE instead of ReadFrom and WriteTo - which is to say, straight past the
+// scrambling, in the clear, with nothing failing to show it. A test asserts
+// that this type does not satisfy that interface, and it is there to stop
+// exactly this.
+func (c *ObfuscatedPacketConn) SyscallConn() (syscall.RawConn, error) {
+	conn, ok := c.PacketConn.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	})
+	if !ok {
+		return nil, errors.New("relayproto: underlying connection has no syscall handle")
+	}
+	return conn.SyscallConn()
 }
 
 // QUICPacketSize is the packet size QUIC must be held to when the datagram is

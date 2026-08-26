@@ -2,6 +2,7 @@ package relayproto
 
 import (
 	"bytes"
+	"net"
 	"testing"
 )
 
@@ -118,5 +119,47 @@ func BenchmarkObfuscate(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		o.Obfuscate(packet, out)
+	}
+}
+
+// The wrapper must not look like a UDP socket to QUIC.
+//
+// quic.OOBCapablePacketConn wants SyscallConn, SetReadBuffer, ReadMsgUDP and
+// WriteMsgUDP. A type that has all four gets read and written through the last
+// two INSTEAD of ReadFrom and WriteTo - which means straight past the
+// scrambling, in the clear, with every test still green and every session
+// still working. This is the guard against someone adding those two methods
+// for the batching and never finding out.
+func TestObfuscatedPacketConnIsNotUDPCapable(t *testing.T) {
+	t.Parallel()
+	socket, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = socket.Close() })
+	conn := ObfuscatePacketConn(socket, testObfuscator("server password"))
+
+	var oob any = conn
+	if _, bad := oob.(interface {
+		ReadMsgUDP(b, oob []byte) (int, int, int, *net.UDPAddr, error)
+	}); bad {
+		t.Fatal("the wrapper offers ReadMsgUDP; QUIC will read past the scrambling")
+	}
+	if _, bad := oob.(interface {
+		WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, int, error)
+	}); bad {
+		t.Fatal("the wrapper offers WriteMsgUDP; QUIC will write past the scrambling")
+	}
+
+	// The buffer knobs, on the other hand, have to pass through, or QUIC warns
+	// on every start that it cannot size the socket.
+	if err := conn.SetReadBuffer(1 << 20); err != nil {
+		t.Errorf("SetReadBuffer: %v", err)
+	}
+	if err := conn.SetWriteBuffer(1 << 20); err != nil {
+		t.Errorf("SetWriteBuffer: %v", err)
+	}
+	if _, err := conn.SyscallConn(); err != nil {
+		t.Errorf("SyscallConn: %v", err)
 	}
 }
