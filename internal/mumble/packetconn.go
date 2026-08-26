@@ -113,7 +113,7 @@ func (c *packetConn) StalledUplink() bool { return c.stalled.Load() }
 // connection is what turns the stall into a drop the reconnect loop can act on
 // and the user can be told about.
 func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
-	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+	if err := c.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
 		// A connection that cannot carry a deadline still has to carry voice.
 		return c.Conn.Write(p)
 	}
@@ -121,12 +121,11 @@ func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		return n, err
 	}
-	since := time.Since(time.Unix(0, c.lastRead.Load()))
-	if c.lastRead.Load() != 0 && since < uplinkReadWindow {
+	if last := c.lastRead.Load(); last != 0 && time.Since(time.Unix(0, last)) < uplinkReadWindow {
 		c.stalled.Store(true)
 		err = ErrUplinkStalled
 	}
-	_ = c.Conn.Close()
+	_ = c.Close()
 	return n, err
 }
 

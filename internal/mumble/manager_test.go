@@ -81,8 +81,62 @@ func newTestManager(t *testing.T, cb Callbacks) *Manager {
 	// where it belongs, in wss_test.go against relayproto.Derive; a test that
 	// cares about the credential overrides this again.
 	m.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
+	// A healthy link by default: tests that care about the round-trip gate say
+	// so themselves, and the rest hand out sessions with no client at all.
+	m.roundTripFn = func(*gumble.Client) bool { return true }
 	t.Cleanup(m.Close)
 	return m
+}
+
+// A session that never carries a packet of ours back is not a working
+// connection, however complete its handshake was. This is the failure a user
+// in Russia hit on 2026-08-26: fifty authenticated sessions in a row over a
+// link whose outgoing direction was dead, each one looking connected until the
+// server gave up on it twenty seconds later.
+func TestManagerGivesUpOnASessionThatCarriesNothingBack(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	m.roundTripGrace = 20 * time.Millisecond
+	m.roundTripFn = func(*gumble.Client) bool { return false }
+
+	dials := make(chan struct{}, 4)
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
+		dials <- struct{}{}
+		return &Session{}, nil
+	}
+
+	m.Connect("localhost", "gul", "")
+
+	sink.expect(t, domain.StateConnecting)
+	sink.expect(t, domain.StateConnected)
+	// No drop event is ever delivered: the gate is the only thing that can
+	// end this session.
+	sink.expect(t, domain.StateReconnecting)
+
+	<-dials
+	if _, ok := <-dials; !ok {
+		t.Fatal("expected a second attempt after the silent session")
+	}
+}
+
+// The gate must not fire on a link that answers, or every ordinary session
+// would be torn down on a timer.
+func TestManagerKeepsASessionThatAnswers(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	m.roundTripGrace = 20 * time.Millisecond
+	m.roundTripFn = func(*gumble.Client) bool { return true }
+	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) { return &Session{}, nil }
+
+	m.Connect("localhost", "gul", "")
+	sink.expect(t, domain.StateConnecting)
+	sink.expect(t, domain.StateConnected)
+
+	// Well past the grace: nothing further may be reported.
+	time.Sleep(150 * time.Millisecond)
+	if extra := sink.drained(); len(extra) != 0 {
+		t.Fatalf("a healthy session was disturbed: %+v", extra)
+	}
 }
 
 func TestManagerStartsDisconnected(t *testing.T) {

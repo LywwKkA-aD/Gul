@@ -23,6 +23,22 @@ var ErrNotConnected = errors.New("mumble: not connected")
 
 const statsPollInterval = 5 * time.Second
 
+// roundTripGrace is how long a fresh session has to prove that our packets
+// reach the server and come back.
+//
+// A completed handshake proves nothing. Verified live on 2026-08-26: a user
+// authenticated fifty times in a row over a link whose outgoing direction died
+// the moment the TLS handshake finished. They heard everyone; nothing of
+// theirs arrived; the server dropped them on its own ping deadline every
+// twenty seconds and the loop started over. The only honest evidence a
+// transport works is a packet of ours coming back, which is exactly what a
+// ping reply is - gumble counts nothing else in tcpPacketsReceived, and murmur
+// answers a ping only if it received one.
+//
+// gumble sends its first ping the moment the loop starts and repeats every 5s,
+// so this leaves room for one lost ping before we give up on the transport.
+const roundTripGrace = 12 * time.Second
+
 type credentials struct {
 	address  string
 	username string
@@ -61,6 +77,8 @@ type Manager struct {
 	deriveFn        func([]byte) relayproto.Credential
 	statsInterval   time.Duration
 	sampleLatencyFn func(*gumble.Client) // seam for tests; nil means sampleLatency
+	roundTripFn     func(*gumble.Client) bool
+	roundTripGrace  time.Duration
 
 	// Seams for the self audio writer, along with selfAudioBudget below. The
 	// writer goroutine reads them only after a wake-up, so a test that sets
@@ -125,6 +143,11 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		selfAudioWake:   make(chan struct{}, 1),
 		selfAudioDone:   make(chan struct{}),
 		selfAudioBudget: newSendBudget(selfAudioBurst, selfAudioInterval),
+		roundTripGrace:  roundTripGrace,
+	}
+	m.roundTripFn = func(client *gumble.Client) bool {
+		_, _, ok := client.TCPPing()
+		return ok
 	}
 	m.writeSelfAudioFn = func(client *gumble.Client, muted, deafened bool) {
 		client.Do(func() { writeSelfAudio(client, muted, deafened) })
@@ -368,7 +391,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
-		event, stopped := m.waitSession(session.client, dropped, stop)
+		event, stopped, silent := m.waitSession(session.client, dropped, stop)
 		m.clearSession()
 		if stopped {
 			_ = session.Disconnect()
@@ -376,7 +399,13 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 
 		reason, terminal := disconnectReason(event)
-		if session.stalledUplink() {
+		switch {
+		case silent:
+			// Nothing of ours ever came back. The session looks perfect from
+			// the inside, so it has to be taken down here.
+			_ = session.Disconnect()
+			reason, terminal = reasonNoRoundTrip, false
+		case session.stalledUplink():
 			reason = reasonUplinkStalled
 		}
 		if terminal {
@@ -398,11 +427,13 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 // waitSession owns the stats ticker for exactly one live session. Returning
 // stops new requests before reconnecting; publishLatency rejects any response
 // that was already in flight from the old client.
+// It also holds the round-trip gate: silent reports a session that never
+// proved our packets reach the server (roundTripGrace).
 func (m *Manager) waitSession(
 	client *gumble.Client,
 	dropped <-chan *gumble.DisconnectEvent,
 	stop <-chan struct{},
-) (event *gumble.DisconnectEvent, stopped bool) {
+) (event *gumble.DisconnectEvent, stopped, silent bool) {
 	interval := m.statsInterval
 	if interval <= 0 {
 		interval = statsPollInterval
@@ -416,12 +447,19 @@ func (m *Manager) waitSession(
 	}
 	sample(client)
 
+	verify := time.NewTimer(m.roundTripGrace)
+	defer verify.Stop()
+
 	for {
 		select {
 		case <-stop:
-			return nil, true
+			return nil, true, false
 		case event := <-dropped:
-			return event, false
+			return event, false, false
+		case <-verify.C:
+			if m.roundTripFn != nil && !m.roundTripFn(client) {
+				return nil, false, true
+			}
 		case <-ticker.C:
 			sample(client)
 		}
@@ -769,6 +807,12 @@ func sleepOrStop(d time.Duration, stop <-chan struct{}) bool {
 // invisible from inside the window: everyone is still audible, and the only
 // symptom is that nobody answers.
 const reasonUplinkStalled = "исходящий трафик не проходит — вас не слышно, хотя вы слышите остальных"
+
+// reasonNoRoundTrip is the session that never carried a packet of ours back.
+// It is not the same failure as a stalled uplink: there the connection was
+// working and stopped, here it never worked at all, and the difference is what
+// tells a blocked network apart from one that merely broke.
+const reasonNoRoundTrip = "сервер не отвечает на наши пакеты — этот способ подключения не работает в вашей сети"
 
 // disconnectReason classifies a drop: terminal means do not reconnect.
 func disconnectReason(e *gumble.DisconnectEvent) (reason string, terminal bool) {
