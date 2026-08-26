@@ -289,9 +289,26 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 		kind    websocket.MessageType
 		payload []byte
 		relayed bool
+		// refusal is the close status the relay must answer with. The
+		// oversized case cannot be judged by "nothing came back": the library
+		// enforces the limit as the message streams (limitReader errors on the
+		// read after the budget runs out), so a prefix can reach the upstream
+		// and be echoed back before the close lands. The close is the part
+		// that is actually promised.
+		refusal websocket.StatusCode
 	}{
-		{name: "text", kind: websocket.MessageText, payload: []byte("not a binary tunnel")},
-		{name: "oversized", kind: websocket.MessageBinary, payload: bytes.Repeat([]byte{0xaa}, limit+1)},
+		{
+			name:    "text",
+			kind:    websocket.MessageText,
+			payload: []byte("not a binary tunnel"),
+			refusal: websocket.StatusUnsupportedData,
+		},
+		{
+			name:    "oversized",
+			kind:    websocket.MessageBinary,
+			payload: bytes.Repeat([]byte{0xaa}, limit+1),
+			refusal: websocket.StatusMessageTooBig,
+		},
 		{name: "at the limit", kind: websocket.MessageBinary, payload: bytes.Repeat([]byte{0xbb}, limit), relayed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,10 +331,17 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			if !tc.relayed {
-				if kind, _, err := conn.Read(ctx); err == nil {
-					t.Fatalf("invalid message was relayed as %v", kind)
+				for {
+					_, _, err := conn.Read(ctx)
+					if err == nil {
+						continue // an echoed prefix; the close is still owed
+					}
+					if got := websocket.CloseStatus(err); got != tc.refusal {
+						t.Fatalf("connection ended with close status %v (%v), want %v",
+							got, err, tc.refusal)
+					}
+					return
 				}
-				return
 			}
 			// The upstream may split its answer across reads, so the echo is
 			// consumed as a stream rather than as one message.

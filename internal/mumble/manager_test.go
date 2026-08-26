@@ -74,6 +74,13 @@ func newTestManager(t *testing.T, cb Callbacks) *Manager {
 		t.Fatalf("NewManager: %v", err)
 	}
 	m.backoffFn = func(int) time.Duration { return time.Millisecond }
+	// Connect derives the relay bearer before it reports anything, and the
+	// real derivation is 600k PBKDF2 rounds - deliberately slow, and slower
+	// still under the race detector, which is enough to push a loaded CI
+	// runner past the callback deadlines below. The cost itself is covered
+	// where it belongs, in wss_test.go against relayproto.Derive; a test that
+	// cares about the credential overrides this again.
+	m.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
 	t.Cleanup(m.Close)
 	return m
 }

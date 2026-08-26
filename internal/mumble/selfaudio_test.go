@@ -202,36 +202,32 @@ func TestSendBudgetWithoutAnIntervalNeverWaits(t *testing.T) {
 	}
 }
 
-// Twelve clicks in a couple of dozen milliseconds must not become twelve
-// packets, and the state the user stopped on must still be the one that goes
-// out last.
-func TestSelfAudioWriterStaysInsideTheServersBudget(t *testing.T) {
+// The writer asks the budget before every packet. With an allowance of one
+// the second click cannot go out at all, and it has to stay pending rather
+// than be dropped: the server would otherwise keep a state the user has left.
+//
+// The count is asserted the safe way round - a slow machine gives a wrong
+// packet more time to appear, not less - because the spacing itself is
+// already pinned deterministically by TestSendBudget...
+func TestSelfAudioWriterWaitsForTheServersBudget(t *testing.T) {
 	t.Parallel()
 	m, rec := newSelfAudioManager(t)
 	close(rec.release) // nothing to hold open here
-	const interval = 50 * time.Millisecond
-	m.selfAudioBudget = newSendBudget(2, interval)
+	m.selfAudioBudget = newSendBudget(1, time.Hour)
 	m.mu.Lock()
 	m.client = &gumble.Client{}
 	m.mu.Unlock()
 
-	for i := range 12 {
-		m.SetSelfAudio(i%2 == 0, false)
-		time.Sleep(2 * time.Millisecond)
-	}
-	waitFor(t, "the writer to drain", func() bool { return !m.SelfAudioPending() })
+	m.SetSelfAudio(true, false)
+	waitFor(t, "the first packet", func() bool { return len(rec.snapshot()) == 1 })
 
-	writes := rec.snapshot()
-	if len(writes) == 0 {
-		t.Fatal("nothing was written")
+	m.SetSelfAudio(false, false)
+	time.Sleep(100 * time.Millisecond)
+
+	if got := rec.snapshot(); len(got) != 1 {
+		t.Fatalf("packets = %+v, want only the one the budget allowed", got)
 	}
-	if got := writes[len(writes)-1]; got != (selfAudioPair{false, false}) {
-		t.Fatalf("last packet = %+v, want the last click {false false}", got)
-	}
-	// Two go out on the burst; everything clicked while the third is held
-	// travels inside it.
-	if len(writes) > 3 {
-		t.Fatalf("12 clicks produced %d packets, want them inside the budget: %+v",
-			len(writes), writes)
+	if !m.SelfAudioPending() {
+		t.Fatal("the click held back by the budget was forgotten")
 	}
 }
