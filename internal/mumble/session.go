@@ -3,6 +3,7 @@ package mumble
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -123,7 +124,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	if ep.kind == endpointWSS {
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
-		conn, dialErr := dialWSSMumbleTLS(ctx, ep, relayCredential(cfg), tofu, cfg.Certificate, nil)
+		conn, dialErr := dialRelay(ctx, ep, relayCredential(cfg), tofu, cfg.Certificate, log)
 		if dialErr != nil {
 			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 		}
@@ -145,6 +146,55 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	}
 	s.client = client
 	return s, nil
+}
+
+// dialRelay reaches the relay by whichever road works.
+//
+// WebSocket over TCP first, because it is the one every deployed relay speaks
+// and the one that has carried every session so far; QUIC over UDP when that
+// fails to establish. A network that drops one does not necessarily drop the
+// other, and the user should not have to know which.
+//
+// This is failure-to-connect fallback, not yet a choice: a road that connects
+// and then carries nothing still has to be found by the round-trip gate in the
+// manager, and picking between roads on that evidence is the next step.
+func dialRelay(
+	ctx context.Context,
+	ep endpoint,
+	credential relayproto.Credential,
+	tofu *TOFUStore,
+	certificate *tls.Certificate,
+	log *slog.Logger,
+) (net.Conn, error) {
+	conn, wssErr := dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	if wssErr == nil {
+		return conn, nil
+	}
+	if isTerminalRelayError(wssErr) {
+		// A refused credential or a rate limit says nothing about the road, so
+		// trying the other one would only spend the user's time twice.
+		return nil, wssErr
+	}
+	log.Info("relay unreachable over websocket, trying quic",
+		"error", RedactServer(wssErr.Error(), ep.address))
+	conn, quicErr := dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	if quicErr == nil {
+		log.Info("relay reached over quic")
+		return conn, nil
+	}
+	// The WebSocket failure is the one the user needs: it is the road that is
+	// supposed to work, and the QUIC attempt was the long shot.
+	return nil, wssErr
+}
+
+// isTerminalRelayError reports whether a failure is about who is calling
+// rather than about the road, in which case another road cannot help.
+func isTerminalRelayError(err error) bool {
+	return errors.Is(err, ErrRelayPasswordRequired) ||
+		errors.Is(err, ErrRelayAuthentication) ||
+		errors.Is(err, ErrRelayNotFound) ||
+		errors.Is(err, ErrRelayRateLimited) ||
+		errors.Is(err, ErrRelayFull)
 }
 
 // relayCredential returns the bearer for the relay, deriving it when the

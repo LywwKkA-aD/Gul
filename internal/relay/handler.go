@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -123,9 +124,12 @@ type Handler struct {
 	// lets a test observe the key a session used without a Linux host.
 	upstreamLocalAddress func(source string) net.IP
 
-	mu           sync.Mutex
-	perSource    map[string]int
-	active       map[*websocket.Conn]struct{}
+	mu        sync.Mutex
+	perSource map[string]int
+	active    map[*websocket.Conn]struct{}
+	// streams holds the sessions that are not WebSockets - the QUIC ones -
+	// which have no close frame to send and are simply closed.
+	streams      map[io.Closer]struct{}
 	closing      bool
 	sessions     sync.WaitGroup
 	shutdownOnce sync.Once
@@ -213,6 +217,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:       loggerOrDefault(cfg.Logger),
 		perSource:    make(map[string]int),
 		active:       make(map[*websocket.Conn]struct{}),
+		streams:      make(map[io.Closer]struct{}),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -358,6 +363,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// not when a courtesy close frame finishes timing out.
 	defer func() { go func() { _ = stream.Close() }() }()
 
+	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", func() {
+		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
+	})
+}
+
+// pumpSession is the half of a session that does not depend on how the client
+// arrived: dial Murmur, move bytes, account for them. Both transports end
+// here, so a WebSocket session and a QUIC one are the same session with a
+// different front door.
+//
+// onUpstreamFailure tells the client that Murmur, not the relay, is the thing
+// that is down, in whatever way its transport can say so.
+func (h *Handler) pumpSession(
+	stream net.Conn,
+	sourceIP, sourceBlock, transport string,
+	onUpstreamFailure func(),
+) {
 	dialer := h.dialer
 	localAddress := h.upstreamLocalAddress(sourceBlock)
 	if localAddress != nil {
@@ -365,8 +387,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream, err := dialer.DialContext(h.ctx, "tcp", h.upstream)
 	if err != nil {
-		h.logger.Error("relay upstream dial failed", "source", sourceIP, "upstream", h.upstream, "error", err)
-		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
+		h.logger.Error("relay upstream dial failed",
+			"source", sourceIP, "transport", transport, "upstream", h.upstream, "error", err)
+		if onUpstreamFailure != nil {
+			onUpstreamFailure()
+		}
 		return
 	}
 	defer func() { _ = upstream.Close() }()
@@ -375,7 +400,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opened := time.Now()
-	openAttrs := []any{"source", sourceIP}
+	openAttrs := []any{"source", sourceIP, "transport", transport}
 	if localAddress != nil {
 		openAttrs = append(openAttrs, "upstream_source", localAddress.String())
 	}
@@ -384,6 +409,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stats := proxySession(stream, upstream, h.idleTimeout, h.writeTimeout)
 	closeAttrs := []any{
 		"source", sourceIP,
+		"transport", transport,
 		"duration", time.Since(opened).Round(time.Millisecond),
 		"bytes_from_client", stats.fromClient,
 		"bytes_to_client", stats.toClient,
@@ -506,6 +532,11 @@ func (h *Handler) stopAccepting() []*websocket.Conn {
 	for conn := range h.active {
 		active = append(active, conn)
 	}
+	// A QUIC stream has no close frame to send, so it is simply closed here
+	// rather than being asked to leave first.
+	for stream := range h.streams {
+		go func(stream io.Closer) { _ = stream.Close() }(stream)
+	}
 	return active
 }
 
@@ -522,6 +553,24 @@ func (h *Handler) registerWebSocket(conn *websocket.Conn) bool {
 func (h *Handler) unregisterWebSocket(conn *websocket.Conn) {
 	h.mu.Lock()
 	delete(h.active, conn)
+	h.mu.Unlock()
+}
+
+// registerStream tracks a session that is not a WebSocket, so a shutdown can
+// end it too. It reports false once the relay has stopped accepting.
+func (h *Handler) registerStream(stream io.Closer) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing {
+		return false
+	}
+	h.streams[stream] = struct{}{}
+	return true
+}
+
+func (h *Handler) unregisterStream(stream io.Closer) {
+	h.mu.Lock()
+	delete(h.streams, stream)
 	h.mu.Unlock()
 }
 

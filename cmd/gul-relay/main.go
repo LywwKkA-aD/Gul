@@ -65,6 +65,7 @@ type options struct {
 	credentialFile     string
 	acceptLegacyBearer bool
 	acceptLegacyNames  bool
+	quic               bool
 }
 
 func main() {
@@ -97,6 +98,7 @@ func main() {
 	flag.StringVar(&opts.credentialFile, "credential-file", "/run/secrets/GUL_RELAY_BEARER", "pre-derived relay bearer credential file")
 	flag.BoolVar(&opts.acceptLegacyBearer, "accept-legacy-bearer", true, "accept the v0.3.0-alpha.2 bearer credential during the deprecation window")
 	flag.BoolVar(&opts.acceptLegacyNames, "accept-legacy-names", true, "accept the fixed /mumble path and gul-mumble-v1 subprotocol during the deprecation window")
+	flag.BoolVar(&opts.quic, "quic", true, "also accept tunnels over QUIC on the same address, UDP")
 	flag.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	flag.Parse()
 
@@ -180,9 +182,30 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 	tlsListener := tls.NewListener(limitedListener, server.TLSConfig)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(tlsListener) }()
+
+	// The second road, on the same address over UDP. A failure to open it is
+	// not fatal: a relay that answers on TCP is still a working relay, and a
+	// host where UDP cannot be bound should not stop being one.
+	var quicServer *relay.QUICServer
+	if opts.quic {
+		quicServer, err = relay.ListenQUIC(listener.Addr().String(), loader.GetCertificate, handler, logger)
+		if err != nil {
+			logger.Error("relay quic listener unavailable", "error", err)
+			quicServer = nil
+		} else {
+			defer func() { _ = quicServer.Close() }()
+			go func() {
+				if err := quicServer.Serve(ctx); err != nil {
+					logger.Error("relay quic listener stopped", "error", err)
+				}
+			}()
+		}
+	}
+
 	logger.Info("relay ready",
 		"version", version,
 		"listen", listener.Addr().String(),
+		"quic", quicServer != nil,
 		"accept_legacy_bearer", opts.acceptLegacyBearer,
 		"accept_legacy_names", opts.acceptLegacyNames,
 	)
@@ -195,6 +218,9 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 		return fmt.Errorf("serve relay: %w", err)
 	case <-ctx.Done():
 		logger.Info("relay draining sessions")
+		if quicServer != nil {
+			_ = quicServer.Close()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
 		// The HTTP server stops accepting first and its shutdown is always

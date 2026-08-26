@@ -9,7 +9,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"io"
 	"strings"
 )
 
@@ -149,4 +152,51 @@ func validBase64URL(s string) bool {
 		}
 	}
 	return true
+}
+
+// The QUIC tunnel carries the same bytes as the WebSocket one, over a single
+// bidirectional stream, and authenticates with the same credential.
+//
+// ALPN is "h3" because a QUIC Initial packet is not secret: it is protected
+// with keys anyone can derive from the connection ID and the version salt, so
+// the SNI and the protocol name travel in the open. A name of our own would be
+// visible and unique, which is the opposite of the point; "h3" is the most
+// numerous thing on UDP 443. Making the tunnel survive an active prober that
+// speaks real HTTP/3 to it is a separate piece of work.
+const (
+	QUICALPN = "h3"
+	// quicPreambleMax bounds the credential a stream may present before it is
+	// read, so an opening peer cannot make the relay buffer anything.
+	quicPreambleMax = 160
+)
+
+// WriteQUICPreamble states who is calling, ahead of the tunnel bytes: a
+// two-byte length and the credential.
+func WriteQUICPreamble(w io.Writer, c Credential) error {
+	if len(c) == 0 || len(c) > quicPreambleMax {
+		return errors.New("relayproto: credential does not fit the preamble")
+	}
+	frame := make([]byte, 2+len(c))
+	binary.BigEndian.PutUint16(frame, uint16(len(c)))
+	copy(frame[2:], c)
+	_, err := w.Write(frame)
+	return err
+}
+
+// ReadQUICPreamble reads what WriteQUICPreamble wrote. A length beyond the
+// bound is refused before a single byte of it is read.
+func ReadQUICPreamble(r io.Reader) (Credential, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return "", err
+	}
+	size := int(binary.BigEndian.Uint16(header[:]))
+	if size == 0 || size > quicPreambleMax {
+		return "", errors.New("relayproto: preamble length out of range")
+	}
+	body := make([]byte, size)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return "", err
+	}
+	return Credential(body), nil
 }
