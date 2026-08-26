@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"testing"
@@ -68,22 +69,48 @@ func startQUICRelay(t *testing.T, cfg Config) (*QUICServer, *x509.CertPool) {
 	return server, pool
 }
 
-// dialQUICTunnel opens a tunnel the way the client does: connect, open one
-// stream, state the credential.
-func dialQUICTunnel(t *testing.T, server *QUICServer, pool *x509.CertPool, credential relayproto.Credential) (net.Conn, error) {
+// dialQUICTunnel opens a tunnel the way the client does: scramble under the
+// password, connect, open one stream, state the credential.
+//
+// scrambleWith is the password the datagrams are keyed with and present is
+// what the preamble claims. They are the same for a real client; separating
+// them is what lets a test reach the authorization check at all, because a
+// caller who scrambles with the wrong password is not heard in the first place.
+func dialQUICTunnel(
+	t *testing.T,
+	server *QUICServer,
+	pool *x509.CertPool,
+	scrambleWith, present relayproto.Credential,
+) (net.Conn, error) {
 	t.Helper()
 	_, port, err := net.SplitHostPort(server.Addr().String())
 	if err != nil {
 		t.Fatalf("listener address: %v", err)
 	}
+	remote, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	socket, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	transport := &quic.Transport{
+		Conn: relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(scrambleWith)),
+	}
+	t.Cleanup(func() {
+		_ = transport.Close()
+		_ = socket.Close()
+	})
+
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	conn, err := quic.DialAddr(ctx, net.JoinHostPort("127.0.0.1", port), &tls.Config{
+	conn, err := transport.Dial(ctx, remote, &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
 		ServerName: testHost,
 		NextProtos: []string{relayproto.QUICALPN},
-	}, nil)
+	}, quicConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +119,7 @@ func dialQUICTunnel(t *testing.T, server *QUICServer, pool *x509.CertPool, crede
 		_ = conn.CloseWithError(0, "")
 		return nil, err
 	}
-	if err := relayproto.WriteQUICPreamble(stream, credential); err != nil {
+	if err := relayproto.WriteQUICPreamble(stream, present); err != nil {
 		_ = conn.CloseWithError(0, "")
 		return nil, err
 	}
@@ -105,7 +132,7 @@ func TestQUICRelayCarriesTheStream(t *testing.T) {
 	t.Parallel()
 	server, pool := startQUICRelay(t, baseConfig(defaultTestSecret))
 
-	stream, err := dialQUICTunnel(t, server, pool, testCredential(defaultTestSecret))
+	stream, err := dialQUICTunnel(t, server, pool, testCredential(defaultTestSecret), testCredential(defaultTestSecret))
 	if err != nil {
 		t.Fatalf("dial quic tunnel: %v", err)
 	}
@@ -126,18 +153,34 @@ func TestQUICRelayCarriesTheStream(t *testing.T) {
 	}
 }
 
-// A credential the relay does not know gets nothing, and the refusal is
-// logged so an operator can see it happening.
-func TestQUICRelayRefusesAWrongCredential(t *testing.T) {
+// The wrong password is not refused - it is not heard. Datagrams scrambled
+// under another key unscramble into noise, which QUIC discards, so the port
+// never answers and there is nothing for a prober to learn from it.
+func TestQUICRelayIsSilentToTheWrongPassword(t *testing.T) {
+	t.Parallel()
+	cfg := baseConfig(defaultTestSecret)
+	cfg.Logger = slog.New(slog.DiscardHandler)
+	server, pool := startQUICRelay(t, cfg)
+
+	wrong := testCredential("some other password")
+	if _, err := dialQUICTunnel(t, server, pool, wrong, wrong); err == nil {
+		t.Fatal("a caller with the wrong password completed a handshake")
+	}
+}
+
+// The preamble is still checked, so a caller who somehow gets its datagrams
+// through without a credential the relay accepts is refused, and the refusal
+// is logged for the operator.
+func TestQUICRelayRefusesAnUnknownCredential(t *testing.T) {
 	t.Parallel()
 	logger, records := newRecordingLogger()
 	cfg := baseConfig(defaultTestSecret)
 	cfg.Logger = logger
 	server, pool := startQUICRelay(t, cfg)
 
-	stream, err := dialQUICTunnel(t, server, pool, testCredential("some other password"))
+	stream, err := dialQUICTunnel(t, server, pool,
+		testCredential(defaultTestSecret), testCredential("some other password"))
 	if err != nil {
-		// Refused before the stream came back is a perfectly good refusal.
 		records.await(t, "relay quic authorization rejected")
 		return
 	}
@@ -157,14 +200,26 @@ func TestQUICRelayRefusesASilentConnection(t *testing.T) {
 	server, pool := startQUICRelay(t, cfg)
 
 	_, port, _ := net.SplitHostPort(server.Addr().String())
+	remote, _ := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", port))
+	socket, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	transport := &quic.Transport{
+		Conn: relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(testCredential(defaultTestSecret))),
+	}
+	t.Cleanup(func() {
+		_ = transport.Close()
+		_ = socket.Close()
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	conn, err := quic.DialAddr(ctx, net.JoinHostPort("127.0.0.1", port), &tls.Config{
+	conn, err := transport.Dial(ctx, remote, &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
 		ServerName: testHost,
 		NextProtos: []string{relayproto.QUICALPN},
-	}, nil)
+	}, quicConfig())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

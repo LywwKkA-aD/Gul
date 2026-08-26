@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"time"
@@ -65,25 +66,42 @@ func dialQUIC(
 			config.ServerName = roots.ServerName
 		}
 	}
-	conn, err := quic.DialAddr(ctx, target, config, &quic.Config{
-		MaxIdleTimeout:  quicMaxIdle,
-		KeepAlivePeriod: quicKeepAlive,
-	})
+	remote, err := net.ResolveUDPAddr("udp", target)
 	if err != nil {
+		return nil, fmt.Errorf("QUIC relay address: %w", err)
+	}
+	socket, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		return nil, fmt.Errorf("QUIC relay socket: %w", err)
+	}
+	// Every datagram is scrambled under a key both ends reach from the
+	// password, so nothing on the way can tell this is QUIC at all
+	// (relayproto.Salamander). QUIC never sees the socket itself.
+	transport := &quic.Transport{
+		Conn: relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(credential)),
+	}
+	conn, err := transport.Dial(ctx, remote, config, quicConfig())
+	if err != nil {
+		_ = transport.Close()
+		_ = socket.Close()
 		return nil, fmt.Errorf("QUIC relay handshake failed: %w", err)
 	}
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		_ = conn.CloseWithError(0, "")
+		_ = transport.Close()
+		_ = socket.Close()
 		return nil, fmt.Errorf("QUIC relay stream failed: %w", err)
 	}
 	// The relay refuses a connection that stays anonymous, so state who is
 	// calling before anything else goes down the stream.
 	if err := relayproto.WriteQUICPreamble(stream, credential); err != nil {
 		_ = conn.CloseWithError(0, "")
+		_ = transport.Close()
+		_ = socket.Close()
 		return nil, fmt.Errorf("QUIC relay handshake failed: %w", err)
 	}
-	return &quicStream{Stream: stream, conn: conn}, nil
+	return &quicStream{Stream: stream, conn: conn, transport: transport, socket: socket}, nil
 }
 
 // quicTarget turns the relay address into a UDP target and the name to verify.
@@ -105,15 +123,34 @@ func quicTarget(address string) (target, host string, err error) {
 // carries exactly one tunnel.
 type quicStream struct {
 	*quic.Stream
-	conn *quic.Conn
+	conn      *quic.Conn
+	transport *quic.Transport
+	socket    io.Closer
+}
+
+// quicConfig is the tuning both ends share. The packet size is held down and
+// path MTU discovery is off because the salt rides on top of every datagram:
+// a packet sized to the path exactly would leave eight bytes over it, and
+// discovery would find the real limit and then exceed it on every packet after
+// (relayproto.QUICPacketSize).
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIdleTimeout:          quicMaxIdle,
+		KeepAlivePeriod:         quicKeepAlive,
+		InitialPacketSize:       relayproto.QUICPacketSize,
+		DisablePathMTUDiscovery: true,
+	}
 }
 
 func (s *quicStream) LocalAddr() net.Addr  { return s.conn.LocalAddr() }
 func (s *quicStream) RemoteAddr() net.Addr { return s.conn.RemoteAddr() }
 
 func (s *quicStream) Close() error {
-	err := s.Stream.Close()
-	return errors.Join(err, s.conn.CloseWithError(0, ""))
+	err := errors.Join(s.Stream.Close(), s.conn.CloseWithError(0, ""))
+	// The socket belongs to this tunnel alone, so it goes with it. Leaving it
+	// open would leak a file descriptor per reconnect, and reconnects are the
+	// normal case on the networks this exists for.
+	return errors.Join(err, s.transport.Close(), s.socket.Close())
 }
 
 // dialQUICMumbleTLS opens the tunnel over QUIC and completes the Mumble TLS

@@ -46,15 +46,28 @@ func startQUICEcho(t *testing.T) (address string, roots *tls.Config, seen <-chan
 	pool := x509.NewCertPool()
 	pool.AddCert(parsed)
 
-	listener, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{
+	socket, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	// The relay scrambles every datagram, so a stand-in for it has to as well
+	// or the client is talking to something that cannot hear it.
+	transport := &quic.Transport{
+		Conn: relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(relayTestCredential())),
+	}
+	listener, err := transport.Listen(&tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		NextProtos:   []string{relayproto.QUICALPN},
-	}, nil)
+	}, quicConfig())
 	if err != nil {
 		t.Fatalf("listen quic: %v", err)
 	}
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() {
+		_ = listener.Close()
+		_ = transport.Close()
+		_ = socket.Close()
+	})
 
 	credentials := make(chan relayproto.Credential, 1)
 	go func() {
@@ -74,7 +87,7 @@ func startQUICEcho(t *testing.T) (address string, roots *tls.Config, seen <-chan
 		_, _ = io.Copy(stream, stream)
 	}()
 
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	_, port, _ := net.SplitHostPort(socket.LocalAddr().String())
 	return "wss://localhost:" + port, &tls.Config{RootCAs: pool}, credentials
 }
 

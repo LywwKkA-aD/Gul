@@ -40,9 +40,10 @@ const (
 // QUICServer accepts tunnel connections over QUIC and hands each one to the
 // same session pump the WebSocket path uses.
 type QUICServer struct {
-	handler  *Handler
-	listener *quic.Listener
-	logger   *slog.Logger
+	handler   *Handler
+	listener  *quic.Listener
+	transport *quic.Transport
+	logger    *slog.Logger
 }
 
 // ListenQUIC opens the UDP listener. The certificate comes from the same
@@ -56,22 +57,42 @@ func ListenQUIC(
 	if handler == nil {
 		return nil, errors.New("relay QUIC listener needs a handler")
 	}
-	listener, err := quic.ListenAddr(address, &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: getCertificate,
-		NextProtos:     []string{relayproto.QUICALPN},
-	}, &quic.Config{
-		MaxIdleTimeout:  quicMaxIdle,
-		KeepAlivePeriod: quicKeepAlive,
-	})
+	packets, err := net.ListenPacket("udp", address)
 	if err != nil {
 		return nil, err
 	}
+	// Every datagram is scrambled, so what leaves this socket has no shape to
+	// recognise and what arrives without the password is discarded in silence
+	// (relayproto.Salamander). QUIC never sees the socket itself.
+	transport := &quic.Transport{Conn: relayproto.ObfuscatePacketConn(packets, handler.obfuscator)}
+	listener, err := transport.Listen(&tls.Config{
+		MinVersion:     tls.VersionTLS13,
+		GetCertificate: getCertificate,
+		NextProtos:     []string{relayproto.QUICALPN},
+	}, quicConfig())
+	if err != nil {
+		_ = packets.Close()
+		return nil, err
+	}
 	return &QUICServer{
-		handler:  handler,
-		listener: listener,
-		logger:   loggerOrDefault(logger),
+		handler:   handler,
+		listener:  listener,
+		transport: transport,
+		logger:    loggerOrDefault(logger),
 	}, nil
+}
+
+// quicConfig is the tuning both ends share. The packet size is held down and
+// path MTU discovery is off because the salt rides on top of every datagram:
+// a packet sized to the path exactly would leave eight bytes over it, and
+// discovery would find the real limit and then exceed it on every packet after.
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIdleTimeout:          quicMaxIdle,
+		KeepAlivePeriod:         quicKeepAlive,
+		InitialPacketSize:       relayproto.QUICPacketSize,
+		DisablePathMTUDiscovery: true,
+	}
 }
 
 // Addr reports where the listener ended up, which matters when the caller
@@ -92,9 +113,12 @@ func (s *QUICServer) Serve(ctx context.Context) error {
 	}
 }
 
-// Close stops accepting. Sessions already running end with the handler's own
-// shutdown, which is what owns the drain window.
-func (s *QUICServer) Close() error { return s.listener.Close() }
+// Close stops accepting and releases the socket. Sessions already running end
+// with the handler's own shutdown, which is what owns the drain window.
+func (s *QUICServer) Close() error {
+	err := s.listener.Close()
+	return errors.Join(err, s.transport.Close())
+}
 
 // serveConn authenticates one connection and runs its tunnel.
 //

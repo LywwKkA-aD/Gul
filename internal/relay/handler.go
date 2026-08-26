@@ -104,6 +104,9 @@ type Handler struct {
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 	cover        *coverSite
+	// obfuscator scrambles the QUIC datagrams (relayproto.Salamander). Keyed
+	// by the primary credential, so both ends reach it from the password.
+	obfuscator *relayproto.Obfuscator
 	// paths and subprotocols are the names this relay answers on, derived from
 	// every configured credential (relayproto.NamesFor) plus, while the window
 	// is open, the fixed legacy pair. Precomputed: a request must never spend
@@ -207,6 +210,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		idleTimeout:  cfg.SessionIdleTimeout,
 		writeTimeout: cfg.SessionWriteTimeout,
 		cover:        newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
+		obfuscator:   relayproto.NewObfuscator(primary),
 		paths:        tunnelPaths(credentials, cfg.AcceptLegacyNames),
 		subprotocols: tunnelSubprotocols(credentials, cfg.AcceptLegacyNames),
 		legacyNames:  cfg.AcceptLegacyNames,
