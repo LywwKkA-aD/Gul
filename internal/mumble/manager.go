@@ -56,15 +56,23 @@ type Manager struct {
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
-	dialFn          func(DialConfig, sessionHooks) (*Session, error)
-	backoffFn       func(int) time.Duration
-	deriveFn        func([]byte) relayproto.Credential
-	statsInterval   time.Duration
-	sampleLatencyFn func(*gumble.Client) // seam for tests; nil means sampleLatency
+	dialFn           func(DialConfig, sessionHooks) (*Session, error)
+	backoffFn        func(int) time.Duration
+	deriveFn         func([]byte) relayproto.Credential
+	statsInterval    time.Duration
+	sampleLatencyFn  func(*gumble.Client)             // seam for tests; nil means sampleLatency
+	writeSelfAudioFn func(*gumble.Client, bool, bool) // seam for tests
+	selfAudioWoke    func()                           // seam for tests; called after every wake-up
 
 	// voice is the transport for raw Opus. It outlives sessions: the audio
 	// pipeline holds its channels while connections come and go.
 	voice *voiceIO
+
+	// The self audio writer and its stop signal, both for the lifetime of the
+	// Manager rather than of a session (selfaudio.go).
+	selfAudioWake   chan struct{}
+	selfAudioDone   chan struct{}
+	selfAudioBudget *sendBudget
 
 	mu         sync.Mutex
 	status     domain.ConnectionStatus
@@ -78,9 +86,13 @@ type Manager struct {
 	hasRestore bool
 
 	// Desired self mute/deafen, remembered so a reconnect can re-publish it.
-	selfMuted    bool
-	selfDeafened bool
-	hasSelfAudio bool
+	// One goroutine writes it (selfaudio.go); dirty and writing are what
+	// core reads to tell a pending intent from the server's own opinion.
+	selfMuted        bool
+	selfDeafened     bool
+	hasSelfAudio     bool
+	selfAudioDirty   bool
+	selfAudioWriting bool
 
 	closed bool
 }
@@ -95,17 +107,24 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 	}
 
 	m := &Manager{
-		log:           log,
-		cb:            cb,
-		tofu:          tofu,
-		cert:          cert,
-		backoffFn:     defaultBackoff,
-		deriveFn:      relayproto.Derive,
-		statsInterval: statsPollInterval,
-		accept:        make(chan struct{}, 1),
-		status:        domain.ConnectionStatus{State: domain.StateDisconnected},
-		voice:         newVoiceIO(log),
+		log:             log,
+		cb:              cb,
+		tofu:            tofu,
+		cert:            cert,
+		backoffFn:       defaultBackoff,
+		deriveFn:        relayproto.Derive,
+		statsInterval:   statsPollInterval,
+		accept:          make(chan struct{}, 1),
+		status:          domain.ConnectionStatus{State: domain.StateDisconnected},
+		voice:           newVoiceIO(log),
+		selfAudioWake:   make(chan struct{}, 1),
+		selfAudioDone:   make(chan struct{}),
+		selfAudioBudget: newSendBudget(selfAudioBurst, selfAudioInterval),
 	}
+	m.writeSelfAudioFn = func(client *gumble.Client, muted, deafened bool) {
+		client.Do(func() { writeSelfAudio(client, muted, deafened) })
+	}
+	go m.selfAudioLoop()
 	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
 		return dial(cfg, m.tofu, hooks, m.log)
 	}
@@ -253,10 +272,14 @@ func (m *Manager) Status() domain.ConnectionStatus {
 func (m *Manager) Close() {
 	m.stopRun()
 	m.mu.Lock()
+	alreadyClosed := m.closed
 	m.closed = true
 	m.pending = nil
 	m.mu.Unlock()
 
+	if !alreadyClosed {
+		close(m.selfAudioDone)
+	}
 	m.voice.close()
 }
 
@@ -656,6 +679,8 @@ func (m *Manager) setSession(session *Session) {
 	m.client = session.client
 	m.mu.Unlock()
 
+	// An intent recorded while there was no session has been waiting for one.
+	m.wakeSelfAudio()
 	m.voice.bind(session.client, session.addr)
 }
 

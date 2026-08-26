@@ -22,7 +22,9 @@ func selfAudioEvents(em *fakeEmitter) []domain.SelfAudioState {
 }
 
 // The engine, the UI and the tray all learn about a mute, in that order and
-// exactly once.
+// exactly once. The last step also states the rule the protocol has: opening
+// the microphone lifts the deafen, because deafened-and-unmuted is a pair the
+// server discards rather than accepts (selfaudio.go).
 func TestSetMuteReachesTheEngineTheUIAndTheTray(t *testing.T) {
 	t.Parallel()
 	app, _, em := newTestApp(t)
@@ -45,15 +47,17 @@ func TestSetMuteReachesTheEngineTheUIAndTheTray(t *testing.T) {
 	if len(got.mutes) != 2 || !got.mutes[0] || got.mutes[1] {
 		t.Errorf("engine mutes = %v, want [true false]", got.mutes)
 	}
-	if len(got.deafens) != 1 || !got.deafens[0] {
-		t.Errorf("engine deafens = %v, want [true]", got.deafens)
+	// Opening the microphone lifts the deafen with it, so the engine hears
+	// about both ends of the deafen and not just the start of it.
+	if len(got.deafens) != 2 || !got.deafens[0] || got.deafens[1] {
+		t.Errorf("engine deafens = %v, want [true false]", got.deafens)
 	}
 
 	events := selfAudioEvents(em)
 	want := []domain.SelfAudioState{
 		{Muted: true},
 		{Muted: true, Deafened: true},
-		{Deafened: true},
+		{},
 	}
 	if len(events) != len(want) {
 		t.Fatalf("events = %+v, want %+v", events, want)
@@ -72,8 +76,8 @@ func TestSetMuteReachesTheEngineTheUIAndTheTray(t *testing.T) {
 	if !seen[0].Muted || seen[0].Icon != TrayIconMicMuted {
 		t.Errorf("first tray update = %+v, want a muted microphone", seen[0])
 	}
-	if seen[2].Icon != TrayIconMic || !seen[2].Deafened {
-		t.Errorf("last tray update = %+v, want the plain microphone and deafen on", seen[2])
+	if seen[2].Icon != TrayIconMic || seen[2].Deafened {
+		t.Errorf("last tray update = %+v, want everything back open", seen[2])
 	}
 }
 

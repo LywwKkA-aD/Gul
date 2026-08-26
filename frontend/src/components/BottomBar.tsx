@@ -16,7 +16,6 @@ export function BottomBar() {
   const tree = useGulStore((s) => s.tree);
   const muted = useGulStore((s) => s.muted);
   const deafened = useGulStore((s) => s.deafened);
-  const setVoiceGates = useGulStore((s) => s.setVoiceGates);
   const setSettingsOpen = useGulStore((s) => s.setSettingsOpen);
   const self = selfUser(tree);
   // Our own voice never comes back from the server, so the halo on this card
@@ -46,19 +45,25 @@ export function BottomBar() {
       ? 'Ожидаем первый замер RTT до сервера'
       : `RTT до сервера по текущему TLS/TCP-сеансу: ${roundedPing} мс`;
 
-  // Both gates are pushed on every toggle: they are independent switches in
-  // the engine, and re-sending an unchanged one is a no-op there.
-  const applyGates = (nextMuted: boolean, nextDeafened: boolean) => {
-    setVoiceGates(nextMuted, nextDeafened);
-    AudioService.SetMute(nextMuted).catch(console.error);
-    AudioService.SetDeafen(nextDeafened).catch(console.error);
+  // One gesture is one call. Core owns the rule that ties the two gates
+  // together - opening the microphone lifts the deafen, deafening closes the
+  // microphone - and it applies the whole transition under one lock
+  // (internal/core/selfaudio.go).
+  //
+  // Sending both gates from here as two calls is what made the buttons
+  // unstable: Wails hands frontend calls to a pool of worker goroutines, so
+  // the two halves of one gesture could be applied in either order, and the
+  // pair that reached the server was sometimes the one it discards.
+  //
+  // The current state is read at click time rather than taken from the render
+  // that drew the button, so a second click lands on the result of the first
+  // instead of on the state both clicks started from.
+  const toggleMic = () => {
+    AudioService.SetMute(!useGulStore.getState().muted).catch(console.error);
   };
-
-  // Talking into ears that hear nothing makes no sense, so opening the mic
-  // lifts the deafen as well - the behaviour everyone knows from Discord.
-  const toggleMic = () => applyGates(!muted, muted ? false : deafened);
-  // Deafen implies a closed mic; lifting it opens the mic back up.
-  const toggleDeafen = () => applyGates(!deafened, !deafened);
+  const toggleDeafen = () => {
+    AudioService.SetDeafen(!useGulStore.getState().deafened).catch(console.error);
+  };
 
   return (
     // One row, as in the prototype (prototype-source.html:9802): identity on

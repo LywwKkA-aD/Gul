@@ -85,104 +85,160 @@ func (a *App) OnTrayState(fn func(TrayState)) {
 	a.mu.Unlock()
 }
 
+// selfAudioOptions says what a transition does besides changing the state.
+type selfAudioOptions struct {
+	// cue plays the microphone clip when the mute flag moves. Deafen has no
+	// clip of its own (DECISIONS.md 2026-08-23) and the mute it carries is
+	// part of the same gesture, so it stays silent.
+	cue bool
+	// toServer publishes the new state to the room. Off when the state came
+	// from the room in the first place.
+	toServer bool
+}
+
+// normalizeSelfAudio applies the one rule the protocol has: deafened implies
+// muted.
+//
+// Murmur enforces it and does not negotiate. Against v1.5.915 on the live
+// stand, {self_mute:false, self_deaf:true} comes back as {true, true}: the
+// server forces the microphone shut and keeps the deafen, discarding our flag
+// without an error. The mirror rule is that clearing self_mute clears
+// self_deaf with it. A client that lets the illegal pair out loses the request
+// silently and then draws a state nobody else can see.
+func normalizeSelfAudio(s domain.SelfAudioState) domain.SelfAudioState {
+	if s.Deafened {
+		s.Muted = true
+	}
+	return s
+}
+
+// applySelfAudio is the one transition for the microphone and the monitor.
+//
+// The whole decision happens under a single lock - the next state, the engine,
+// and the intent handed to the transport - so two gestures racing (the window
+// against the tray, or two fast clicks that Wails hands to different worker
+// goroutines) can only resolve to one of them, never to a mixture. Splitting
+// this across two calls was what made the buttons unstable: each call decided
+// on a state the other had already moved on from, and the pair that reached
+// the wire was sometimes the illegal one the server throws away.
+//
+// next receives the current state and returns the wanted one; it runs under
+// the lock and must not call back into the App.
+//
+// Only the cue and the notifications happen outside the lock, because an
+// observer may call back into the App.
+func (a *App) applySelfAudio(
+	opts selfAudioOptions,
+	next func(domain.SelfAudioState) domain.SelfAudioState,
+) (domain.SelfAudioState, bool) {
+	a.mu.Lock()
+	cur := a.selfAudioLocked()
+	want := normalizeSelfAudio(next(cur))
+	if want == cur {
+		a.mu.Unlock()
+		return cur, false
+	}
+	a.selfMuted, a.selfDeafened = want.Muted, want.Deafened
+	a.selfAudioGen++
+	gen := a.selfAudioGen
+	// Both are plain atomic stores in the engine, so the lock costs nothing
+	// and buys the guarantee that the engine can never end up on the loser.
+	if v := a.voice; v != nil {
+		if want.Muted != cur.Muted {
+			v.SetMute(want.Muted)
+		}
+		if want.Deafened != cur.Deafened {
+			v.SetDeafen(want.Deafened)
+		}
+	}
+	// The transport only records the intent here and writes it from its own
+	// goroutine (internal/mumble/selfaudio.go), so this never blocks.
+	if opts.toServer && a.ctrl != nil {
+		a.ctrl.SetSelfAudio(want.Muted, want.Deafened)
+	}
+	a.mu.Unlock()
+
+	if opts.cue && want.Muted != cur.Muted {
+		cue := CueUnmuted
+		if want.Muted {
+			cue = CueMuted
+		}
+		a.playCue(cue)
+	}
+	a.publishSelfAudio(gen, want)
+	return want, true
+}
+
 // SetMute gates the microphone: the engine closes the transmission, the cue
 // confirms it by ear, and the UI and the tray learn about it whichever path
 // asked for it. Setting what is already set does nothing at all - a UI that
 // re-sends its state must not produce a beep.
+//
+// Opening the microphone lifts the deafen with it. Talking into ears that hear
+// nothing makes no sense, it is the behaviour everyone knows from Discord, and
+// it is what the server does anyway: murmur clears self_deaf when self_mute
+// goes off.
 func (a *App) SetMute(muted bool) {
-	a.mu.Lock()
-	if a.selfMuted == muted {
-		a.mu.Unlock()
-		return
-	}
-	a.selfMuted = muted
-	state, v := a.selfAudioLocked(), a.voice
-	a.mu.Unlock()
-
-	if v != nil {
-		v.SetMute(muted)
-	}
-	a.publishSelfAudioToServer(state)
-	cue := CueUnmuted
-	if muted {
-		cue = CueMuted
-	}
-	a.playCue(cue)
-	a.publishSelfAudio(state)
+	a.applySelfAudio(
+		selfAudioOptions{cue: true, toServer: true},
+		func(cur domain.SelfAudioState) domain.SelfAudioState {
+			return domain.SelfAudioState{Muted: muted, Deafened: cur.Deafened && muted}
+		},
+	)
 }
 
 // SetDeafen silences all remote streams locally and takes the microphone with
 // it: deafen means "I am not in this conversation", and the server enforces
-// the same rule (murmur forces self_mute alongside self_deaf), so a client
-// that pretended otherwise would transmit room noise to people it cannot
-// hear. Undeafening restores both. Every entry point - the window, the tray -
-// goes through here, so they cannot disagree.
+// the same rule, so a client that pretended otherwise would transmit room
+// noise to people it cannot hear. Undeafening restores both. Every entry point
+// - the window, the tray - goes through here, so they cannot disagree.
 //
 // No cue: the cues are mixed into the receive path deliberately
 // (DECISIONS.md 2026-08-23) and the two clips this build has confirm the
 // microphone, not the monitor. The implied mute is part of one gesture and
 // does not beep on its own either.
 func (a *App) SetDeafen(deafened bool) {
-	a.mu.Lock()
-	if a.selfDeafened == deafened {
-		a.mu.Unlock()
-		return
-	}
-	a.selfDeafened = deafened
-	muteChanged := a.selfMuted != deafened
-	a.selfMuted = deafened
-	state, v := a.selfAudioLocked(), a.voice
-	a.mu.Unlock()
-
-	if v != nil {
-		v.SetDeafen(deafened)
-		if muteChanged {
-			v.SetMute(deafened)
-		}
-	}
-	a.publishSelfAudioToServer(state)
-	a.publishSelfAudio(state)
-}
-
-// publishSelfAudioToServer tells the room what we hear and send. Offline the
-// controller records the intent for the next connect.
-func (a *App) publishSelfAudioToServer(state domain.SelfAudioState) {
-	if ctrl, err := a.controller(); err == nil {
-		ctrl.SetSelfAudio(state.Muted, state.Deafened)
-	}
+	a.applySelfAudio(
+		selfAudioOptions{toServer: true},
+		func(domain.SelfAudioState) domain.SelfAudioState {
+			return domain.SelfAudioState{Muted: deafened, Deafened: deafened}
+		},
+	)
 }
 
 // reconcileSelfAudio adopts the state the server reports for our own row.
 //
-// The server is the authority: murmur applies rules of its own (deaf forces
-// mute) and an admin can mute us outright. Our flags are only an intent until
-// the server echoes them back, and a client that keeps arguing with the echo
-// shows two contradicting indicators in one window - the member list draws
-// the tree, the bottom bar draws the intent. Adopting costs nothing when they
-// already agree, which is the normal case.
+// The server is the authority: our flags are only an intent until it echoes
+// them back, and a client that keeps arguing with the echo shows two
+// contradicting indicators in one window - the member list draws the tree, the
+// bottom bar draws the intent.
 //
-// No cue and no write back: this is where the state came from.
+// A tree that arrives while our own write is still on its way is not the
+// server's opinion, though: these two flags carry the client's own state
+// (snapshot.go reads gumble's SelfMuted and SelfDeafened), so an unsettled
+// tree can only be showing the intent we have already replaced. Adopting it
+// would undo the click the user just made - permanently, because adopting
+// deliberately does not write back. So the echo is authority only once our own
+// writes have drained.
+//
+// No cue: this is where the state came from.
 func (a *App) reconcileSelfAudio(root domain.ChannelNode) {
 	self, ok := findSelf(root)
 	if !ok {
 		return
 	}
-	a.mu.Lock()
-	if a.selfMuted == self.SelfMute && a.selfDeafened == self.SelfDeaf {
-		a.mu.Unlock()
+	if ctrl, err := a.controller(); err == nil && ctrl.SelfAudioPending() {
 		return
 	}
-	a.selfMuted, a.selfDeafened = self.SelfMute, self.SelfDeaf
-	state, v := a.selfAudioLocked(), a.voice
-	a.mu.Unlock()
-
-	if v != nil {
-		v.SetMute(state.Muted)
-		v.SetDeafen(state.Deafened)
+	server := domain.SelfAudioState{Muted: self.SelfMute, Deafened: self.SelfDeaf}
+	state, changed := a.applySelfAudio(
+		selfAudioOptions{},
+		func(domain.SelfAudioState) domain.SelfAudioState { return server },
+	)
+	if changed {
+		a.log.Info("self audio state adopted from the server",
+			"muted", state.Muted, "deafened", state.Deafened)
 	}
-	a.log.Info("self audio state adopted from the server",
-		"muted", state.Muted, "deafened", state.Deafened)
-	a.publishSelfAudio(state)
 }
 
 // findSelf locates our own row in a channel tree.
@@ -207,14 +263,22 @@ func (a *App) selfAudioLocked() domain.SelfAudioState {
 
 // publishSelfAudio pushes one change to the UI and to the tray. Called with no
 // lock held: an observer may call back into the App.
-func (a *App) publishSelfAudio(state domain.SelfAudioState) {
-	a.emit(domain.EventAudioSelf, state)
-
+//
+// gen is the transition this state belongs to. A gesture that lost the race
+// stops here rather than repainting the icons with the state the winner has
+// already replaced - that stale repaint is what left a mute glyph on a user
+// who was not muted, and left an unmuted user with no glyph at all.
+func (a *App) publishSelfAudio(gen uint64, state domain.SelfAudioState) {
 	a.mu.Lock()
+	stale := gen != a.selfAudioGen
 	observers := make([]func(TrayState), len(a.trayObservers))
 	copy(observers, a.trayObservers)
 	a.mu.Unlock()
+	if stale {
+		return
+	}
 
+	a.emit(domain.EventAudioSelf, state)
 	tray := trayStateOf(state)
 	for _, fn := range observers {
 		fn(tray)

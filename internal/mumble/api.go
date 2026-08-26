@@ -41,7 +41,14 @@ type Controller interface {
 	// server so other participants see it. Both flags travel together: the
 	// server infers one from the other otherwise (see selfaudio.go). Offline
 	// it records the intent, restored on the next connect.
+	//
+	// It must never block and never call back into core: core calls it while
+	// holding the lock that decides the transition.
 	SetSelfAudio(muted, deafened bool)
+	// SelfAudioPending reports whether a state we asked for has still to reach
+	// the server. Core uses it to tell the server's own opinion apart from the
+	// echo of an intent it has already moved on from.
+	SelfAudioPending() bool
 	// AcceptFingerprint confirms the pending TOFU mismatch (OnTofu) and
 	// retries the connection with the new pinned fingerprint.
 	AcceptFingerprint()

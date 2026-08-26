@@ -92,7 +92,11 @@ type App struct {
 
 	// Self audio state and its tray observers (selfaudio.go).
 	selfMuted, selfDeafened bool
-	trayObservers           []func(TrayState)
+	// selfAudioGen orders the self audio transitions. Only the newest one
+	// is allowed to reach the UI and the tray, so a gesture that lost the
+	// race cannot repaint the icons after the winner already did.
+	selfAudioGen  uint64
+	trayObservers []func(TrayState)
 
 	// connectionCommitted keeps the accepted-connect commit to once per
 	// session: StateConnected is re-emitted on every self channel change

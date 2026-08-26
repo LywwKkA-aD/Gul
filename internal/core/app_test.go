@@ -83,8 +83,9 @@ type fakeController struct {
 	sendErr error
 	status  domain.ConnectionStatus
 
-	selfMutes []bool
-	selfDeafs []bool
+	selfMutes    []bool
+	selfDeafs    []bool
+	selfAudioPnd bool
 }
 
 func (c *fakeController) SetSelfAudio(muted, deafened bool) {
@@ -92,6 +93,18 @@ func (c *fakeController) SetSelfAudio(muted, deafened bool) {
 	defer c.mu.Unlock()
 	c.selfMutes = append(c.selfMutes, muted)
 	c.selfDeafs = append(c.selfDeafs, deafened)
+}
+
+func (c *fakeController) SelfAudioPending() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.selfAudioPnd
+}
+
+func (c *fakeController) setSelfAudioPending(pending bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.selfAudioPnd = pending
 }
 
 func (c *fakeController) Connect(address, username, password string) {

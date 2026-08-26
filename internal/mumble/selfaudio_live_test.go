@@ -4,6 +4,7 @@ package mumble
 
 import (
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,57 @@ func TestSelfAudioReachesOtherClients(t *testing.T) {
 
 	a.mgr.SetSelfAudio(false, false)
 	waitSelfAudio(t, b, "gul-selfaudio-a", false, false)
+}
+
+// Fast clicking must settle on the last click, and the room must see it.
+//
+// This is the bug the users reported: spamming mute and unmute left a glyph on
+// somebody who was not muted, or none on somebody who was. Every caller wrote
+// to the socket itself, so the packets arrived in an order nobody chose and the
+// server kept whichever landed last. Run with the stand up:
+// task murmur:up && go test -tags live ./internal/mumble -run TestRapidSelfAudio
+func TestRapidSelfAudioTogglesSettleOnTheLastIntent(t *testing.T) {
+	a := newLiveManager(t, "gul-selfaudio-spam-a")
+	defer a.mgr.Close()
+	b := newLiveManager(t, "gul-selfaudio-spam-b")
+	defer b.mgr.Close()
+
+	a.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-spam-a", "")
+	b.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-spam-b", "")
+	waitState(t, a, domain.StateConnected)
+	waitState(t, b, domain.StateConnected)
+	waitRoot(t, b)
+
+	// Only pairs the protocol has: deafened implies muted. Core enforces it
+	// (internal/core/selfaudio.go); this layer is being tested for ordering.
+	rounds := []struct{ muted, deafened bool }{
+		{true, false},
+		{false, false},
+		{true, true},
+		{false, false},
+		{true, false},
+		{false, false},
+	}
+	for i, want := range rounds {
+		// Several callers at once, the way the window and the tray can both
+		// reach this.
+		var wg sync.WaitGroup
+		for g := range 4 {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for n := range 25 {
+					muted := (n+g)%2 == 0
+					a.mgr.SetSelfAudio(muted, muted && n%3 == 0)
+				}
+			}(g)
+		}
+		wg.Wait()
+
+		a.mgr.SetSelfAudio(want.muted, want.deafened)
+		waitSelfAudio(t, b, "gul-selfaudio-spam-a", want.muted, want.deafened)
+		t.Logf("round %d: 100 clicks settled on mute=%v deaf=%v", i, want.muted, want.deafened)
+	}
 }
 
 // waitSelfAudio blocks until the observer's tree shows the named user with the

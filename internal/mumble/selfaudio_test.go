@@ -1,0 +1,237 @@
+package mumble
+
+import (
+	"io"
+	"log/slog"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/LywwKkA-aD/gumble/gumble"
+)
+
+// selfAudioPair is one packet as the writer put it on the wire.
+type selfAudioPair struct{ muted, deafened bool }
+
+// selfAudioRecorder captures the writes and can hold the first one open, which
+// is the only way to be inside the window the bug lived in.
+type selfAudioRecorder struct {
+	mu      sync.Mutex
+	writes  []selfAudioPair
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *selfAudioRecorder) write(_ *gumble.Client, muted, deafened bool) {
+	r.once.Do(func() {
+		close(r.started)
+		<-r.release
+	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writes = append(r.writes, selfAudioPair{muted, deafened})
+}
+
+func (r *selfAudioRecorder) snapshot() []selfAudioPair {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]selfAudioPair(nil), r.writes...)
+}
+
+func newSelfAudioManager(t *testing.T) (*Manager, *selfAudioRecorder) {
+	t.Helper()
+	m, err := NewManager(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), Callbacks{})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(m.Close)
+	rec := &selfAudioRecorder{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m.writeSelfAudioFn = rec.write
+	return m, rec
+}
+
+// waitFor polls until cond holds, the way the live helpers do.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// Spamming the buttons must end on the state of the last click, and must not
+// put one packet per click on the wire.
+//
+// This is the bug the users hit: two callers wrote to the socket themselves, so
+// the packets arrived in an order nobody chose and the server kept whichever
+// landed last - a mute that lost the race stayed on the room's screens after
+// the user had switched it off. One writer that always sends the newest state
+// has nothing left to invert.
+func TestSelfAudioWriterSendsTheLatestIntentAndCoalesces(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	m.mu.Lock()
+	m.client = &gumble.Client{}
+	m.mu.Unlock()
+
+	m.SetSelfAudio(true, false)
+	<-rec.started // the writer is busy and cannot answer for a while
+
+	// Twenty clicks land while it is busy. Recording an intent must never
+	// block on the socket - core holds its own lock across this call - so a
+	// loop that hangs here is itself the failure.
+	for i := range 20 {
+		m.SetSelfAudio(i%2 == 0, false)
+	}
+	m.SetSelfAudio(false, false)
+	if !m.SelfAudioPending() {
+		t.Fatal("SelfAudioPending() is false with an unwritten intent")
+	}
+	close(rec.release)
+
+	waitFor(t, "the writer to drain", func() bool { return !m.SelfAudioPending() })
+
+	writes := rec.snapshot()
+	if len(writes) == 0 {
+		t.Fatal("nothing was written")
+	}
+	if got := writes[len(writes)-1]; got != (selfAudioPair{false, false}) {
+		t.Fatalf("last packet = %+v, want the last click {false false}", got)
+	}
+	if len(writes) > 3 {
+		t.Fatalf("22 clicks produced %d packets, want them coalesced", len(writes))
+	}
+}
+
+// An intent recorded with no session waits for one instead of being dropped:
+// the writer has nowhere to put it, and the button must not need a second
+// press once the connection is up.
+func TestSelfAudioIntentSurvivesUntilThereIsASession(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	close(rec.release) // nothing to hold open here
+	flushed := make(chan struct{}, 4)
+	m.selfAudioWoke = func() { flushed <- struct{}{} }
+
+	m.SetSelfAudio(true, true)
+	// Wait for the writer to answer the wake and find no session, so the
+	// session below is genuinely the thing that has to revive the intent.
+	<-flushed
+	if !m.SelfAudioPending() {
+		t.Fatal("the offline intent was dropped")
+	}
+
+	m.setSession(&Session{client: &gumble.Client{}})
+	waitFor(t, "the writer to pick the session up", func() bool { return !m.SelfAudioPending() })
+
+	writes := rec.snapshot()
+	if len(writes) != 1 || writes[0] != (selfAudioPair{true, true}) {
+		t.Fatalf("writes = %+v, want one {true true}", writes)
+	}
+}
+
+// Close must stop the writer; a second Close must not panic on the channel.
+func TestSelfAudioWriterStopsWithTheManager(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	close(rec.release)
+	m.Close()
+	m.Close()
+
+	m.SetSelfAudio(true, false)
+	time.Sleep(50 * time.Millisecond)
+	if got := rec.snapshot(); len(got) != 0 {
+		t.Fatalf("writes after Close = %+v, want none", got)
+	}
+}
+
+// The budget is what keeps our packets out of the server's bin: murmur ignores
+// a client that sends command messages faster than messageburst/messagelimit
+// allow, silently, so the room would keep a state we had already left.
+func TestSendBudgetAllowsABurstThenOnePerInterval(t *testing.T) {
+	t.Parallel()
+	const interval = time.Second
+	b := newSendBudget(3, interval)
+	now := time.Unix(1_700_000_000, 0)
+
+	for i := range 3 {
+		if got := b.wait(now); got != 0 {
+			t.Fatalf("packet %d of the burst waited %v, want none", i, got)
+		}
+	}
+	if got := b.wait(now); got != interval {
+		t.Fatalf("the packet after the burst waited %v, want %v", got, interval)
+	}
+	if got := b.wait(now); got != 2*interval {
+		t.Fatalf("the next one waited %v, want %v", got, 2*interval)
+	}
+
+	// Idling refills the allowance, and never past the burst.
+	b = newSendBudget(3, interval)
+	for range 3 {
+		b.wait(now)
+	}
+	now = now.Add(time.Minute)
+	for i := range 3 {
+		if got := b.wait(now); got != 0 {
+			t.Fatalf("packet %d after idling waited %v, want none", i, got)
+		}
+	}
+	if got := b.wait(now); got != interval {
+		t.Fatalf("the fourth after idling waited %v, want %v", got, interval)
+	}
+}
+
+// A budget nobody configured must not hold anything back.
+func TestSendBudgetWithoutAnIntervalNeverWaits(t *testing.T) {
+	t.Parallel()
+	b := newSendBudget(3, 0)
+	now := time.Unix(1_700_000_000, 0)
+	for range 10 {
+		if got := b.wait(now); got != 0 {
+			t.Fatalf("wait = %v, want none when the budget is off", got)
+		}
+	}
+}
+
+// Twelve clicks in a couple of dozen milliseconds must not become twelve
+// packets, and the state the user stopped on must still be the one that goes
+// out last.
+func TestSelfAudioWriterStaysInsideTheServersBudget(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	close(rec.release) // nothing to hold open here
+	const interval = 50 * time.Millisecond
+	m.selfAudioBudget = newSendBudget(2, interval)
+	m.mu.Lock()
+	m.client = &gumble.Client{}
+	m.mu.Unlock()
+
+	for i := range 12 {
+		m.SetSelfAudio(i%2 == 0, false)
+		time.Sleep(2 * time.Millisecond)
+	}
+	waitFor(t, "the writer to drain", func() bool { return !m.SelfAudioPending() })
+
+	writes := rec.snapshot()
+	if len(writes) == 0 {
+		t.Fatal("nothing was written")
+	}
+	if got := writes[len(writes)-1]; got != (selfAudioPair{false, false}) {
+		t.Fatalf("last packet = %+v, want the last click {false false}", got)
+	}
+	// Two go out on the burst; everything clicked while the third is held
+	// travels inside it.
+	if len(writes) > 3 {
+		t.Fatalf("12 clicks produced %d packets, want them inside the budget: %+v",
+			len(writes), writes)
+	}
+}
