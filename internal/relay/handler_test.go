@@ -63,8 +63,8 @@ func TestHandlerRejectsMissingOrWrongBearerToken(t *testing.T) {
 			if err == nil {
 				t.Fatal("dial unexpectedly succeeded")
 			}
-			if response == nil || response.StatusCode != http.StatusUnauthorized {
-				t.Fatalf("status = %#v, want 401", response)
+			if response == nil || response.StatusCode != http.StatusNotFound {
+				t.Fatalf("status = %#v, want 404", response)
 			}
 		})
 	}
@@ -81,8 +81,8 @@ func TestHandlerRequiresVersionedSubprotocol(t *testing.T) {
 	if err == nil {
 		t.Fatal("dial unexpectedly succeeded")
 	}
-	if response == nil || response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %#v, want 400", response)
+	if response == nil || response.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %#v, want 404", response)
 	}
 }
 
@@ -97,10 +97,13 @@ func TestHandlerRejectsWrongPathQueryHostAndOriginBeforeDialingUpstream(t *testi
 		origin     string
 		wantStatus int
 	}{
+		// Every one of these answers exactly like an address that does not
+		// exist. Telling them apart used to hand a prober the whole decision
+		// tree of the service (cover.go).
 		{name: "path", urlSuffix: "/other", host: testHost, wantStatus: http.StatusNotFound},
-		{name: "query", urlSuffix: Path + "?target=elsewhere", host: testHost, wantStatus: http.StatusBadRequest},
-		{name: "host", urlSuffix: Path, host: "other.example.test", wantStatus: http.StatusMisdirectedRequest},
-		{name: "origin", urlSuffix: Path, host: testHost, origin: "https://evil.example.test", wantStatus: http.StatusForbidden},
+		{name: "query", urlSuffix: Path + "?target=elsewhere", host: testHost, wantStatus: http.StatusNotFound},
+		{name: "host", urlSuffix: Path, host: "other.example.test", wantStatus: http.StatusNotFound},
+		{name: "origin", urlSuffix: Path, host: testHost, origin: "https://evil.example.test", wantStatus: http.StatusNotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,8 +156,8 @@ func TestHandlerRejectsGETBodiesWithoutReadingOrChargingAuthorizationLimiter(t *
 
 			h.ServeHTTP(response, request)
 
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400", response.Code)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", response.Code)
 			}
 			if got := response.Header().Get("Connection"); !strings.EqualFold(got, "close") {
 				t.Fatalf("Connection = %q, want close", got)

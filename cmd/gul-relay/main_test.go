@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LywwKkA-aD/Gul/internal/relay"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -292,8 +293,8 @@ func TestServeRejectsUnusableCredentialFile(t *testing.T) {
 
 func TestRejectRequestBodiesWrapsHealthAndUnknownRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthHandler("murmur.example.test", nil))
-	handler := rejectRequestBodies(mux)
+	mux.HandleFunc("/healthz", healthHandler("murmur.example.test", nil, relay.NewCover("", "", "")))
+	handler := rejectRequestBodies(mux, relay.NewCover("", "", ""))
 
 	for _, tc := range []struct {
 		name             string
@@ -315,8 +316,8 @@ func TestRejectRequestBodiesWrapsHealthAndUnknownRoutes(t *testing.T) {
 
 			handler.ServeHTTP(response, request)
 
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400", response.Code)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", response.Code)
 			}
 			if got := response.Header().Get("Connection"); !strings.EqualFold(got, "close") {
 				t.Fatalf("Connection = %q, want close", got)
@@ -329,7 +330,7 @@ func TestRejectRequestBodiesWrapsHealthAndUnknownRoutes(t *testing.T) {
 }
 
 func TestRejectRequestBodiesClosesIncompleteChunkedRequestPromptly(t *testing.T) {
-	server := httptest.NewUnstartedServer(rejectRequestBodies(http.NotFoundHandler()))
+	server := httptest.NewUnstartedServer(rejectRequestBodies(http.NotFoundHandler(), relay.NewCover("", "", "")))
 	server.EnableHTTP2 = false
 	server.StartTLS()
 	t.Cleanup(server.Close)
@@ -360,8 +361,8 @@ func TestRejectRequestBodiesClosesIncompleteChunkedRequestPromptly(t *testing.T)
 	if err != nil {
 		t.Fatalf("read rejection response: %v", err)
 	}
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", response.StatusCode)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.StatusCode)
 	}
 	if !response.Close {
 		t.Fatal("response did not signal connection closure")

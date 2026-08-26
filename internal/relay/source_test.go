@@ -68,8 +68,8 @@ func TestHandlerBansOneIPv6PrefixDespiteAddressRotation(t *testing.T) {
 	h := mustHandler(t, cfg)
 
 	for _, address := range []string{"2001:db8::1", "2001:db8::2", "2001:db8::3"} {
-		if got := serveAuthorizationAttempt(h, address, "wrong secret").Code; got != http.StatusUnauthorized {
-			t.Fatalf("guess from %s = %d, want 401", address, got)
+		if got := serveAuthorizationAttempt(h, address, "wrong secret").Code; got != http.StatusNotFound {
+			t.Fatalf("guess from %s = %d, want 404", address, got)
 		}
 	}
 	banned := serveAuthorizationAttempt(h, "2001:db8::dead:beef", "wrong secret")
@@ -81,8 +81,8 @@ func TestHandlerBansOneIPv6PrefixDespiteAddressRotation(t *testing.T) {
 	}
 	// The block is the subscriber, so the ban stops there: a neighboring /64
 	// is a different customer and keeps its own allowance.
-	if got := serveAuthorizationAttempt(h, "2001:db8:0:1::1", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("guess from another /64 = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "2001:db8:0:1::1", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("guess from another /64 = %d, want 404", got)
 	}
 }
 
@@ -96,15 +96,15 @@ func TestHandlerBansIPv4AddressesIndividually(t *testing.T) {
 	h := mustHandler(t, cfg)
 
 	for range cfg.AuthFailuresBeforeBan {
-		if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-			t.Fatalf("guess = %d, want 401", got)
+		if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+			t.Fatalf("guess = %d, want 404", got)
 		}
 	}
 	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusTooManyRequests {
 		t.Fatalf("guess past the allowance = %d, want 429", got)
 	}
-	if got := serveAuthorizationAttempt(h, "192.0.2.11", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("guess from the neighboring address = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "192.0.2.11", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("guess from the neighboring address = %d, want 404", got)
 	}
 }
 

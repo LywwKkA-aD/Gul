@@ -191,6 +191,21 @@ func (h *recordingHandler) await(t *testing.T, message string) slog.Record {
 	}
 }
 
+// count reports how many records carry the message. The wire no longer says
+// whether a credential was accepted - every refusal writes the same page as
+// any unknown address (cover.go) - so tests read that from the log instead.
+func (h *recordingHandler) count(message string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, record := range h.records {
+		if record.Message == message {
+			n++
+		}
+	}
+	return n
+}
+
 func (h *recordingHandler) messages() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()

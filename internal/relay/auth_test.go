@@ -13,11 +13,30 @@ import (
 )
 
 func TestHandlerAcceptsCurrentBearerCredential(t *testing.T) {
-	h := mustHandler(t, baseConfig("server secret"))
+	logger, records := newRecordingLogger()
+	cfg := baseConfig("server secret")
+	cfg.Logger = logger
 
-	// 400 from the missing subprotocol proves the request passed authorization.
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "server secret").Code; got != http.StatusBadRequest {
-		t.Fatalf("v2 credential status = %d, want 400 from missing subprotocol", got)
+	assertAuthorized(t, mustHandler(t, cfg), records, "192.0.2.10", "server secret")
+}
+
+// assertAuthorized runs one attempt and requires that the handler accepted the
+// credential. It cannot read that off the status: an accepted credential that
+// stops at the next protocol check and a refused one both answer with the
+// cover page, on purpose (cover.go). The rejection log is what separates them.
+func assertAuthorized(
+	t *testing.T,
+	h http.Handler,
+	records *recordingHandler,
+	sourceIP, secret string,
+) {
+	t.Helper()
+	before := records.count("relay authorization rejected")
+	if got := serveAuthorizationAttempt(h, sourceIP, secret).Code; got != http.StatusNotFound {
+		t.Fatalf("status = %d, want the same page every refusal gives", got)
+	}
+	if after := records.count("relay authorization rejected"); after != before {
+		t.Fatalf("the credential was refused, want accepted")
 	}
 }
 
@@ -34,9 +53,7 @@ func TestHandlerAcceptsLegacyBearerCredentialOnlyWhileEnabled(t *testing.T) {
 		cfg.Logger = logger
 		h := mustHandler(t, cfg)
 
-		if got := serveWithHeader(h, "192.0.2.10", legacyHeader).Code; got != http.StatusBadRequest {
-			t.Fatalf("legacy credential status = %d, want 400 from missing subprotocol", got)
-		}
+		serveWithHeader(h, "192.0.2.10", legacyHeader)
 		record := records.await(t, "relay accepted legacy bearer credential")
 		if got := recordAttrs(record)["source"]; got != "192.0.2.10" {
 			t.Fatalf("logged source = %q, want 192.0.2.10", got)
@@ -44,18 +61,18 @@ func TestHandlerAcceptsLegacyBearerCredentialOnlyWhileEnabled(t *testing.T) {
 	})
 
 	t.Run("disabled", func(t *testing.T) {
+		logger, records := newRecordingLogger()
 		cfg := baseConfig(secret)
 		cfg.BearerCredentials = append(cfg.BearerCredentials, testLegacyCredential(secret))
 		cfg.AcceptLegacyBearer = false
+		cfg.Logger = logger
 		h := mustHandler(t, cfg)
 
-		if got := serveWithHeader(h, "192.0.2.10", legacyHeader).Code; got != http.StatusUnauthorized {
-			t.Fatalf("legacy credential status = %d, want 401", got)
+		if got := serveWithHeader(h, "192.0.2.10", legacyHeader).Code; got != http.StatusNotFound {
+			t.Fatalf("legacy credential status = %d, want 404", got)
 		}
 		// The current credential still works with the deprecation window shut.
-		if got := serveAuthorizationAttempt(h, "192.0.2.11", secret).Code; got != http.StatusBadRequest {
-			t.Fatalf("v2 credential status = %d, want 400 from missing subprotocol", got)
-		}
+		assertAuthorized(t, h, records, "192.0.2.11", secret)
 	})
 }
 
@@ -86,8 +103,8 @@ func TestHandlerRejectsMalformedAuthorizationHeaders(t *testing.T) {
 			if tc.value != "" {
 				header.Set("Authorization", tc.value)
 			}
-			if got := serveWithHeader(h, "192.0.2.10", header).Code; got != http.StatusUnauthorized {
-				t.Fatalf("status = %d, want 401", got)
+			if got := serveWithHeader(h, "192.0.2.10", header).Code; got != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", got)
 			}
 			attrs := recordAttrs(records.await(t, "relay authorization rejected"))
 			if attrs["credential"] != tc.class {
@@ -159,8 +176,8 @@ func TestHandlerDoesNotAcceptRawMumblePasswordAsBearerCredential(t *testing.T) {
 
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+rawPassword)
-	if got := serveWithHeader(h, "192.0.2.10", header).Code; got != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", got)
+	if got := serveWithHeader(h, "192.0.2.10", header).Code; got != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", got)
 	}
 }
 
@@ -176,8 +193,8 @@ func TestHandlerTemporarilyBansRepeatedAuthorizationFailures(t *testing.T) {
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		response := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret")
-		if response.Code != http.StatusUnauthorized {
-			t.Fatalf("attempt %d status = %d, want 401", attempt, response.Code)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("attempt %d status = %d, want 404", attempt, response.Code)
 		}
 	}
 
@@ -206,8 +223,8 @@ func TestHandlerTemporarilyBansRepeatedAuthorizationFailures(t *testing.T) {
 
 	now = now.Add(time.Second)
 	afterExpiry := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret")
-	if afterExpiry.Code != http.StatusUnauthorized {
-		t.Fatalf("status after ban expiry = %d, want 401", afterExpiry.Code)
+	if afterExpiry.Code != http.StatusNotFound {
+		t.Fatalf("status after ban expiry = %d, want 404", afterExpiry.Code)
 	}
 }
 
@@ -255,12 +272,12 @@ func TestHandlerAuthorizationFailuresExpireOutsideWindow(t *testing.T) {
 	cfg.Now = func() time.Time { return now }
 	h := mustHandler(t, cfg)
 
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("first failure status = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("first failure status = %d, want 404", got)
 	}
 	now = now.Add(10 * time.Second)
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("failure after window status = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("failure after window status = %d, want 404", got)
 	}
 }
 
@@ -287,24 +304,24 @@ func TestNewHandlerUsesSecureAuthorizationLimiterDefaults(t *testing.T) {
 }
 
 func TestHandlerSuccessfulAuthorizationClearsPriorFailures(t *testing.T) {
+	logger, records := newRecordingLogger()
 	cfg := baseConfig("server secret")
 	cfg.AuthFailuresBeforeBan = 2
 	cfg.AuthFailureWindow = time.Minute
 	cfg.AuthBanDuration = time.Minute
 	cfg.MaxAuthTrackedSources = 16
+	cfg.Logger = logger
 	h := mustHandler(t, cfg)
 
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("first failure status = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("first failure status = %d, want 404", got)
 	}
-	// A valid credential reaches the next protocol check and clears the source's
-	// incomplete failure window before it becomes a ban.
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "server secret").Code; got != http.StatusBadRequest {
-		t.Fatalf("valid authorization status = %d, want 400 from missing subprotocol", got)
-	}
+	// A valid credential clears the source's incomplete failure window before
+	// it becomes a ban.
+	assertAuthorized(t, h, records, "192.0.2.10", "server secret")
 	for attempt := 1; attempt <= 2; attempt++ {
-		if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-			t.Fatalf("failure %d after success status = %d, want 401", attempt, got)
+		if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+			t.Fatalf("failure %d after success status = %d, want 404", attempt, got)
 		}
 	}
 	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusTooManyRequests {
@@ -320,10 +337,12 @@ func TestHandlerActiveBanRejectsValidAuthorizationUntilExpiry(t *testing.T) {
 	cfg.AuthBanDuration = 30 * time.Second
 	cfg.MaxAuthTrackedSources = 16
 	cfg.Now = func() time.Time { return now }
+	logger, records := newRecordingLogger()
+	cfg.Logger = logger
 	h := mustHandler(t, cfg)
 
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusUnauthorized {
-		t.Fatalf("first failure status = %d, want 401", got)
+	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusNotFound {
+		t.Fatalf("first failure status = %d, want 404", got)
 	}
 	if got := serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code; got != http.StatusTooManyRequests {
 		t.Fatalf("ban-triggering failure status = %d, want 429", got)
@@ -337,9 +356,7 @@ func TestHandlerActiveBanRejectsValidAuthorizationUntilExpiry(t *testing.T) {
 	}
 
 	now = now.Add(30 * time.Second)
-	if got := serveAuthorizationAttempt(h, "192.0.2.10", "server secret").Code; got != http.StatusBadRequest {
-		t.Fatalf("valid credential after ban status = %d, want 400 from missing subprotocol", got)
-	}
+	assertAuthorized(t, h, records, "192.0.2.10", "server secret")
 }
 
 func TestHandlerAuthorizationLimiterHasBoundedMemory(t *testing.T) {
@@ -410,7 +427,7 @@ func TestHandlerAuthorizationFailuresAreAtomicPerSource(t *testing.T) {
 		go func() {
 			defer group.Done()
 			switch serveAuthorizationAttempt(h, "192.0.2.10", "wrong secret").Code {
-			case http.StatusUnauthorized:
+			case http.StatusNotFound:
 				unauthorized.Add(1)
 			case http.StatusTooManyRequests:
 				limited.Add(1)
@@ -421,7 +438,7 @@ func TestHandlerAuthorizationFailuresAreAtomicPerSource(t *testing.T) {
 	}
 	group.Wait()
 	if got := unauthorized.Load(); got != 5 {
-		t.Fatalf("401 responses = %d, want exactly 5", got)
+		t.Fatalf("404 responses = %d, want exactly 5", got)
 	}
 	if got := limited.Load(); got != 95 {
 		t.Fatalf("429 responses = %d, want 95", got)

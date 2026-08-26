@@ -30,7 +30,7 @@ type healthOptions struct {
 	warn          io.Writer
 }
 
-func healthHandler(expectedHost string, certificateStatus func() error) http.HandlerFunc {
+func healthHandler(expectedHost string, certificateStatus func() error, cover http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The endpoint is hidden from the public listener by source address
 		// alone. That holds because the relay shares Murmur's rootless pasta
@@ -39,17 +39,11 @@ func healthHandler(expectedHost string, certificateStatus func() error) http.Han
 		// command reaches it over loopback. A deployment that does not
 		// preserve source addresses that way must block /healthz at the
 		// firewall instead.
-		if !isLoopbackRemote(r.RemoteAddr) {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
-		}
-		if !equalHost(r.Host, expectedHost) {
-			http.Error(w, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
+		// Off the loopback this path must be indistinguishable from any other
+		// address that does not exist, down to the body (relay/cover.go): a
+		// probe that can find /healthz has found the service.
+		if !isLoopbackRemote(r.RemoteAddr) || r.Method != http.MethodGet || !equalHost(r.Host, expectedHost) {
+			cover.ServeHTTP(w, notFoundRequest(r))
 			return
 		}
 		body := "ok\n"
@@ -60,6 +54,16 @@ func healthHandler(expectedHost string, certificateStatus func() error) http.Han
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(body))
 	}
+}
+
+// notFoundRequest points a request at an address the cover site does not
+// serve, so it answers with its "not found" page rather than its front page.
+func notFoundRequest(r *http.Request) *http.Request {
+	clone := r.Clone(r.Context())
+	url := *r.URL
+	url.Path = "/_"
+	clone.URL = &url
+	return clone
 }
 
 func isLoopbackRemote(remoteAddress string) bool {

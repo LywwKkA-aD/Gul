@@ -18,6 +18,10 @@ import (
 var (
 	ErrRelayPasswordRequired = errors.New("server password is required for WSS")
 	ErrRelayAuthentication   = errors.New("WSS relay authentication failed")
+	// ErrRelayNotFound covers both a wrong address and a wrong password: the
+	// relay deliberately answers them the same way, so the client cannot tell
+	// them apart either.
+	ErrRelayNotFound = errors.New("неверный адрес сервера или пароль")
 	// ErrRelayRateLimited reports a relay that answered 429. Use errors.As with
 	// *RateLimitedError to recover how long the relay asked us to wait.
 	ErrRelayRateLimited = errors.New("WSS relay is refusing connection attempts")
@@ -100,6 +104,11 @@ func dialWSS(
 			switch response.StatusCode {
 			case http.StatusUnauthorized:
 				return nil, ErrRelayAuthentication
+			case http.StatusNotFound:
+				// A relay that hides itself answers a wrong credential exactly
+				// as it answers an address that does not exist, on purpose
+				// (internal/relay/cover.go). So neither can be named alone.
+				return nil, ErrRelayNotFound
 			case http.StatusTooManyRequests:
 				return nil, &RateLimitedError{RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"))}
 			case http.StatusServiceUnavailable:

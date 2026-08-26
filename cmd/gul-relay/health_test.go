@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LywwKkA-aD/Gul/internal/relay"
 )
 
 func TestHealthHandlerRequiresExpectedHost(t *testing.T) {
-	handler := healthHandler("murmur.example.test", nil)
+	handler := healthHandler("murmur.example.test", nil, relay.NewCover("", "", ""))
 
 	good := httptest.NewRequest(http.MethodGet, "https://murmur.example.test/healthz", nil)
 	good.Host = "murmur.example.test"
@@ -30,13 +32,15 @@ func TestHealthHandlerRequiresExpectedHost(t *testing.T) {
 	bad.RemoteAddr = "127.0.0.1:12345"
 	badResponse := httptest.NewRecorder()
 	handler.ServeHTTP(badResponse, bad)
-	if badResponse.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("bad host status = %d, want 421", badResponse.Code)
+	// Anything that is not a valid health request answers like any address
+	// that does not exist, the same as the tunnel does (relay/cover.go).
+	if badResponse.Code != http.StatusNotFound {
+		t.Fatalf("bad host status = %d, want 404", badResponse.Code)
 	}
 }
 
 func TestHealthHandlerIsLoopbackOnly(t *testing.T) {
-	handler := healthHandler("murmur.example.test", nil)
+	handler := healthHandler("murmur.example.test", nil, relay.NewCover("", "", ""))
 	request := httptest.NewRequest(http.MethodGet, "https://murmur.example.test/healthz", nil)
 	request.Host = "murmur.example.test"
 	request.RemoteAddr = "192.0.2.10:12345"
@@ -51,7 +55,7 @@ func TestHealthHandlerIsLoopbackOnly(t *testing.T) {
 // trap: the relay still serves on the last valid pair, so failing the check
 // would let HealthOnFailure=kill and StartLimitBurst brick a working unit.
 func TestHealthHandlerReportsStaleCertificateWithoutFailing(t *testing.T) {
-	handler := healthHandler("murmur.example.test", func() error { return errors.New("load: bad key") })
+	handler := healthHandler("murmur.example.test", func() error { return errors.New("load: bad key") }, relay.NewCover("", "", ""))
 	request := httptest.NewRequest(http.MethodGet, "https://murmur.example.test/healthz", nil)
 	request.Host = "murmur.example.test"
 	request.RemoteAddr = "127.0.0.1:12345"
@@ -68,7 +72,7 @@ func TestHealthHandlerReportsStaleCertificateWithoutFailing(t *testing.T) {
 }
 
 func TestHealthcheckVerifiesTLSHostAndHTTP(t *testing.T) {
-	server := httptest.NewTLSServer(healthHandler("example.com", nil))
+	server := httptest.NewTLSServer(healthHandler("example.com", nil, relay.NewCover("", "", "")))
 	t.Cleanup(server.Close)
 	certFile := writeCertificateFile(t, server.Certificate())
 	address := strings.TrimPrefix(server.URL, "https://")
@@ -86,7 +90,7 @@ func TestHealthcheckVerifiesTLSHostAndHTTP(t *testing.T) {
 // client writes it, so the file on disk and the certificate being served can
 // legitimately disagree.
 func TestHealthcheckFallsBackToTheTrustStore(t *testing.T) {
-	server := httptest.NewTLSServer(healthHandler("example.com", nil))
+	server := httptest.NewTLSServer(healthHandler("example.com", nil, relay.NewCover("", "", "")))
 	t.Cleanup(server.Close)
 	// The pinned file holds an unrelated certificate, which is what a file
 	// written by the ACME client before the loader picked it up looks like to
@@ -116,7 +120,7 @@ func TestHealthcheckFallsBackToTheTrustStore(t *testing.T) {
 }
 
 func TestHealthcheckWarnsAboutAStaleCertificate(t *testing.T) {
-	server := httptest.NewTLSServer(healthHandler("example.com", func() error { return errors.New("load: bad key") }))
+	server := httptest.NewTLSServer(healthHandler("example.com", func() error { return errors.New("load: bad key") }, relay.NewCover("", "", "")))
 	t.Cleanup(server.Close)
 	certFile := writeCertificateFile(t, server.Certificate())
 	var warn bytes.Buffer

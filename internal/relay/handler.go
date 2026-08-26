@@ -69,6 +69,12 @@ type Config struct {
 	AuthFailureWindow     time.Duration
 	AuthBanDuration       time.Duration
 	MaxAuthTrackedSources int
+	// ServerHeader, CoverIndex and CoverNotFound shape the ordinary website
+	// the relay shows to everything that is not a tunnel request (cover.go).
+	// Empty fields take the stock nginx pages.
+	ServerHeader  string
+	CoverIndex    string
+	CoverNotFound string
 	// Logger receives the session and rejection events. nil selects
 	// slog.Default().
 	Logger *slog.Logger
@@ -88,6 +94,7 @@ type Handler struct {
 	messageSize  int64
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
+	cover        *coverSite
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -180,6 +187,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		messageSize:  cfg.MaxWebSocketMessageSize,
 		idleTimeout:  cfg.SessionIdleTimeout,
 		writeTimeout: cfg.SessionWriteTimeout,
+		cover:        newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perSourceMax: cfg.MaxConnectionsPerIP,
@@ -201,22 +209,33 @@ func loggerOrDefault(logger *slog.Logger) *slog.Logger {
 	return slog.Default()
 }
 
+// Cover returns the ordinary website this relay presents. The serving binary
+// mounts it on every path the tunnel does not own, so one host has exactly one
+// personality (cover.go).
+func (h *Handler) Cover() http.Handler { return h.cover }
+
+// ServeHTTP answers the tunnel path.
+//
+// Every refusal here writes the same page, whatever the reason: a method we do
+// not take, a host that is not ours, a missing credential, a wrong one. The
+// reason belongs in the log, not on the wire - answering each case differently
+// hands a prober our decision tree, and one of those answers used to name the
+// software outright (cover.go).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != Path {
-		http.NotFound(w, r)
+		h.cover.NotFound(w, r)
 		return
 	}
 	if r.URL.RawQuery != "" {
-		http.Error(w, "query parameters are not accepted", http.StatusBadRequest)
+		h.cover.NotFound(w, r)
 		return
 	}
 	if !strings.EqualFold(requestHost(r.Host), h.expectedHost) {
-		http.Error(w, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
+		h.cover.NotFound(w, r)
 		return
 	}
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		h.cover.NotFound(w, r)
 		return
 	}
 	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
@@ -225,11 +244,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// authentication. HTTP/1.1 is enforced by the serving binary.
 		w.Header().Set("Connection", "close")
 		r.Close = true
-		http.Error(w, "request body is not accepted", http.StatusBadRequest)
+		h.cover.NotFound(w, r)
 		return
 	}
 	if !sameOriginOrNative(r.Header.Get("Origin"), h.expectedHost) {
-		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		h.cover.NotFound(w, r)
 		return
 	}
 	// sourceIP identifies one client and is only ever logged. Every defense
@@ -240,6 +259,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceBlock := sourceKey(sourceIP)
 	if retryAfter, banned := h.authFailures.banRemaining(sourceBlock); banned {
 		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", retryAfter)
+		h.cover.decorate(w)
 		writeRateLimited(w, r, retryAfter)
 		return
 	}
@@ -249,18 +269,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The credential itself is never logged: only whether it was absent,
 		// malformed, or a well-formed credential of either generation.
 		h.logger.Warn("relay authorization rejected", "source", sourceIP, "credential", result.class)
-		w.Header().Set("Cache-Control", "no-store")
 		if ban.limited {
 			if ban.activated {
 				h.logger.Warn("relay authorization ban activated", "source", sourceIP, "retry_after", ban.retryAfter)
 			} else {
 				h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", ban.retryAfter)
 			}
+			h.cover.decorate(w)
 			writeRateLimited(w, r, ban.retryAfter)
 			return
 		}
-		w.Header().Set("WWW-Authenticate", `Bearer realm="gul-relay"`)
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// No WWW-Authenticate: it announced the software by name to anyone who
+		// asked for the path, and it told a prober the path exists at all.
+		h.cover.NotFound(w, r)
 		return
 	}
 	if result.legacy {
@@ -270,22 +291,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A concurrent failed request may have activated the ban while this
 		// request was validating its credential. Recheck under the limiter lock
 		// before accepting it.
+		h.cover.decorate(w)
 		writeRateLimited(w, r, retryAfter)
 		return
 	}
 	if !offersSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"), Subprotocol) {
-		http.Error(w, "required WebSocket subprotocol is missing", http.StatusBadRequest)
+		h.cover.NotFound(w, r)
 		return
 	}
 
 	release, scope, ok := h.acquire(sourceBlock)
 	if !ok {
 		h.logger.Warn("relay capacity rejected", "source", sourceIP, "scope", scope)
+		h.cover.decorate(w)
 		writeCapacityRejected(w, capacityRetryAfter)
 		return
 	}
 	defer release()
 
+	h.cover.decorate(w)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols:    []string{Subprotocol},
 		CompressionMode: websocket.CompressionDisabled,

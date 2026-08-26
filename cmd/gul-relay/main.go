@@ -162,9 +162,13 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 	}
 
 	mux := http.NewServeMux()
+	// The cover site is the catch-all: every path the tunnel and the health
+	// probe do not own answers as an ordinary website would (relay/cover.go).
+	cover := handler.Cover()
+	mux.Handle("/", cover)
 	mux.Handle(relay.Path, handler)
-	mux.HandleFunc("/healthz", healthHandler(opts.expectedHost, loader.LastError))
-	server := relayServer(listener.Addr().String(), mux, loader.GetCertificate, logger)
+	mux.HandleFunc("/healthz", healthHandler(opts.expectedHost, loader.LastError, cover))
+	server := relayServer(listener.Addr().String(), rejectRequestBodies(mux, cover), loader.GetCertificate, logger)
 
 	limitedListener := relay.LimitListenerBySource(listener, maxPreAuthPerSource, maxPreAuthConnections, logger)
 	tlsListener := tls.NewListener(limitedListener, server.TLSConfig)
@@ -205,7 +209,7 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 func relayServer(address string, handler http.Handler, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error), logger *slog.Logger) *http.Server {
 	return &http.Server{
 		Addr:              address,
-		Handler:           rejectRequestBodies(handler),
+		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleConnectionTimeout,
 		MaxHeaderBytes:    maxRequestHeaderBytes,
@@ -258,7 +262,7 @@ func (w *httpErrorWriter) Write(line []byte) (int, error) {
 	return len(line), nil
 }
 
-func rejectRequestBodies(next http.Handler) http.Handler {
+func rejectRequestBodies(next http.Handler, cover http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 			w.Header().Set("Connection", "close")
@@ -267,7 +271,10 @@ func rejectRequestBodies(next http.Handler) http.Handler {
 			// returns. An incomplete chunked body could hold the connection until
 			// the client sends more data, so expire reads before rejecting it.
 			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
-			http.Error(w, "request body is not accepted", http.StatusBadRequest)
+			// The refusal reads as an ordinary site refusing an odd request,
+			// not as a service with rules of its own (relay/cover.go).
+			r.URL.Path = "/_"
+			cover.ServeHTTP(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
