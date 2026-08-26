@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,4 +194,135 @@ func TestPacketConnVoiceFrameDoesNotAllocate(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("allocations per voice frame = %.1f, want 0", allocs)
 	}
+}
+
+// stallingConn is a socket that stops draining: writes block until the write
+// deadline the caller set, then fail the way a real one does.
+type stallingConn struct {
+	messageConn
+	mu       sync.Mutex
+	deadline time.Time
+	writes   int
+}
+
+func (c *stallingConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deadline = t
+	return nil
+}
+
+func (c *stallingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writes++
+	deadline := c.deadline
+	c.mu.Unlock()
+	if deadline.IsZero() {
+		return len(p), nil
+	}
+	time.Sleep(time.Until(deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+func (c *stallingConn) closedNow() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// The failure nobody could read off the screen: the socket stops draining
+// while the server keeps talking. Voice writes hang, and because gumble puts
+// every write behind one connection mutex they take the 5-second pings with
+// them, so the server eventually drops us for not pinging - twenty seconds of
+// looking connected while nobody can hear us.
+func TestPacketConnDiagnosesAStalledUplink(t *testing.T) {
+	t.Parallel()
+	inner := &stallingConn{}
+	conn := newPacketConn(inner)
+	conn.writeTimeout = 40 * time.Millisecond
+	// The server was talking to us moments ago: this is one direction, not a
+	// dead connection.
+	conn.lastRead.Store(time.Now().UnixNano())
+
+	_, err := conn.Write(mumblePacket(1, []byte("voice")))
+
+	if !errors.Is(err, ErrUplinkStalled) {
+		t.Fatalf("write error = %v, want ErrUplinkStalled", err)
+	}
+	if !conn.StalledUplink() {
+		t.Fatal("the stall was not latched for the disconnect reason")
+	}
+	// Failing the write is not enough: the send path only logs a failed voice
+	// frame and carries on. Closing is what turns the stall into a drop.
+	if !inner.closedNow() {
+		t.Fatal("the connection was left open, so the session would linger")
+	}
+}
+
+// A connection that stopped delivering as well is simply gone, and calling
+// that a blocked uplink would send the user hunting for a censor when their
+// wifi dropped.
+func TestPacketConnBlamesTheUplinkOnlyWhileTheDownlinkWorks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		lastRead time.Time
+	}{
+		{name: "nothing ever arrived"},
+		{name: "the connection went quiet long ago", lastRead: time.Now().Add(-2 * uplinkReadWindow)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := &stallingConn{}
+			conn := newPacketConn(inner)
+			conn.writeTimeout = 40 * time.Millisecond
+			if !tc.lastRead.IsZero() {
+				conn.lastRead.Store(tc.lastRead.UnixNano())
+			}
+
+			_, err := conn.Write(mumblePacket(1, []byte("voice")))
+
+			if errors.Is(err, ErrUplinkStalled) {
+				t.Fatal("an ordinary drop was reported as a blocked uplink")
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("write error = %v, want the deadline", err)
+			}
+			if conn.StalledUplink() {
+				t.Fatal("the stall was latched for an ordinary drop")
+			}
+		})
+	}
+}
+
+// Reads are the other half of the evidence, and they arrive on their own
+// goroutine while the writer is blocked.
+func TestPacketConnRecordsThatTheServerIsStillTalking(t *testing.T) {
+	t.Parallel()
+	conn := newPacketConn(&readOnceConn{payload: []byte("hello")})
+	if conn.lastRead.Load() != 0 {
+		t.Fatal("a fresh connection claims to have read something")
+	}
+
+	buf := make([]byte, 8)
+	if _, err := conn.Read(buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if conn.lastRead.Load() == 0 {
+		t.Fatal("a delivered read was not recorded")
+	}
+}
+
+// readOnceConn delivers one payload and then reports the connection is over.
+type readOnceConn struct {
+	messageConn
+	payload []byte
+	done    bool
+}
+
+func (c *readOnceConn) Read(p []byte) (int, error) {
+	if c.done {
+		return 0, io.EOF
+	}
+	c.done = true
+	return copy(p, c.payload), nil
 }

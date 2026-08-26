@@ -61,10 +61,20 @@ type Session struct {
 	log    *slog.Logger
 	addr   string
 	host   string
+	// packets is the framing wrapper on the relay path, kept so the reason a
+	// session ended can name a stalled uplink instead of "connection lost".
+	// Nil on the direct path, which has no wrapper of its own.
+	packets *packetConn
 	// closeOnce funnels every Disconnect into one actual client call:
 	// gumble's Client.Disconnect writes its state without a lock, and both the
 	// reconnect loop and stopRun legitimately try to close the same session.
 	closeOnce sync.Once
+}
+
+// stalledUplink reports whether this session died because our own traffic
+// stopped getting through while the server's kept arriving (packetconn.go).
+func (s *Session) stalledUplink() bool {
+	return s != nil && s.packets != nil && s.packets.StalledUplink()
 }
 
 // Dial opens a session with plain logging hooks. It is the M0 entry point kept
@@ -119,7 +129,9 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		}
 		// One Mumble packet per WebSocket message (see newPacketConn); the
 		// wrapper belongs on the connection gumble writes packets into.
-		client, err = gumble.DialWithConn(ctx, newPacketConn(conn), gc)
+		packets := newPacketConn(conn)
+		s.packets = packets
+		client, err = gumble.DialWithConn(ctx, packets, gc)
 	} else {
 		tlsConfig := tofu.TLSConfig(ep.host)
 		if cfg.Certificate != nil {

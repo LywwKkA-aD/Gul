@@ -2,11 +2,42 @@ package mumble
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
+)
+
+// ErrUplinkStalled is the drop nobody could diagnose: the session keeps
+// receiving - the user hears everyone - while nothing of ours reaches the
+// server any more.
+//
+// Seen live on 2026-08-26. A user connected fifty times in a row, authenticated
+// every time, and the relay counted the same ~3.3 KB from them in every single
+// session whatever its length: the inner TLS handshake and the login, then
+// nothing. Not even the 5-second pings, because gumble serializes every write
+// behind one connection mutex, so a voice frame stuck in the socket takes the
+// ping goroutine down with it. The server then dropped them on its own ping
+// deadline (murmur timeout=30) roughly every twenty seconds, and the window
+// said only "connection lost".
+var ErrUplinkStalled = errors.New("outgoing traffic is not getting through")
+
+const (
+	// packetWriteTimeout bounds one write to the server. A healthy link takes
+	// microseconds; the only thing this can hit is a socket that stopped
+	// draining. Six seconds is well past any ordinary retransmit and well
+	// inside the server's own ping deadline, so we diagnose the stall instead
+	// of waiting to be dropped for it.
+	packetWriteTimeout = 6 * time.Second
+	// uplinkReadWindow is how recently the connection must have delivered
+	// something for a stalled write to mean "one direction only". Beyond it
+	// the whole connection is simply gone, which is an ordinary drop.
+	uplinkReadWindow = 15 * time.Second
 )
 
 const (
@@ -37,14 +68,66 @@ type packetConn struct {
 	// err latches a framing failure: once the stream is out of sync there is
 	// no way back, and the connection is closed.
 	err error
+	// lastRead is when the connection last delivered anything, in Unix
+	// nanoseconds. Reads and writes run on different goroutines, so it is
+	// read without the mutex the writer holds.
+	lastRead atomic.Int64
+	// stalled latches the one-directional failure above.
+	stalled atomic.Bool
+	// writeTimeout is packetWriteTimeout; tests shorten it.
+	writeTimeout time.Duration
 }
 
 // newPacketConn wraps conn. The returned connection is only safe for the
 // packet-at-a-time writer gumble provides: writes must arrive in packet order
 // (gumble serializes them under Conn.Lock), a caller interleaving two packets
 // would produce two corrupt ones.
-func newPacketConn(conn net.Conn) net.Conn {
-	return &packetConn{Conn: conn, buf: make([]byte, 0, packetBufferBytes)}
+func newPacketConn(conn net.Conn) *packetConn {
+	return &packetConn{
+		Conn:         conn,
+		buf:          make([]byte, 0, packetBufferBytes),
+		writeTimeout: packetWriteTimeout,
+	}
+}
+
+// Read records that the connection is still delivering. That is the half of
+// the evidence a stalled write needs: writes that fail while reads keep
+// arriving are a blocked direction, not a dead connection.
+func (c *packetConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.lastRead.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// StalledUplink reports whether this connection died because our own traffic
+// stopped getting through while the server's kept arriving.
+func (c *packetConn) StalledUplink() bool { return c.stalled.Load() }
+
+// writeWithDeadline bounds one write and diagnoses the stall.
+//
+// Failing the write is not enough on its own: the send path only logs a failed
+// voice frame and carries on, and the ping goroutine ignores its error too, so
+// the session would stay up until the server gave up on it. Closing the
+// connection is what turns the stall into a drop the reconnect loop can act on
+// and the user can be told about.
+func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+		// A connection that cannot carry a deadline still has to carry voice.
+		return c.Conn.Write(p)
+	}
+	n, err := c.Conn.Write(p)
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		return n, err
+	}
+	since := time.Since(time.Unix(0, c.lastRead.Load()))
+	if c.lastRead.Load() != 0 && since < uplinkReadWindow {
+		c.stalled.Store(true)
+		err = ErrUplinkStalled
+	}
+	_ = c.Conn.Close()
+	return n, err
 }
 
 func (c *packetConn) Write(p []byte) (int, error) {
@@ -66,7 +149,7 @@ func (c *packetConn) Write(p []byte) (int, error) {
 		if !complete {
 			break
 		}
-		if _, err := c.Conn.Write(p[:size]); err != nil {
+		if _, err := c.writeWithDeadline(p[:size]); err != nil {
 			return total - len(p), err
 		}
 		p = p[size:]
@@ -86,7 +169,7 @@ func (c *packetConn) Write(p []byte) (int, error) {
 		if !complete {
 			return total, nil
 		}
-		if _, err := c.Conn.Write(c.buf[:size]); err != nil {
+		if _, err := c.writeWithDeadline(c.buf[:size]); err != nil {
 			return total, err
 		}
 		// Keep the tail, keep the array: the steady state never allocates.

@@ -376,6 +376,9 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 
 		reason, terminal := disconnectReason(event)
+		if session.stalledUplink() {
+			reason = reasonUplinkStalled
+		}
 		if terminal {
 			m.emitStatus(domain.ConnectionStatus{
 				State: domain.StateDisconnected, Server: c.address, Error: reason,
@@ -760,6 +763,12 @@ func sleepOrStop(d time.Duration, stop <-chan struct{}) bool {
 		return false
 	}
 }
+
+// reasonUplinkStalled is what the user is told when the connection is only
+// broken one way. It says what to do about it, because the state itself is
+// invisible from inside the window: everyone is still audible, and the only
+// symptom is that nobody answers.
+const reasonUplinkStalled = "исходящий трафик не проходит — вас не слышно, хотя вы слышите остальных"
 
 // disconnectReason classifies a drop: terminal means do not reconnect.
 func disconnectReason(e *gumble.DisconnectEvent) (reason string, terminal bool) {
