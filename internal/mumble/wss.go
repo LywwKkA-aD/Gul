@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -95,9 +96,14 @@ func dialWSS(
 	// they replace announced the contents to anything that terminates TLS on
 	// the way: `GET /mumble` with `Sec-WebSocket-Protocol: gul-mumble-v1`.
 	names := relayproto.NamesFor(credential)
-	client := noRedirectHTTPClient(baseClient)
+	// Chrome's TLS handshake and a browser's headers (browsertls.go): what is
+	// visible outside the tunnel should look like the most ordinary thing on
+	// the web, and what a TLS-inspecting middlebox reads inside it should not
+	// say "Go program on an opaque connection".
+	client := browserClient(baseClient)
 	header := make(http.Header)
 	header.Set("Authorization", credential.Header())
+	applyBrowserHeaders(header, relayOrigin(address))
 	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      header,
@@ -136,6 +142,18 @@ func dialWSS(
 	// exhaust memory.
 	ws.SetReadLimit(relayproto.MaxMessageBytes)
 	return &relayStream{Conn: stream, ws: ws}, nil
+}
+
+// relayOrigin is the Origin a browser loading a page from this relay would
+// send: the same authority, port and all. An address that cannot be parsed
+// yields an empty origin rather than an error - the dial that follows will
+// fail on its own and say why.
+func relayOrigin(address string) string {
+	parsed, err := url.Parse(address)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return "https://" + parsed.Host
 }
 
 // parseRetryAfter reads both header forms (delta-seconds and HTTP-date) and
