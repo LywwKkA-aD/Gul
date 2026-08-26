@@ -16,22 +16,28 @@ import (
 )
 
 func TestHandlerRelaysBinaryStream(t *testing.T) {
-	cfg := baseConfig("correct horse battery staple")
+	const secret = "correct horse battery staple"
+	names := testNames(secret)
+	cfg := baseConfig(secret)
 	cfg.Upstream = echoServer(t)
 	server := httptest.NewServer(mustHandler(t, cfg))
 	t.Cleanup(server.Close)
 
-	conn, response, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
-		HTTPHeader:   bearerHeader("correct horse battery staple"),
-		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
-	})
+	conn, response, err := websocket.Dial(
+		t.Context(),
+		"ws"+server.URL[len("http"):]+names.Path,
+		&websocket.DialOptions{
+			HTTPHeader:   bearerHeader(secret),
+			Host:         testHost,
+			Subprotocols: []string{names.Subprotocol},
+		},
+	)
 	if err != nil {
 		t.Fatalf("dial relay: %v (response: %#v)", err, response)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if got := conn.Subprotocol(); got != Subprotocol {
-		t.Fatalf("subprotocol = %q, want %q", got, Subprotocol)
+	if got := conn.Subprotocol(); got != names.Subprotocol {
+		t.Fatalf("subprotocol = %q, want %q", got, names.Subprotocol)
 	}
 
 	stream := websocket.NetConn(context.Background(), conn, websocket.MessageBinary)
@@ -58,7 +64,7 @@ func TestHandlerRejectsMissingOrWrongBearerToken(t *testing.T) {
 			_, response, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 				HTTPHeader:   bearerHeader(token),
 				Host:         testHost,
-				Subprotocols: []string{Subprotocol},
+				Subprotocols: []string{testSubprotocol()},
 			})
 			if err == nil {
 				t.Fatal("dial unexpectedly succeeded")
@@ -101,9 +107,9 @@ func TestHandlerRejectsWrongPathQueryHostAndOriginBeforeDialingUpstream(t *testi
 		// exist. Telling them apart used to hand a prober the whole decision
 		// tree of the service (cover.go).
 		{name: "path", urlSuffix: "/other", host: testHost, wantStatus: http.StatusNotFound},
-		{name: "query", urlSuffix: Path + "?target=elsewhere", host: testHost, wantStatus: http.StatusNotFound},
-		{name: "host", urlSuffix: Path, host: "other.example.test", wantStatus: http.StatusNotFound},
-		{name: "origin", urlSuffix: Path, host: testHost, origin: "https://evil.example.test", wantStatus: http.StatusNotFound},
+		{name: "query", urlSuffix: testPath() + "?target=elsewhere", host: testHost, wantStatus: http.StatusNotFound},
+		{name: "host", urlSuffix: testPath(), host: "other.example.test", wantStatus: http.StatusNotFound},
+		{name: "origin", urlSuffix: testPath(), host: testHost, origin: "https://evil.example.test", wantStatus: http.StatusNotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,7 +121,7 @@ func TestHandlerRejectsWrongPathQueryHostAndOriginBeforeDialingUpstream(t *testi
 			_, response, err := websocket.Dial(t.Context(), url, &websocket.DialOptions{
 				HTTPHeader:   header,
 				Host:         tc.host,
-				Subprotocols: []string{Subprotocol},
+				Subprotocols: []string{testSubprotocol()},
 			})
 			if err == nil {
 				t.Fatal("dial unexpectedly succeeded")
@@ -145,7 +151,7 @@ func TestHandlerRejectsGETBodiesWithoutReadingOrChargingAuthorizationLimiter(t *
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "https://"+testHost+Path, nil)
+			request := httptest.NewRequest(http.MethodGet, "https://"+testHost+testPath(), nil)
 			request.Host = testHost
 			request.RemoteAddr = "192.0.2.10:12345"
 			request.ContentLength = tc.contentLength
@@ -184,7 +190,7 @@ func TestHandlerEnforcesPerIPConnectionLimit(t *testing.T) {
 	opts := &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	}
 
 	first, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), opts)
@@ -218,7 +224,7 @@ func TestHandlerShutdownDrainsSessionsWithCloseFrame(t *testing.T) {
 	conn, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -264,7 +270,7 @@ func TestHandlerShutdownForcesSessionsPastTheDrainWindow(t *testing.T) {
 	conn, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -323,7 +329,7 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			conn, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 				HTTPHeader:   bearerHeader("server secret"),
 				Host:         testHost,
-				Subprotocols: []string{Subprotocol},
+				Subprotocols: []string{testSubprotocol()},
 			})
 			if err != nil {
 				t.Fatalf("dial: %v", err)

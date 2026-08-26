@@ -38,21 +38,30 @@ func authorizeRelayRequest(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// relayAddress is the base address a client dials. It carries no tunnel path:
+// where the tunnel answers is derived from the credential at dial time
+// (relayproto.NamesFor).
 func relayAddress(t *testing.T, server *httptest.Server) string {
 	t.Helper()
-	return "wss" + strings.TrimPrefix(server.URL, "https") + relayproto.Path
+	return "wss" + strings.TrimPrefix(server.URL, "https")
+}
+
+// relayTestNames is the pair a server in these tests answers on, derived from
+// the same credential the client uses.
+func relayTestNames() relayproto.Names {
+	return relayproto.NamesFor(relayTestCredential())
 }
 
 func TestDialWSSAuthenticatesAndCarriesBinaryStream(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != relayproto.Path {
+		if r.URL.Path != relayTestNames().Path {
 			http.NotFound(w, r)
 			return
 		}
 		if !authorizeRelayRequest(w, r) {
 			return
 		}
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{relayproto.Subprotocol}})
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{relayTestNames().Subprotocol}})
 		if err != nil {
 			return
 		}
@@ -229,7 +238,7 @@ func TestDialWSSDoesNotFollowRedirectWithAuthorization(t *testing.T) {
 	t.Cleanup(destination.Close)
 
 	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, destination.URL+relayproto.Path, http.StatusFound)
+		http.Redirect(w, r, destination.URL+relayTestNames().Path, http.StatusFound)
 	}))
 	t.Cleanup(source.Close)
 
@@ -278,7 +287,7 @@ func TestDialWSSAppliesTheSharedMessageLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-					Subprotocols: []string{relayproto.Subprotocol},
+					Subprotocols: []string{relayTestNames().Subprotocol},
 				})
 				if err != nil {
 					return
@@ -319,7 +328,7 @@ func TestPacketConnOverWSSSendsOneMessagePerPacket(t *testing.T) {
 	messages := make(chan []byte, 8)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{relayproto.Subprotocol},
+			Subprotocols: []string{relayTestNames().Subprotocol},
 		})
 		if err != nil {
 			return

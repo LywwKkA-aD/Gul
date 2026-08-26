@@ -20,7 +20,7 @@ func TestEveryRefusalIsIndistinguishable(t *testing.T) {
 	h := mustHandler(t, baseConfig("server secret"))
 
 	refusal := func(build func(*http.Request)) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodGet, "https://"+testHost+Path, nil)
+		request := httptest.NewRequest(http.MethodGet, "https://"+testHost+testPath(), nil)
 		request.Host = testHost
 		request.RemoteAddr = "192.0.2.10:12345"
 		build(request)
@@ -82,7 +82,7 @@ func TestEveryRefusalIsIndistinguishable(t *testing.T) {
 func TestRefusalNamesNothing(t *testing.T) {
 	t.Parallel()
 	h := mustHandler(t, baseConfig("server secret"))
-	request := httptest.NewRequest(http.MethodGet, "https://"+testHost+Path, nil)
+	request := httptest.NewRequest(http.MethodGet, "https://"+testHost+testPath(), nil)
 	request.Host = testHost
 	request.RemoteAddr = "192.0.2.10:12345"
 	response := httptest.NewRecorder()

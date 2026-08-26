@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +23,14 @@ import (
 )
 
 const (
-	// Path is deliberately fixed so the service cannot become a
-	// client-selected TCP proxy.
-	Path = relayproto.Path
-	// Subprotocol versions the byte-stream contract independently of the app.
-	Subprotocol = relayproto.Subprotocol
+	// LegacyPath and LegacySubprotocol are the fixed pair every build up to
+	// v0.4.0-alpha.2 used. The current pair is derived per server from the
+	// credential (relayproto.NamesFor); these stay only while the relay accepts
+	// both. Neither is client-selected: the relay answers a fixed set it
+	// computed at startup, so it can never become a proxy to somewhere else.
+	LegacyPath = relayproto.LegacyPath
+	// LegacySubprotocol versions the byte-stream contract independently of the app.
+	LegacySubprotocol = relayproto.LegacySubprotocol
 
 	defaultAuthFailuresBeforeBan = 5
 	defaultAuthFailureWindow     = time.Minute
@@ -48,6 +52,10 @@ type Config struct {
 	// v2 credential is required; legacy credentials are honored only while
 	// AcceptLegacyBearer is set. None of them is the raw Mumble password.
 	BearerCredentials []relayproto.Credential
+	// AcceptLegacyNames keeps the fixed /mumble path and gul-mumble-v1
+	// subprotocol usable while the clients that predate the derived pair are
+	// still out there. Every legacy match is logged at Warn.
+	AcceptLegacyNames bool
 	// AcceptLegacyBearer keeps the v0.3.0-alpha.2 credential usable for one
 	// release. Every legacy match is logged at Warn.
 	AcceptLegacyBearer bool
@@ -95,6 +103,13 @@ type Handler struct {
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 	cover        *coverSite
+	// paths and subprotocols are the names this relay answers on, derived from
+	// every configured credential (relayproto.NamesFor) plus, while the window
+	// is open, the fixed legacy pair. Precomputed: a request must never spend
+	// a key derivation.
+	paths        map[string]bool
+	subprotocols map[string]bool
+	legacyNames  bool
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -188,6 +203,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		idleTimeout:  cfg.SessionIdleTimeout,
 		writeTimeout: cfg.SessionWriteTimeout,
 		cover:        newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
+		paths:        tunnelPaths(credentials, cfg.AcceptLegacyNames),
+		subprotocols: tunnelSubprotocols(credentials, cfg.AcceptLegacyNames),
+		legacyNames:  cfg.AcceptLegacyNames,
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perSourceMax: cfg.MaxConnectionsPerIP,
@@ -222,7 +240,7 @@ func (h *Handler) Cover() http.Handler { return h.cover }
 // hands a prober our decision tree, and one of those answers used to name the
 // software outright (cover.go).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != Path {
+	if !h.paths[r.URL.Path] {
 		h.cover.NotFound(w, r)
 		return
 	}
@@ -295,9 +313,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRateLimited(w, r, retryAfter)
 		return
 	}
-	if !offersSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"), Subprotocol) {
+	subprotocol, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
+	if !ok {
 		h.cover.NotFound(w, r)
 		return
+	}
+	if h.legacyNames && (r.URL.Path == relayproto.LegacyPath || subprotocol == relayproto.LegacySubprotocol) {
+		// The pair that names what the tunnel carries. Logged so the operator
+		// can see who still has to update before the window is shut.
+		h.logger.Warn("relay accepted the legacy tunnel names", "source", sourceIP)
 	}
 
 	release, scope, ok := h.acquire(sourceBlock)
@@ -311,7 +335,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.cover.decorate(w)
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    []string{subprotocol},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
@@ -516,15 +540,56 @@ func validateLoopbackAddress(address string) error {
 	return nil
 }
 
-func offersSubprotocol(values []string, want string) bool {
+// tunnelPaths and tunnelSubprotocols precompute the names this relay answers
+// on: one pair per configured credential, plus the legacy pair while the
+// window is open. Derivation is one HMAC, but it belongs at startup - a
+// request must never spend one.
+func tunnelPaths(credentials []relayproto.Credential, legacy bool) map[string]bool {
+	paths := make(map[string]bool, len(credentials)+1)
+	for _, credential := range credentials {
+		paths[relayproto.NamesFor(credential).Path] = true
+	}
+	if legacy {
+		paths[relayproto.LegacyPath] = true
+	}
+	return paths
+}
+
+func tunnelSubprotocols(credentials []relayproto.Credential, legacy bool) map[string]bool {
+	names := make(map[string]bool, len(credentials)+1)
+	for _, credential := range credentials {
+		names[relayproto.NamesFor(credential).Subprotocol] = true
+	}
+	if legacy {
+		names[relayproto.LegacySubprotocol] = true
+	}
+	return names
+}
+
+// TunnelPaths reports the addresses this relay answers on, so the serving
+// binary can mount the handler on each of them.
+func (h *Handler) TunnelPaths() []string {
+	paths := make([]string, 0, len(h.paths))
+	for path := range h.paths {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// matchSubprotocol returns the offered subprotocol this relay accepts. The
+// answer has to be echoed back to the client, so it is the matched name and
+// not a fixed one.
+func (h *Handler) matchSubprotocol(values []string) (string, bool) {
 	for _, value := range values {
 		for _, offered := range strings.Split(value, ",") {
-			if strings.TrimSpace(offered) == want {
-				return true
+			offered = strings.TrimSpace(offered)
+			if h.subprotocols[offered] {
+				return offered, true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func requestHost(value string) string {

@@ -191,7 +191,7 @@ func TestManagerPreservesNormalizedRelayURL(t *testing.T) {
 	m.Connect("wss://murmur.example.test", "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 	status := sink.expect(t, domain.StateDisconnected)
-	if status.Server != "wss://murmur.example.test/mumble" {
+	if status.Server != "wss://murmur.example.test" {
 		t.Fatalf("server = %q", status.Server)
 	}
 	if cfg := <-configs; cfg.Address != status.Server {
@@ -623,7 +623,7 @@ func TestManagerDerivesTheRelayBearerOncePerConnect(t *testing.T) {
 		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "server password")
+	m.Connect("wss://murmur.example.test", "gul", "server password")
 	for range 3 {
 		select {
 		case cfg := <-configs:
@@ -653,7 +653,7 @@ func TestManagerWaitsOutTheRelayRetryAfter(t *testing.T) {
 		return nil, &RateLimitedError{RetryAfter: retryAfter}
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	m.Connect("wss://murmur.example.test", "gul", "secret")
 	first := <-attempts
 
 	sink.expect(t, domain.StateConnecting)
@@ -682,14 +682,14 @@ func TestManagerRateLimitedFirstConnectStaysOnTheConnectForm(t *testing.T) {
 		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	m.Connect("wss://murmur.example.test", "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 
 	status := sink.expect(t, domain.StateConnecting)
 	if !strings.Contains(status.Error, "Следующая попытка") {
 		t.Fatalf("status error = %q, want the wait the connect form shows", status.Error)
 	}
-	if status.Server != "wss://murmur.example.test/mumble" {
+	if status.Server != "wss://murmur.example.test" {
 		t.Fatalf("server = %q, want the normalized address", status.Server)
 	}
 
@@ -717,7 +717,7 @@ func TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal(t *testing.T) 
 		return nil, errors.New("connection refused")
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	m.Connect("wss://murmur.example.test", "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 	sink.expect(t, domain.StateConnecting) // the wait
 	sink.expect(t, domain.StateConnecting) // the retry
@@ -750,7 +750,7 @@ func TestManagerRateLimitedReconnectShowsTheReconnectState(t *testing.T) {
 		return nil, &RateLimitedError{RetryAfter: 20 * time.Millisecond}
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	m.Connect("wss://murmur.example.test", "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 	sink.expect(t, domain.StateConnected)
 
@@ -779,7 +779,7 @@ func TestManagerWaitsOutAFullRelay(t *testing.T) {
 		return nil, &RelayFullError{RetryAfter: retryAfter}
 	}
 
-	m.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	m.Connect("wss://murmur.example.test", "gul", "secret")
 	first := <-attempts
 
 	sink.expect(t, domain.StateConnecting)

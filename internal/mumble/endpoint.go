@@ -66,12 +66,16 @@ func parseWSSEndpoint(value string) (endpoint, error) {
 	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return endpoint{}, errors.New("relay URL cannot contain a query or fragment")
 	}
-	if parsed.Path == "" || parsed.Path == "/" {
-		parsed.Path = relayproto.Path
-		parsed.RawPath = ""
+	// The address carries no tunnel path. Where the tunnel answers is derived
+	// from the server password at dial time and differs per server
+	// (relayproto.NamesFor), so it cannot be part of what the user types or of
+	// what a saved server remembers. The old fixed path is still accepted and
+	// dropped, so servers saved by earlier builds keep working.
+	if parsed.Path == "/" || parsed.Path == relayproto.LegacyPath {
+		parsed.Path = ""
 	}
-	if parsed.Path != relayproto.Path || parsed.RawPath != "" {
-		return endpoint{}, fmt.Errorf("relay URL path must be %s", relayproto.Path)
+	if parsed.Path != "" || parsed.RawPath != "" {
+		return endpoint{}, errors.New("relay URL cannot contain a path")
 	}
 	port := parsed.Port()
 	if port != "" {

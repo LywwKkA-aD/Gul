@@ -64,6 +64,7 @@ type options struct {
 	keyFile            string
 	credentialFile     string
 	acceptLegacyBearer bool
+	acceptLegacyNames  bool
 }
 
 func main() {
@@ -95,6 +96,7 @@ func main() {
 	flag.StringVar(&opts.keyFile, "key", "/run/relay-tls/mumble.key", "TLS private key")
 	flag.StringVar(&opts.credentialFile, "credential-file", "/run/secrets/GUL_RELAY_BEARER", "pre-derived relay bearer credential file")
 	flag.BoolVar(&opts.acceptLegacyBearer, "accept-legacy-bearer", true, "accept the v0.3.0-alpha.2 bearer credential during the deprecation window")
+	flag.BoolVar(&opts.acceptLegacyNames, "accept-legacy-names", true, "accept the fixed /mumble path and gul-mumble-v1 subprotocol during the deprecation window")
 	flag.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	flag.Parse()
 
@@ -166,7 +168,11 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 	// probe do not own answers as an ordinary website would (relay/cover.go).
 	cover := handler.Cover()
 	mux.Handle("/", cover)
-	mux.Handle(relay.Path, handler)
+	// One mount per name the relay answers on: the current pair is derived
+	// from the credential, so it differs per server (relayproto.NamesFor).
+	for _, path := range handler.TunnelPaths() {
+		mux.Handle(path, handler)
+	}
 	mux.HandleFunc("/healthz", healthHandler(opts.expectedHost, loader.LastError, cover))
 	server := relayServer(listener.Addr().String(), rejectRequestBodies(mux, cover), loader.GetCertificate, logger)
 
@@ -178,6 +184,7 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 		"version", version,
 		"listen", listener.Addr().String(),
 		"accept_legacy_bearer", opts.acceptLegacyBearer,
+		"accept_legacy_names", opts.acceptLegacyNames,
 	)
 
 	select {
@@ -228,6 +235,7 @@ func relayConfig(opts options, credentials []relayproto.Credential, logger *slog
 		Upstream:                upstreamAddress,
 		BearerCredentials:       credentials,
 		AcceptLegacyBearer:      opts.acceptLegacyBearer,
+		AcceptLegacyNames:       opts.acceptLegacyNames,
 		MaxConnections:          maxRelayConnections,
 		MaxConnectionsPerIP:     maxSessionsPerIP,
 		MaxWebSocketMessageSize: relayproto.MaxMessageBytes,

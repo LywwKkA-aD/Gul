@@ -39,6 +39,19 @@ func testLegacyCredential(secret string) relayproto.Credential {
 	return relayproto.DeriveLegacy([]byte(secret))
 }
 
+// testNames is the pair a relay configured with this secret answers on. The
+// fixed pair is gone: both are derived per server (relayproto.NamesFor).
+func testNames(secret string) relayproto.Names {
+	return relayproto.NamesFor(testCredential(secret))
+}
+
+// testPath and testSubprotocol are the names for the secret nearly every test
+// uses.
+func testPath() string        { return testNames(defaultTestSecret).Path }
+func testSubprotocol() string { return testNames(defaultTestSecret).Subprotocol }
+
+const defaultTestSecret = "server secret"
+
 func baseConfig(secret string) Config {
 	return Config{
 		ExpectedHost:            testHost,
@@ -47,6 +60,7 @@ func baseConfig(secret string) Config {
 		MaxConnections:          4,
 		MaxConnectionsPerIP:     2,
 		MaxWebSocketMessageSize: 64 * 1024,
+		AcceptLegacyNames:       true,
 		Logger:                  slog.New(slog.DiscardHandler),
 	}
 }
@@ -102,7 +116,7 @@ func serveAuthorizationAttempt(handler http.Handler, sourceIP, token string) *ht
 }
 
 func serveWithHeader(handler http.Handler, sourceIP string, header http.Header) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(http.MethodGet, "https://"+testHost+Path, nil)
+	request := httptest.NewRequest(http.MethodGet, "https://"+testHost+testPath(), nil)
 	request.Host = testHost
 	request.RemoteAddr = net.JoinHostPort(sourceIP, "12345")
 	request.Header = header
@@ -132,7 +146,7 @@ func waitForActiveSessions(t *testing.T, h *Handler, want int) {
 }
 
 func websocketURL(serverURL string) string {
-	return "ws" + serverURL[len("http"):] + Path
+	return "ws" + serverURL[len("http"):] + testPath()
 }
 
 type panicReader struct{}

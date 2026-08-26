@@ -90,13 +90,18 @@ func dialWSS(
 		return nil, ErrRelayPasswordRequired
 	}
 
+	// Where the tunnel answers and what it calls itself are derived from the
+	// credential, so they differ per server and describe nothing. The pair
+	// they replace announced the contents to anything that terminates TLS on
+	// the way: `GET /mumble` with `Sec-WebSocket-Protocol: gul-mumble-v1`.
+	names := relayproto.NamesFor(credential)
 	client := noRedirectHTTPClient(baseClient)
 	header := make(http.Header)
 	header.Set("Authorization", credential.Header())
-	ws, response, err := websocket.Dial(ctx, address, &websocket.DialOptions{
+	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      header,
-		Subprotocols:    []string{relayproto.Subprotocol},
+		Subprotocols:    []string{names.Subprotocol},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
@@ -117,7 +122,7 @@ func dialWSS(
 		}
 		return nil, fmt.Errorf("WSS relay handshake failed: %w", err)
 	}
-	if ws.Subprotocol() != relayproto.Subprotocol {
+	if ws.Subprotocol() != names.Subprotocol {
 		_ = ws.CloseNow()
 		return nil, errors.New("WSS relay did not negotiate the required protocol")
 	}

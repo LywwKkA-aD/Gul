@@ -9,12 +9,23 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"strings"
 )
 
 const (
-	Path        = "/mumble"
-	Subprotocol = "gul-mumble-v1"
+	// LegacyPath and LegacySubprotocol are the fixed names every build up to
+	// v0.4.0-alpha.2 used. They say out loud what the tunnel carries, which is
+	// the one thing it must not say: anything that terminates TLS on the way -
+	// a corporate proxy, an antivirus with HTTPS scanning, which is the normal
+	// configuration on a great many Windows machines - reads `GET /mumble` and
+	// `Sec-WebSocket-Protocol: gul-mumble-v1` in clear text and then decides
+	// what to do about an opaque tunnel it cannot inspect.
+	//
+	// They stay only while the relay accepts both, so the clients that predate
+	// the change keep working. Every use is logged.
+	LegacyPath        = "/mumble"
+	LegacySubprotocol = "gul-mumble-v1"
 
 	// MaxMessageBytes bounds one WebSocket message in either direction. The
 	// client sends one whole Mumble TCP packet per message, so the bound has
@@ -32,8 +43,40 @@ const (
 
 	legacyDomain = "gul-relay-v1 bearer"
 	bearerSalt   = "gul-relay-v2 bearer"
+	namesDomain  = "gul-relay-v2 tunnel names"
 	v2Prefix     = "v2."
 )
+
+// Names are the address and the subprotocol one server's tunnel answers on.
+//
+// They carry no meaning of their own: both are derived from the credential, so
+// every server has its own pair, and a pair tells an observer nothing except
+// that some site has a WebSocket endpoint - which describes a large share of
+// the web. Only somebody who already knows the server password can work out
+// where the tunnel is, and knowing that still gets them a "not found" without
+// the credential.
+type Names struct {
+	Path        string
+	Subprotocol string
+}
+
+// NamesFor derives the tunnel names from the credential.
+//
+// The credential is already a stretched secret (Derive spends 600k PBKDF2
+// iterations on it), so one HMAC over it is enough here and is cheap enough to
+// run at startup on both sides. It is one-way: the path travels in clear text
+// inside the TLS session, and it must not hand back the credential that
+// produced it. It reveals nothing new in any case - an observer who can read
+// the path is reading the Authorization header in the same request.
+func NamesFor(c Credential) Names {
+	mac := hmac.New(sha256.New, []byte(c))
+	_, _ = mac.Write([]byte(namesDomain))
+	sum := mac.Sum(nil)
+	return Names{
+		Path:        "/ws/" + hex.EncodeToString(sum[:8]),
+		Subprotocol: hex.EncodeToString(sum[8:14]),
+	}
+}
 
 // Credential is a derived bearer token without the "Bearer " scheme.
 //

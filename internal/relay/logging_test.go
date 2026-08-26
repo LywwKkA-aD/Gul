@@ -21,7 +21,7 @@ func TestHandlerLogsSessionLifecycle(t *testing.T) {
 	conn, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -64,7 +64,7 @@ func TestHandlerLogsCapacityRejection(t *testing.T) {
 	opts := &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	}
 
 	first, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), opts)
@@ -94,7 +94,7 @@ func TestHandlerLogsUpstreamDialFailure(t *testing.T) {
 	conn, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)

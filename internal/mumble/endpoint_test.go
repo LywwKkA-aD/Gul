@@ -21,11 +21,11 @@ func TestParseEndpointWSS(t *testing.T) {
 		address string
 		host    string
 	}{
-		{"wss://murmur.example.com", "wss://murmur.example.com/mumble", "murmur.example.com"},
-		{"wss://murmur.example.com/mumble", "wss://murmur.example.com/mumble", "murmur.example.com"},
-		{"wss://murmur.example.com:443/mumble", "wss://murmur.example.com:443/mumble", "murmur.example.com"},
-		{"wss://[2001:db8::1]/mumble", "wss://[2001:db8::1]/mumble", "2001:db8::1"},
-		{"wss://MURMUR.EXAMPLE.COM./mumble", "wss://murmur.example.com/mumble", "murmur.example.com"},
+		{"wss://murmur.example.com", "wss://murmur.example.com", "murmur.example.com"},
+		{"wss://murmur.example.com", "wss://murmur.example.com", "murmur.example.com"},
+		{"wss://murmur.example.com:443", "wss://murmur.example.com:443", "murmur.example.com"},
+		{"wss://[2001:db8::1]", "wss://[2001:db8::1]", "2001:db8::1"},
+		{"wss://MURMUR.EXAMPLE.COM./mumble", "wss://murmur.example.com", "murmur.example.com"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
@@ -43,7 +43,7 @@ func TestParseEndpointWSS(t *testing.T) {
 func TestParseEndpointCanonicalizesEquivalentTOFUHosts(t *testing.T) {
 	tests := [][2]string{
 		{"MURMUR.EXAMPLE.COM.:64738", "murmur.example.com:64738"},
-		{"wss://MURMUR.EXAMPLE.COM./mumble", "wss://murmur.example.com/mumble"},
+		{"wss://MURMUR.EXAMPLE.COM./mumble", "wss://murmur.example.com"},
 	}
 	for _, pair := range tests {
 		first, err := parseEndpoint(pair[0])

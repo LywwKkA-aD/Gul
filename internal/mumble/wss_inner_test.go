@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
@@ -34,7 +32,7 @@ func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
 			return
 		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{relayproto.Subprotocol},
+			Subprotocols: []string{relayTestNames().Subprotocol},
 		})
 		if err != nil {
 			return
@@ -71,7 +69,7 @@ func TestDialWSSMumbleTLSVerifiesOuterCAAndPinsInnerCertificate(t *testing.T) {
 	t.Cleanup(transport.CloseIdleConnections)
 	httpClient := &http.Client{Transport: transport}
 	port := strings.TrimPrefix(relayServer.URL, "https://127.0.0.1:")
-	ep, err := parseEndpoint("wss://" + host + ":" + port + relayproto.Path)
+	ep, err := parseEndpoint("wss://" + host + ":" + port)
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}

@@ -171,7 +171,7 @@ func TestHandlerReleasesCapacityWhenASessionGoesIdle(t *testing.T) {
 	opts := &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	}
 
 	idle, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), opts)

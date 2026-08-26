@@ -120,7 +120,7 @@ func TestHandlerCountsRotatingIPv6AddressesAgainstOneSessionLimit(t *testing.T) 
 	opts := &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	}
 
 	first, _, err := websocket.Dial(t.Context(), websocketURL(server.URL), opts)
@@ -164,7 +164,7 @@ func TestHandlerMapsOneIPv6PrefixToOneUpstreamPseudonym(t *testing.T) {
 	opts := &websocket.DialOptions{
 		HTTPHeader:   bearerHeader("server secret"),
 		Host:         testHost,
-		Subprotocols: []string{Subprotocol},
+		Subprotocols: []string{testSubprotocol()},
 	}
 
 	keys := make([]string, 0, 3)
