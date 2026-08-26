@@ -56,13 +56,18 @@ type Manager struct {
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
-	dialFn           func(DialConfig, sessionHooks) (*Session, error)
-	backoffFn        func(int) time.Duration
-	deriveFn         func([]byte) relayproto.Credential
-	statsInterval    time.Duration
-	sampleLatencyFn  func(*gumble.Client)             // seam for tests; nil means sampleLatency
-	writeSelfAudioFn func(*gumble.Client, bool, bool) // seam for tests
-	selfAudioWoke    func()                           // seam for tests; called after every wake-up
+	dialFn          func(DialConfig, sessionHooks) (*Session, error)
+	backoffFn       func(int) time.Duration
+	deriveFn        func([]byte) relayproto.Credential
+	statsInterval   time.Duration
+	sampleLatencyFn func(*gumble.Client) // seam for tests; nil means sampleLatency
+
+	// Seams for the self audio writer, along with selfAudioBudget below. The
+	// writer goroutine reads them only after a wake-up, so a test that sets
+	// them before the first intent is ordered behind that channel send and
+	// needs no lock; setting them once the writer is running would be a race.
+	writeSelfAudioFn func(*gumble.Client, bool, bool)
+	selfAudioWoke    func() // called after every wake-up
 
 	// voice is the transport for raw Opus. It outlives sessions: the audio
 	// pipeline holds its channels while connections come and go.
