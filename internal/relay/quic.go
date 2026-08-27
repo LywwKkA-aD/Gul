@@ -43,6 +43,7 @@ type QUICServer struct {
 	handler   *Handler
 	listener  *quic.Listener
 	transport *quic.Transport
+	packets   *relayproto.ObfuscatedPacketConn
 	logger    *slog.Logger
 }
 
@@ -64,7 +65,8 @@ func ListenQUIC(
 	// Every datagram is scrambled, so what leaves this socket has no shape to
 	// recognise and what arrives without the password is discarded in silence
 	// (relayproto.Salamander). QUIC never sees the socket itself.
-	transport := &quic.Transport{Conn: relayproto.ObfuscatePacketConn(packets, handler.obfuscator)}
+	scrambled := relayproto.ObfuscatePacketConn(packets, handler.obfuscator)
+	transport := &quic.Transport{Conn: scrambled}
 	listener, err := transport.Listen(&tls.Config{
 		MinVersion:     tls.VersionTLS13,
 		GetCertificate: getCertificate,
@@ -78,6 +80,7 @@ func ListenQUIC(
 		handler:   handler,
 		listener:  listener,
 		transport: transport,
+		packets:   scrambled,
 		logger:    loggerOrDefault(logger),
 	}, nil
 }
@@ -174,6 +177,13 @@ func (s *QUICServer) serveConn(conn *quic.Conn) {
 		return
 	}
 	defer release()
+
+	// Chaff in this direction too. Shaping only what the client sends would
+	// leave the other half of the conversation a metronome, and an observer
+	// sitting next to the user sees both (relayproto.Salamander).
+	chaffCtx, stopChaff := context.WithCancel(s.handler.ctx)
+	defer stopChaff()
+	go s.packets.SendChaff(chaffCtx, conn.RemoteAddr())
 
 	tunnel := &quicStreamConn{Stream: stream, conn: conn}
 	if !s.handler.registerStream(tunnel) {

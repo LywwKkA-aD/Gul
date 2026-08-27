@@ -163,3 +163,89 @@ func TestObfuscatedPacketConnIsNotUDPCapable(t *testing.T) {
 		t.Errorf("SyscallConn: %v", err)
 	}
 }
+
+// Padding is the point: voice packets are all within a few bytes of each
+// other, and a classifier that cannot read one byte of them can still see
+// that. After padding, the same payload comes out a different size each time.
+func TestObfuscatorPadsToVaryingSizes(t *testing.T) {
+	t.Parallel()
+	o := testObfuscator("server password")
+	packet := bytes.Repeat([]byte{0x42}, 150) // about the size of a voice frame
+
+	sizes := make(map[int]int)
+	out := make([]byte, 2048)
+	for range 200 {
+		sizes[o.Obfuscate(packet, out)]++
+	}
+	if len(sizes) < 50 {
+		t.Fatalf("only %d distinct sizes over 200 packets; the size still identifies them", len(sizes))
+	}
+	for size := range sizes {
+		if size <= len(packet) {
+			t.Fatalf("a packet came out at %d bytes, no larger than its payload", size)
+		}
+	}
+}
+
+// The padding must look like nothing. Scrambling zeroes would write the
+// keystream itself, which repeats every 32 bytes - the tail of every packet
+// would carry a visible period, which is worse than the signature it replaces.
+func TestPaddingCarriesNoRepeatingPattern(t *testing.T) {
+	t.Parallel()
+	o := testObfuscator("server password")
+	packet := []byte{0x11, 0x22, 0x33, 0x44}
+
+	out := make([]byte, 2048)
+	periodic := 0
+	trials := 0
+	for range 200 {
+		n := o.Obfuscate(packet, out)
+		tail := out[o.Overhead()+len(packet) : n]
+		if len(tail) < 96 {
+			continue
+		}
+		trials++
+		// The keystream cycles every 32 bytes, so scrambled zeroes would
+		// repeat exactly at that stride.
+		if bytes.Equal(tail[:32], tail[32:64]) && bytes.Equal(tail[32:64], tail[64:96]) {
+			periodic++
+		}
+	}
+	if trials == 0 {
+		t.Fatal("no packet was padded enough to check")
+	}
+	if periodic > 0 {
+		t.Fatalf("%d of %d padded packets repeat every 32 bytes; the padding is the keystream", periodic, trials)
+	}
+}
+
+// Chaff is a datagram that exists only to be seen. It has to survive the wire
+// and then be dropped, without waking anything above the transport.
+func TestChaffIsCarriedAndDropped(t *testing.T) {
+	t.Parallel()
+	o := testObfuscator("server password")
+	out := make([]byte, 2048)
+
+	n := o.Obfuscate(nil, out)
+	if n <= o.Overhead() {
+		t.Fatalf("chaff datagram is %d bytes; it has to look like a packet", n)
+	}
+	if got := o.Deobfuscate(out[:n], make([]byte, 2048)); got != 0 {
+		t.Fatalf("chaff yielded %d bytes; it must be dropped", got)
+	}
+}
+
+// A full-size packet must not be padded past what the path carries.
+func TestObfuscatorLeavesAFullPacketAlone(t *testing.T) {
+	t.Parallel()
+	o := testObfuscator("server password")
+	full := bytes.Repeat([]byte{0x7f}, QUICPacketSize)
+
+	out := make([]byte, 4096)
+	for range 50 {
+		n := o.Obfuscate(full, out)
+		if n > QUICPacketSize+salamanderHeaderLen {
+			t.Fatalf("a full packet left as %d bytes, past the budget", n)
+		}
+	}
+}

@@ -77,9 +77,8 @@ func dialQUIC(
 	// Every datagram is scrambled under a key both ends reach from the
 	// password, so nothing on the way can tell this is QUIC at all
 	// (relayproto.Salamander). QUIC never sees the socket itself.
-	transport := &quic.Transport{
-		Conn: relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(credential)),
-	}
+	packets := relayproto.ObfuscatePacketConn(socket, relayproto.NewObfuscator(credential))
+	transport := &quic.Transport{Conn: packets}
 	conn, err := transport.Dial(ctx, remote, config, quicConfig())
 	if err != nil {
 		_ = transport.Close()
@@ -101,7 +100,19 @@ func dialQUIC(
 		_ = socket.Close()
 		return nil, fmt.Errorf("QUIC relay handshake failed: %w", err)
 	}
-	return &quicStream{Stream: stream, conn: conn, transport: transport, socket: socket}, nil
+	// Chaff runs for the life of the tunnel: it is what keeps the rate from
+	// being a metronome and silence from looking like silence
+	// (relayproto.Salamander). It never delays a real packet - it only adds.
+	chaffCtx, stopChaff := context.WithCancel(context.WithoutCancel(ctx))
+	go packets.SendChaff(chaffCtx, remote)
+
+	return &quicStream{
+		Stream:    stream,
+		conn:      conn,
+		transport: transport,
+		socket:    socket,
+		stopChaff: stopChaff,
+	}, nil
 }
 
 // quicTarget turns the relay address into a UDP target and the name to verify.
@@ -126,6 +137,7 @@ type quicStream struct {
 	conn      *quic.Conn
 	transport *quic.Transport
 	socket    io.Closer
+	stopChaff context.CancelFunc
 }
 
 // quicConfig is the tuning both ends share. The packet size is held down and
@@ -146,6 +158,7 @@ func (s *quicStream) LocalAddr() net.Addr  { return s.conn.LocalAddr() }
 func (s *quicStream) RemoteAddr() net.Addr { return s.conn.RemoteAddr() }
 
 func (s *quicStream) Close() error {
+	s.stopChaff()
 	err := errors.Join(s.Stream.Close(), s.conn.CloseWithError(0, ""))
 	// The socket belongs to this tunnel alone, so it goes with it. Leaving it
 	// open would leak a file descriptor per reconnect, and reconnects are the
