@@ -98,6 +98,16 @@ func (s *Session) stalledUplink() bool {
 	return s != nil && s.packets != nil && s.packets.StalledUplink()
 }
 
+// vitals reads the instrument panel of this session's connection (vitals.go).
+// The direct road has no wrapper of its own and therefore no panel, which is
+// what the second return value says.
+func (s *Session) vitals() (Vitals, bool) {
+	if s == nil || s.packets == nil {
+		return Vitals{}, false
+	}
+	return s.packets.Vitals(), true
+}
+
 // transportError is what the connection itself reported, which is usually the
 // only account of why a session ended: gumble's own reason is empty unless the
 // server sent one.

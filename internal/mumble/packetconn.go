@@ -79,6 +79,26 @@ type packetConn struct {
 	stalled atomic.Bool
 	// writeTimeout is packetWriteTimeout; tests shorten it.
 	writeTimeout time.Duration
+
+	// The rest is the instrument panel (vitals.go). None of it changes what
+	// the connection does; all of it exists because a session that dies
+	// without an account of itself cannot be diagnosed from a journal.
+	//
+	// created dates the silence before the first byte ever arrives.
+	created time.Time
+	// sent and received are plaintext Mumble bytes.
+	sent, received atomic.Int64
+	// outbound and inbound tally packets by type. inbound is fed by framer,
+	// which only the read loop touches.
+	outbound, inbound tally
+	framer            inboundFramer
+	// writeStarted holds the Unix nanoseconds of the write in flight, or 0
+	// when none is. It is the reading that names a block while it is still
+	// happening, rather than six seconds later when the deadline fires.
+	writeStarted atomic.Int64
+	// slowestWrite is the longest completed write, in nanoseconds. Only the
+	// writer goroutine stores it, under the same mutex every write holds.
+	slowestWrite atomic.Int64
 }
 
 // newPacketConn wraps conn. The returned connection is only safe for the
@@ -90,6 +110,7 @@ func newPacketConn(conn net.Conn) *packetConn {
 		Conn:         conn,
 		buf:          make([]byte, 0, packetBufferBytes),
 		writeTimeout: packetWriteTimeout,
+		created:      time.Now(),
 	}
 }
 
@@ -100,6 +121,8 @@ func (c *packetConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())
+		c.received.Add(int64(n))
+		c.framer.consume(p[:n], &c.inbound)
 	}
 	if err != nil {
 		c.note(err)
@@ -148,6 +171,25 @@ func (c *packetConn) SilentFor(since time.Time) time.Duration {
 	return time.Since(since)
 }
 
+// Vitals reads the instrument panel without disturbing the connection
+// (vitals.go). It is safe to call from any goroutine while the session runs.
+func (c *packetConn) Vitals() Vitals {
+	v := Vitals{
+		Sent:     c.sent.Load(),
+		Received: c.received.Load(),
+		Out:      c.outbound.String(),
+		In:       c.inbound.String(),
+		Silent:   c.SilentFor(c.created),
+		Slowest:  time.Duration(c.slowestWrite.Load()),
+		Stalled:  c.stalled.Load(),
+		Err:      c.TransportError(),
+	}
+	if started := c.writeStarted.Load(); started != 0 {
+		v.Blocked = time.Since(time.Unix(0, started))
+	}
+	return v
+}
+
 // writeWithDeadline bounds one write and diagnoses the stall.
 //
 // Failing the write is not enough on its own: the send path only logs a failed
@@ -156,12 +198,25 @@ func (c *packetConn) SilentFor(since time.Time) time.Duration {
 // connection is what turns the stall into a drop the reconnect loop can act on
 // and the user can be told about.
 func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
-	if err := c.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
-		// A connection that cannot carry a deadline still has to carry voice.
-		return c.Conn.Write(p)
+	if len(p) >= 2 {
+		c.outbound.add(uint16(p[0])<<8 | uint16(p[1]))
 	}
+	// A connection that cannot carry a deadline still has to carry voice, so a
+	// failure here is not a failure of the write. It does mean the stall below
+	// cannot be diagnosed on this connection, which is why it is recorded.
+	deadlined := c.SetWriteDeadline(time.Now().Add(c.writeTimeout)) == nil
+
+	started := time.Now()
+	c.writeStarted.Store(started.UnixNano())
 	n, err := c.Conn.Write(p)
-	if !timedOut(err) {
+	c.writeStarted.Store(0)
+	took := time.Since(started)
+	c.sent.Add(int64(n))
+	if int64(took) > c.slowestWrite.Load() {
+		c.slowestWrite.Store(int64(took))
+	}
+
+	if !deadlined || !hitDeadline(err, took, c.writeTimeout) {
 		return n, err
 	}
 	c.note(err)
@@ -171,6 +226,28 @@ func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
 	}
 	_ = c.Close()
 	return n, err
+}
+
+// hitDeadline reports whether a failed write ran into the deadline we set on
+// it. The clock decides, not the words the transport chose.
+//
+// Asking the error was wrong twice, and the second time cost a user his
+// evening. A raw socket says os.ErrDeadlineExceeded. A WebSocket says
+// context.DeadlineExceeded - but only when the deadline passes between writes.
+// When it passes during one, which is the whole point of a stall,
+// coder/websocket cancels the connection's write context instead of the write
+// (netconn.go), so the error is context.Canceled: not a timeout by any name,
+// indistinguishable from an ordinary shutdown, and permanent - that context is
+// never renewed, so every later write on that connection fails the same way.
+// The user hears everybody and nobody hears the user.
+//
+// We set the deadline, so we know what it was. A write that failed after
+// spending it is a write that hit it, whatever it is called.
+func hitDeadline(err error, took, budget time.Duration) bool {
+	if err == nil {
+		return false
+	}
+	return timedOut(err) || (budget > 0 && took >= budget)
 }
 
 // timedOut reports whether a write hit its deadline, whichever transport is

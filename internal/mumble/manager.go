@@ -445,7 +445,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
-		event, stopped, silent := m.waitSession(session.client, c.key, transport, dropped, stop)
+		event, stopped, silent := m.waitSession(session, c.key, transport, dropped, stop)
 		m.clearSession()
 		if stopped {
 			_ = session.Disconnect()
@@ -470,6 +470,18 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			reason, terminal = reasonNoRoundTrip, false
 			note = reasonNoRoundTrip
 		case session.stalledUplink():
+			// The road opened, carried the login, and then stopped taking
+			// anything of ours while the server kept talking. Reconnecting on
+			// it produces the same session again, which is what a user lived
+			// through: eleven of them in four minutes, each about ten seconds
+			// long, every one ending the same way.
+			//
+			// One stall is enough to move on. Being wrong about a passing
+			// hiccup costs a road change, and the road that follows has to
+			// prove itself anyway; being right saves the loop.
+			m.transports.failed(c.key)
+			m.log.Info("this road stopped carrying our traffic, trying another",
+				"transport", string(transport))
 			reason = reasonUplinkStalled
 			note = reasonUplinkStalled
 		}
@@ -485,6 +497,12 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		lost := []any{"reason", RedactServer(reason, c.address), "transport", string(transport)}
 		if err := session.transportError(); err != nil {
 			lost = append(lost, "error", RedactServer(err.Error(), c.address))
+		}
+		// The last reading of the panel, on the one line every lost session
+		// writes. A session that dies between two ticks would otherwise leave
+		// no account of itself at all.
+		if vitals, ok := session.vitals(); ok {
+			lost = append(lost, "vitals", vitals.redact(c.address))
 		}
 		m.log.Warn("connection lost", lost...)
 		reconnecting = true
@@ -502,12 +520,13 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 // It also holds the round-trip gate: silent reports a session that never
 // proved our packets reach the server (roundTripGrace).
 func (m *Manager) waitSession(
-	client *gumble.Client,
+	session *Session,
 	address string,
 	transport Transport,
 	dropped <-chan *gumble.DisconnectEvent,
 	stop <-chan struct{},
 ) (event *gumble.DisconnectEvent, stopped, silent bool) {
+	client := session.client
 	interval := m.statsInterval
 	if interval <= 0 {
 		interval = statsPollInterval
@@ -544,8 +563,29 @@ func (m *Manager) waitSession(
 			}
 		case <-ticker.C:
 			sample(client)
+			m.logVitals(session, transport)
 		}
 	}
+}
+
+// logVitals writes one line describing what the connection has actually
+// carried (vitals.go). It runs on the session ticker, so a session that fails
+// leaves a trail rather than a single "connection lost".
+//
+// Debug, and the client logs at debug: this is written to be read later, out
+// of a diagnostics archive, by someone asking which of three things happened -
+// a write of ours that never returned, a write that returned while nothing
+// crossed the network, or no write attempted at all. Nothing here can name the
+// server or the user; the tallies are packet types and the counters are bytes.
+func (m *Manager) logVitals(session *Session, transport Transport) {
+	vitals, ok := session.vitals()
+	if !ok {
+		return
+	}
+	// The session knows the address it dialled, which is what the redaction
+	// needs; address here is the caller's key for the road memory, not a
+	// spelling to redact against.
+	m.log.Debug("session vitals", "transport", string(transport), "vitals", vitals.redact(session.addr))
 }
 
 // requestSelfStats samples the round-trip time the client measured itself and

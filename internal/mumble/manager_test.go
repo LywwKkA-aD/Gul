@@ -137,6 +137,38 @@ func TestManagerGivesUpOnASessionThatCarriesNothingBack(t *testing.T) {
 	}
 }
 
+// A road that opens, carries the login and then stops taking anything of ours
+// has to lose its place, or the client reconnects onto it forever.
+//
+// This is what a user lived through on 2026-08-27: eleven sessions in four
+// minutes, each about ten seconds long, every one on the same WebSocket road,
+// every one ending with the relay having counted 2863 bytes from him - the
+// login and not one byte more - while it sent him 160 KB back. The road
+// rotation never ran, because it only ran when a road failed to open, and this
+// one opened perfectly every time.
+func TestManagerLeavesARoadWhoseUplinkStalled(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+
+	roads := make(chan Transport, 4)
+	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
+		roads <- cfg.Transport
+		packets := newPacketConn(&discardConn{})
+		packets.stalled.Store(true)
+		// The drop the stall produces: the write kills the connection, and
+		// gumble reports the session gone with nothing to say about why.
+		go hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError})
+		return &Session{packets: packets}, nil
+	}
+
+	m.Connect(testRelayAddress, "gul", "secret")
+
+	first, second := <-roads, <-roads
+	if first == second {
+		t.Fatalf("both attempts took the %q road; a stalled uplink must cost the road its place", first)
+	}
+}
+
 // The gate must not fire on a link that answers, or every ordinary session
 // would be torn down on a timer.
 func TestManagerKeepsASessionThatAnswers(t *testing.T) {

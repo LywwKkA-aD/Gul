@@ -205,6 +205,10 @@ type stallingConn struct {
 	mu       sync.Mutex
 	deadline time.Time
 	writes   int
+	// failWith is what the socket says when the deadline runs out. Every
+	// transport says it differently, and the differences are the bug this
+	// harness exists to reproduce; nil means what a raw socket says.
+	failWith error
 }
 
 func (c *stallingConn) SetWriteDeadline(t time.Time) error {
@@ -223,7 +227,13 @@ func (c *stallingConn) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	time.Sleep(time.Until(deadline))
-	return 0, os.ErrDeadlineExceeded
+	c.mu.Lock()
+	failure := c.failWith
+	c.mu.Unlock()
+	if failure == nil {
+		failure = os.ErrDeadlineExceeded
+	}
+	return 0, failure
 }
 
 func (c *stallingConn) closedNow() bool {
@@ -258,6 +268,51 @@ func TestPacketConnDiagnosesAStalledUplink(t *testing.T) {
 	// frame and carries on. Closing is what turns the stall into a drop.
 	if !inner.closedNow() {
 		t.Fatal("the connection was left open, so the session would linger")
+	}
+}
+
+// The stall has to be recognised on every road, and each road names it
+// differently.
+//
+// This is the failure that cost a user his evening. On the WebSocket road the
+// deadline fires inside the write, and coder/websocket answers by cancelling
+// the connection's write context rather than the write (netconn.go), so the
+// error is context.Canceled - not a deadline by any name, and never renewed:
+// from that moment nothing this client says leaves the machine, while the
+// server keeps talking and the window still says "connected". The relay
+// counted the same 2863 bytes from him in session after session, which is the
+// login and not one byte more.
+//
+// Matching on the error was wrong twice. The rule under test is the clock:
+// we set the deadline, so a write that failed after spending it hit it.
+func TestPacketConnDiagnosesAStalledUplinkOnEveryRoad(t *testing.T) {
+	t.Parallel()
+	for name, failure := range map[string]error{
+		"a raw socket": os.ErrDeadlineExceeded,
+		"a WebSocket whose deadline passed between writes": fmt.Errorf(
+			"failed to write: %w", context.DeadlineExceeded),
+		"a WebSocket whose deadline passed during one": fmt.Errorf(
+			"failed to write msg: failed to write frame: %w", context.Canceled),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inner := &stallingConn{failWith: failure}
+			conn := newPacketConn(inner)
+			conn.writeTimeout = 40 * time.Millisecond
+			conn.lastRead.Store(time.Now().UnixNano())
+
+			_, err := conn.Write(mumblePacket(1, []byte("voice")))
+
+			if !errors.Is(err, ErrUplinkStalled) {
+				t.Fatalf("write error = %v, want ErrUplinkStalled", err)
+			}
+			if !conn.StalledUplink() {
+				t.Fatal("the stall was not latched for the disconnect reason")
+			}
+			if !inner.closedNow() {
+				t.Fatal("the connection was left open, so nothing this client says would ever leave again")
+			}
+		})
 	}
 }
 
