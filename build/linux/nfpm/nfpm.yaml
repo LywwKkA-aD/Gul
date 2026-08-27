@@ -6,7 +6,7 @@
 name: "gul"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.5.1~alpha1"
+version: "0.5.2~alpha1"
 section: "net"
 priority: "optional"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>

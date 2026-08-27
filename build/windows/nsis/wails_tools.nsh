@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "Gul"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.5.1"
+    !define INFO_PRODUCTVERSION "0.5.2"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2026 Gul contributors"
