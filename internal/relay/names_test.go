@@ -153,3 +153,73 @@ func TestTheSessionLogNamesTheContract(t *testing.T) {
 		t.Fatalf("the log carried the derived name itself: %s", rendered)
 	}
 }
+
+// Every refusal names its shape in the journal, and none of them names the
+// value.
+//
+// This was a real gap, found while diagnosing a user whose client reported
+// "wrong address or password" while the relay's journal was empty for those
+// seconds. Seven refusal paths answered with the cover site and logged nothing,
+// so a request arriving mangled - a stripped Sec-WebSocket-Protocol header, a
+// rewritten Origin, a proxy changing the method - was indistinguishable from a
+// request that never arrived at all.
+func TestEveryRefusalSaysWhy(t *testing.T) {
+	t.Parallel()
+	names := relayproto.NamesFor(testCredential(defaultTestSecret))
+	tests := map[string]struct {
+		want    string
+		prepare func(*http.Request)
+	}{
+		refusedPath: {refusedPath, func(r *http.Request) {
+			r.URL.Path = "/somewhere-else"
+		}},
+		refusedQuery: {refusedQuery, func(r *http.Request) {
+			r.URL.RawQuery = "a=1"
+		}},
+		refusedHost: {refusedHost, func(r *http.Request) {
+			r.Host = "somebody.else.test"
+		}},
+		refusedMethod: {refusedMethod, func(r *http.Request) {
+			r.Method = http.MethodPost
+		}},
+		refusedBody: {refusedBody, func(r *http.Request) {
+			r.ContentLength = 7
+		}},
+		refusedOrigin: {refusedOrigin, func(r *http.Request) {
+			r.Header.Set("Origin", "https://somebody.else.test")
+		}},
+		refusedSubprotocol: {refusedSubprotocol, func(r *http.Request) {
+			r.Header.Set("Sec-WebSocket-Protocol", "something-we-do-not-answer-on")
+		}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			logger, records := newRecordingLogger()
+			cfg := baseConfig(defaultTestSecret)
+			cfg.Logger = logger
+			h := mustHandler(t, cfg)
+
+			request := httptest.NewRequest(http.MethodGet, "https://"+testHost+names.Path, nil)
+			request.Host = testHost
+			request.RemoteAddr = "192.0.2.10:12345"
+			request.Header = bearerHeader(defaultTestSecret)
+			request.Header.Set("Sec-WebSocket-Protocol", names.Shaped)
+			tc.prepare(request)
+
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want the same 404 every refusal gives", response.Code)
+			}
+			attrs := recordAttrs(records.await(t, "relay request refused"))
+			if attrs["reason"] != tc.want {
+				t.Fatalf("logged reason = %q, want %q", attrs["reason"], tc.want)
+			}
+			// The names come from the password. A journal is not a place for them.
+			if rendered := records.rendered(); strings.Contains(rendered, names.Shaped) ||
+				strings.Contains(rendered, names.Path) {
+				t.Fatalf("the log carried a derived name: %s", rendered)
+			}
+		})
+	}
+}

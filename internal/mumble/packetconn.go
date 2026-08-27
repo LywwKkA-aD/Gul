@@ -72,6 +72,8 @@ type packetConn struct {
 	// nanoseconds. Reads and writes run on different goroutines, so it is
 	// read without the mutex the writer holds.
 	lastRead atomic.Int64
+	// transportErr holds the first error the socket reported, in an errBox.
+	transportErr atomic.Value
 	// stalled latches the one-directional failure above.
 	stalled atomic.Bool
 	// writeTimeout is packetWriteTimeout; tests shorten it.
@@ -98,8 +100,37 @@ func (c *packetConn) Read(p []byte) (int, error) {
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())
 	}
+	if err != nil {
+		c.note(err)
+	}
 	return n, err
 }
+
+// note keeps the first error the transport saw.
+//
+// gumble reports a lost connection with an empty reason unless the server sent
+// one, so a session that dies of a network fault reaches the log as bare
+// "connection lost" - which is what a real user's diagnostics said, and it said
+// nothing at all. The error is down here; keeping it costs one store and turns
+// that line into a diagnosis. The first is kept rather than the last because
+// everything after it is a consequence.
+func (c *packetConn) note(err error) {
+	if err != nil {
+		c.transportErr.CompareAndSwap(nil, errBox{err})
+	}
+}
+
+// TransportError is the first error the connection itself reported, or nil.
+func (c *packetConn) TransportError() error {
+	if box, ok := c.transportErr.Load().(errBox); ok {
+		return box.err
+	}
+	return nil
+}
+
+// errBox makes an error storable in an atomic.Value, which refuses mixed
+// concrete types.
+type errBox struct{ err error }
 
 // StalledUplink reports whether this connection died because our own traffic
 // stopped getting through while the server's kept arriving.
@@ -190,6 +221,7 @@ func (c *packetConn) Write(p []byte) (int, error) {
 // fail latches err and drops the connection: a stream whose framing cannot be
 // trusted must not keep carrying packets.
 func (c *packetConn) fail(err error) error {
+	c.note(err)
 	c.err = err
 	_ = c.Close()
 	return err

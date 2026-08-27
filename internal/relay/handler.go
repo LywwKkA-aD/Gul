@@ -23,6 +23,26 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
+// Why a request was turned away, as it appears in the log. The wire answers
+// all of them identically - that is the whole point of the cover site - but the
+// journal has to tell them apart, because these are the shapes a mangled
+// request arrives in.
+//
+// A client that reaches this handler already knows the derived path, so it
+// already knows the password: this is not a place scanners reach, and every
+// line here is worth reading. Only the shape is recorded, never the value - the
+// path and the subprotocol are derived from the password and have no business
+// in a journal.
+const (
+	refusedPath        = "path"
+	refusedQuery       = "query"
+	refusedHost        = "host"
+	refusedMethod      = "method"
+	refusedBody        = "body"
+	refusedOrigin      = "origin"
+	refusedSubprotocol = "subprotocol"
+)
+
 // contractShaped is what the session log calls the one tunnel contract left.
 // The name it is negotiated under is derived from the password and never
 // leaves the process; the label is what an operator reads. It stays a named
@@ -241,19 +261,19 @@ func (h *Handler) Cover() http.Handler { return h.cover }
 // software outright (cover.go).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.paths[r.URL.Path] {
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedPath)
 		return
 	}
 	if r.URL.RawQuery != "" {
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedQuery)
 		return
 	}
 	if !strings.EqualFold(requestHost(r.Host), h.expectedHost) {
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedHost)
 		return
 	}
 	if r.Method != http.MethodGet {
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedMethod)
 		return
 	}
 	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
@@ -262,11 +282,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// authentication. HTTP/1.1 is enforced by the serving binary.
 		w.Header().Set("Connection", "close")
 		r.Close = true
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedBody)
 		return
 	}
 	if !sameOriginOrNative(r.Header.Get("Origin"), h.expectedHost) {
-		h.cover.NotFound(w, r)
+		h.refuse(w, r, refusedOrigin)
 		return
 	}
 	// sourceIP identifies one client and is only ever logged. Every defense
@@ -312,7 +332,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	subprotocol, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
 	if !ok {
-		h.cover.NotFound(w, r)
+		// Reaching here means the path was right, so the credential was too:
+		// this is a request that knows where the tunnel is and still did not ask
+		// for it by name. A stripped or rewritten Sec-WebSocket-Protocol header
+		// looks exactly like this.
+		h.refuse(w, r, refusedSubprotocol)
 		return
 	}
 	release, scope, ok := h.acquire(sourceBlock)
@@ -617,6 +641,14 @@ func (h *Handler) TunnelPaths() []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// refuse answers the way everything else does - the cover site's 404, byte for
+// byte - and records why in the journal, where it costs nothing and is the only
+// account anybody gets.
+func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, reason string) {
+	h.logger.Warn("relay request refused", "source", remoteIP(r.RemoteAddr), "reason", reason)
+	h.cover.NotFound(w, r)
 }
 
 // matchSubprotocol returns the offered subprotocol this relay accepts. The

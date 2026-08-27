@@ -98,6 +98,16 @@ func (s *Session) stalledUplink() bool {
 	return s != nil && s.packets != nil && s.packets.StalledUplink()
 }
 
+// transportError is what the connection itself reported, which is usually the
+// only account of why a session ended: gumble's own reason is empty unless the
+// server sent one.
+func (s *Session) transportError() error {
+	if s == nil || s.packets == nil {
+		return nil
+	}
+	return s.packets.TransportError()
+}
+
 // Dial opens a session with plain logging hooks. It is the M0 entry point kept
 // for the dev stand and the live smoke test; the Manager uses dial directly so
 // it can route events into snapshots and callbacks.

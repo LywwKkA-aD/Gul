@@ -479,7 +479,14 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			})
 			return
 		}
-		m.log.Warn("connection lost", "reason", RedactServer(reason, c.address))
+		// The transport's own error, where gumble had none of its own. Without
+		// it a network fault reaches the log as a bare "connection lost", which
+		// is exactly what a user's diagnostics said while telling us nothing.
+		lost := []any{"reason", RedactServer(reason, c.address), "transport", string(transport)}
+		if err := session.transportError(); err != nil {
+			lost = append(lost, "error", RedactServer(err.Error(), c.address))
+		}
+		m.log.Warn("connection lost", lost...)
 		reconnecting = true
 		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address, Error: note})
 		if !sleepOrStop(m.backoffFn(attempt), stop) {
