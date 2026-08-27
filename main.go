@@ -283,12 +283,21 @@ func main() {
 		URL:              "/",
 	})
 
-	// macOS window conventions for a chat client: the close button hides the
-	// window while the app (and the connection) keeps living in the dock.
-	// Wails' built-in reopen handler shows hidden windows on a dock click;
-	// activation via Cmd+Tab is covered here. Cmd+Q terminates natively and
-	// never passes through WindowClosing, so it is not affected.
-	if runtime.GOOS == "darwin" {
+	// What the close button does, and it differs per platform because what is
+	// behind the window differs per platform.
+	//
+	// Wails leaves this to us entirely: its built-in handler destroys the
+	// window and drops it from the manager, and nothing anywhere checks
+	// whether any windows are left (window_manager.go, Remove). Closing the
+	// last window does not end the application on any platform.
+	switch runtime.GOOS {
+	case "darwin":
+		// The Mac convention for a chat client: the close button hides the
+		// window while the app - and the connection - keeps living in the menu
+		// bar. Wails' built-in reopen handler shows hidden windows on a dock
+		// click; activation via Cmd+Tab is covered below. Cmd+Q terminates
+		// natively and never passes through WindowClosing, so it is not
+		// affected.
 		win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 			e.Cancel()
 			win.Hide()
@@ -300,7 +309,29 @@ func main() {
 				win.Show()
 			}
 		})
+	case "linux":
+		// Closing ends the application, because on Linux the tray it would
+		// otherwise retreat into is not guaranteed to exist.
+		//
+		// The tray is a StatusNotifierItem, which needs a host on the session
+		// bus. A stock GNOME session has none - and GNOME is Ubuntu's default,
+		// which is exactly what the .deb targets - so the icon simply never
+		// appears and no error says so. Leaving the process alive there would
+		// be a voice client with no window, no icon, and the microphone still
+		// open: nothing left to notice it by, and nothing left to close it
+		// with short of a terminal.
+		//
+		// Not cancelled and not called inline: the window closes the way it
+		// normally does, and the shutdown runs once this handler has returned,
+		// so quitting never reenters the close it was triggered by.
+		win.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+			go app.Quit()
+		})
 	}
+	// Windows keeps the third behaviour, which is Wails' own: the window is
+	// destroyed and the app goes on living in the notification area. That area
+	// is part of the OS and always there, so unlike Linux there is nothing to
+	// fall back from.
 
 	setupTray(app, coreApp, win)
 	watchWindowAttention(coreApp, win)
