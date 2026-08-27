@@ -107,6 +107,9 @@ func (m *Manager) SetSelfAudio(muted, deafened bool) {
 	m.mu.Lock()
 	m.selfMuted, m.selfDeafened, m.hasSelfAudio = muted, deafened, true
 	m.selfAudioDirty = true
+	// A fresh intent gets its own retry: the allowance belongs to the state the
+	// user asked for, not to the connection.
+	m.selfAudioRetried = false
 	m.mu.Unlock()
 	m.wakeSelfAudio()
 }
@@ -145,12 +148,33 @@ func (m *Manager) SelfAudioSettled(muted, deafened bool) bool {
 	}
 	if muted == m.selfAudioSent.muted && deafened == m.selfAudioSent.deafened {
 		m.selfAudioAwaiting = false
+		m.selfAudioRetried = false
 		return true
 	}
-	if time.Since(m.selfAudioSentAt) >= selfAudioEchoWait {
-		m.selfAudioAwaiting = false
+	if time.Since(m.selfAudioSentAt) < selfAudioEchoWait {
+		return false
+	}
+
+	// The wait is over and the room still shows something else, so our packet
+	// never arrived. The server drops a command message it considers too fast
+	// without a word, and other command messages - joining a channel, sending
+	// chat - spend from the same allowance, so staying inside our own budget is
+	// not a guarantee.
+	//
+	// Send it once more rather than adopting straight away. Adopting here is
+	// what "I pressed it and nothing happened" is made of: the click is
+	// discarded in silence and the button springs back. One retry heals the
+	// ordinary case - a single lost packet - and stops there, because a server
+	// that keeps refusing is a server that means it, and arguing with it
+	// forever would be worse than losing the click.
+	m.selfAudioAwaiting = false
+	if m.selfAudioRetried {
+		m.selfAudioRetried = false
 		return true
 	}
+	m.selfAudioRetried = true
+	m.selfAudioDirty = true
+	go m.wakeSelfAudio()
 	return false
 }
 

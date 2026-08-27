@@ -179,12 +179,22 @@ func (a *App) applySelfAudio(
 // it is what the server does anyway: murmur clears self_deaf when self_mute
 // goes off.
 func (a *App) SetMute(muted bool) {
-	a.applySelfAudio(
-		selfAudioOptions{cue: true, toServer: true},
-		func(cur domain.SelfAudioState) domain.SelfAudioState {
-			return domain.SelfAudioState{Muted: muted, Deafened: cur.Deafened && muted}
-		},
-	)
+	a.applySelfAudio(selfAudioOptions{cue: true, toServer: true}, muteRule(muted))
+}
+
+// muteRule and deafenRule are the two transitions, each written once. The
+// setter applies one to a value it was given; the toggle applies the same one
+// to the opposite of whatever it finds.
+func muteRule(muted bool) func(domain.SelfAudioState) domain.SelfAudioState {
+	return func(cur domain.SelfAudioState) domain.SelfAudioState {
+		return domain.SelfAudioState{Muted: muted, Deafened: cur.Deafened && muted}
+	}
+}
+
+func deafenRule(deafened bool) func(domain.SelfAudioState) domain.SelfAudioState {
+	return func(domain.SelfAudioState) domain.SelfAudioState {
+		return domain.SelfAudioState{Muted: deafened, Deafened: deafened}
+	}
 }
 
 // ToggleMute and ToggleDeafen flip the state from inside the transition.
@@ -201,10 +211,7 @@ func (a *App) SetMute(muted bool) {
 func (a *App) ToggleMute() {
 	a.applySelfAudio(
 		selfAudioOptions{cue: true, toServer: true},
-		func(cur domain.SelfAudioState) domain.SelfAudioState {
-			muted := !cur.Muted
-			return domain.SelfAudioState{Muted: muted, Deafened: cur.Deafened && muted}
-		},
+		func(cur domain.SelfAudioState) domain.SelfAudioState { return muteRule(!cur.Muted)(cur) },
 	)
 }
 
@@ -213,10 +220,7 @@ func (a *App) ToggleMute() {
 func (a *App) ToggleDeafen() {
 	a.applySelfAudio(
 		selfAudioOptions{toServer: true},
-		func(cur domain.SelfAudioState) domain.SelfAudioState {
-			deafened := !cur.Deafened
-			return domain.SelfAudioState{Muted: deafened, Deafened: deafened}
-		},
+		func(cur domain.SelfAudioState) domain.SelfAudioState { return deafenRule(!cur.Deafened)(cur) },
 	)
 }
 
@@ -231,12 +235,7 @@ func (a *App) ToggleDeafen() {
 // microphone, not the monitor. The implied mute is part of one gesture and
 // does not beep on its own either.
 func (a *App) SetDeafen(deafened bool) {
-	a.applySelfAudio(
-		selfAudioOptions{toServer: true},
-		func(domain.SelfAudioState) domain.SelfAudioState {
-			return domain.SelfAudioState{Muted: deafened, Deafened: deafened}
-		},
-	)
+	a.applySelfAudio(selfAudioOptions{toServer: true}, deafenRule(deafened))
 }
 
 // reconcileSelfAudio adopts the state the server reports for our own row.

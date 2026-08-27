@@ -273,9 +273,16 @@ func TestSelfAudioIsNotSettledUntilTheRoomEchoesItBack(t *testing.T) {
 	}
 }
 
-// Waiting for an echo cannot be unbounded: a packet the server drops would
-// otherwise leave the room's opinion ignored for the rest of the session.
-func TestSelfAudioStopsWaitingForAnEchoThatNeverComes(t *testing.T) {
+// A packet the server never answers is sent once more before the room wins.
+//
+// Adopting straight away is what "I pressed it and nothing happened" is made
+// of: the click is discarded in silence and the button springs back. Murmur
+// drops a command message it considers too fast without a word, and joins and
+// chat messages spend from the same allowance, so our own budget is not a
+// guarantee. One retry heals the ordinary case and stops there - a server that
+// keeps refusing means it, and arguing forever would be worse than losing one
+// click.
+func TestAnUnansweredPairIsSentAgainBeforeTheRoomWins(t *testing.T) {
 	t.Parallel()
 	m, rec := newSelfAudioManager(t)
 	close(rec.release)
@@ -291,11 +298,28 @@ func TestSelfAudioStopsWaitingForAnEchoThatNeverComes(t *testing.T) {
 		t.Fatal("the disagreeing tree was accepted immediately")
 	}
 
+	// Nothing came back. The wait runs out.
+	m.mu.Lock()
+	m.selfAudioSentAt = m.selfAudioSentAt.Add(-2 * selfAudioEchoWait)
+	m.mu.Unlock()
+
+	if m.SelfAudioSettled(false, false) {
+		t.Fatal("the room won on the first silence, discarding the click without a second try")
+	}
+	waitFor(t, "the intent to be sent again", func() bool {
+		return len(rec.snapshot()) == 2
+	})
+	if got := rec.snapshot()[1]; got != (selfAudioPair{true, true}) {
+		t.Fatalf("the retry carried %+v, want the intent {true true}", got)
+	}
+
+	// Still nothing. Now the room is the authority, or a packet the server
+	// really refuses would leave it unheard for the rest of the session.
 	m.mu.Lock()
 	m.selfAudioSentAt = m.selfAudioSentAt.Add(-2 * selfAudioEchoWait)
 	m.mu.Unlock()
 
 	if !m.SelfAudioSettled(false, false) {
-		t.Fatal("the wait for an echo never expires: the room can no longer be heard")
+		t.Fatal("the wait never ends: the room can no longer be heard at all")
 	}
 }

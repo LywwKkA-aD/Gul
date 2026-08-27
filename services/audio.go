@@ -30,20 +30,16 @@ func (s *AudioService) PTTState() domain.PTTState {
 	return s.app.PTTState()
 }
 
-// SetMute gates the microphone.
-func (s *AudioService) SetMute(muted bool) {
-	s.app.SetMute(muted)
-}
-
-// SetDeafen silences all remote streams locally.
-func (s *AudioService) SetDeafen(deafened bool) {
-	s.app.SetDeafen(deafened)
-}
-
-// ToggleMute flips the microphone. It exists so a button never has to read the
-// state and then set its opposite: two calls from the same window reach
-// different workers with no order between them, and the flip decided outside
-// the transition is the one that collapses two clicks into one.
+// ToggleMute flips the microphone, and there is deliberately no absolute
+// setter beside it.
+//
+// A caller with a setter has to work out the new value first, which means
+// reading the old one and letting go of it - and in that gap the tray, another
+// click, or the server can move it. Wails makes the gap worse: two calls from
+// one window reach different workers with no order between them, so the
+// absolute value computed here could even arrive inverted. The flip is decided
+// inside the transition instead (internal/core/selfaudio.go), where the state
+// is already held still.
 func (s *AudioService) ToggleMute() {
 	s.app.ToggleMute()
 }

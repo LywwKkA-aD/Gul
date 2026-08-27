@@ -478,7 +478,9 @@ func TestSettingsServiceRejectsAnImpossibleCueVolume(t *testing.T) {
 }
 
 // Mute and deafen are reachable from the window and from the system tray, so
-// the service has to be a plain forward to the one place that owns the state.
+// the service has to be a plain forward to the one place that owns the state -
+// and it forwards a flip, not a value, so no caller ever has to read the state
+// and then set its opposite.
 func TestAudioServiceSelfStateDelegates(t *testing.T) {
 	t.Parallel()
 	app, voice := newAudioApp(t)
@@ -487,8 +489,8 @@ func TestAudioServiceSelfStateDelegates(t *testing.T) {
 	if got := svc.SelfState(); got.Muted || got.Deafened {
 		t.Fatalf("SelfState() = %+v, want everything on", got)
 	}
-	svc.SetMute(true)
-	svc.SetDeafen(true)
+	svc.ToggleMute()
+	svc.ToggleDeafen()
 
 	if got := svc.SelfState(); !got.Muted || !got.Deafened {
 		t.Fatalf("SelfState() = %+v, want both off", got)

@@ -133,6 +133,9 @@ type Manager struct {
 	selfAudioSent     selfAudioPair
 	selfAudioSentAt   time.Time
 	selfAudioAwaiting bool
+	// retried marks that this intent has already been sent a second time after
+	// going unanswered. One retry, then the room wins.
+	selfAudioRetried bool
 
 	closed bool
 }
