@@ -12,7 +12,8 @@
 // one place the application says which application it is. That costs the
 // automatic adaptation a macOS template image gives, so the ink comes as a
 // pair - the accent for a light panel, the same blue lifted for a dark one -
-// and the caller picks by panel.
+// and the caller picks by panel. Only Windows can actually be told about both;
+// see PanelEither.
 package tray
 
 import (
@@ -98,10 +99,11 @@ const (
 	PanelLight Panel = iota
 	PanelDark
 	// PanelEither is for a platform that keeps one image and changes the
-	// appearance underneath it. macOS is that platform: Wails' dark-mode
-	// setter there calls the same setter as the plain one
-	// (systemtray_darwin.go), so a second image only overwrites the first.
-	// This ink is a compromise chosen to clear both.
+	// appearance underneath it. macOS and Linux are both that platform: Wails'
+	// dark-mode setter on each calls the same setter as the plain one
+	// (systemtray_darwin.go, systemtray_linux.go), so a second image only
+	// overwrites the first. This ink is a compromise chosen to clear both
+	// panels. Windows is the only one that keeps two.
 	PanelEither
 )
 

@@ -419,31 +419,49 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 // setTrayIcon paints the tray.
 //
 // The icon carries the application's colour rather than being a silhouette the
-// system tints, so the panel it lands on is ours to handle. Windows and Linux
-// hold two images and pick by panel. macOS holds one - its dark-mode setter
-// calls the same setter as the plain one - so it gets the single ink chosen to
-// clear both menu bars.
+// system tints, so the panel it lands on is ours to handle - and only one
+// platform can be told about both panels.
+//
+// Windows keeps two images and picks by theme (systemtray_windows.go). macOS
+// and Linux keep one: their setDarkModeIcon calls the same setter as the plain
+// one (systemtray_darwin.go, systemtray_linux.go), so handing them a second
+// image only replaces the first. Those two get the single ink chosen to clear
+// both a near-white and a near-black panel.
 func setTrayIcon(systemTray *application.SystemTray, icon core.TrayIcon) {
 	muted := icon == core.TrayIconMicMuted
-	if runtime.GOOS == "darwin" {
-		systemTray.SetIcon(tray.Icon(tray.PanelEither, muted))
+	if runtime.GOOS == "windows" {
+		systemTray.SetIcon(tray.Icon(tray.PanelLight, muted))
+		systemTray.SetDarkModeIcon(tray.Icon(tray.PanelDark, muted))
 		return
 	}
-	systemTray.SetIcon(tray.Icon(tray.PanelLight, muted))
-	systemTray.SetDarkModeIcon(tray.Icon(tray.PanelDark, muted))
+	systemTray.SetIcon(tray.Icon(tray.PanelEither, muted))
 }
 
 // showWindow brings the window back from wherever it went: hidden by the close
 // button (macOS), minimised, or behind another application.
+//
+// The whole body is marshalled onto the main thread, and that is not belt and
+// braces. Wails hands a menu click to a fresh goroutine (menuitem.go,
+// handleClick), and while every WebviewWindow method marshals itself, App.Show
+// does not: it calls a.impl.show() straight through to [NSApp unhide:]
+// (application.go, application_darwin.go). AppKit off the main thread is
+// undefined behaviour, and the process is what pays for it.
+//
+// One hop covers everything rather than four. Nesting is safe: Wails runs the
+// function inline when it is already on the main thread
+// (App.dispatchOnMainThread), so the marshalling the window methods do inside
+// this one cannot deadlock against it.
 func showWindow(app *application.App, win *application.WebviewWindow) {
-	if runtime.GOOS == "darwin" {
-		// The window cannot come forward while the application itself is
-		// hidden (Cmd+H).
-		app.Show()
-	}
-	if win.IsMinimised() {
-		win.Restore()
-	}
-	win.Show()
-	win.Focus()
+	application.InvokeSync(func() {
+		if runtime.GOOS == "darwin" {
+			// The window cannot come forward while the application itself is
+			// hidden (Cmd+H).
+			app.Show()
+		}
+		if win.IsMinimised() {
+			win.Restore()
+		}
+		win.Show()
+		win.Focus()
+	})
 }
