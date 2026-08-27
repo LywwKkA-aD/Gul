@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -277,4 +278,29 @@ func TestQUICServerCloseReleasesThePort(t *testing.T) {
 		t.Fatalf("port still held after Close, socket leaked: %v", err)
 	}
 	_ = rebound.Close()
+}
+
+// The label an operator reads has to name the shape that is actually on the
+// wire. It did not: the QUIC road logged "shaped" from the day it was written,
+// while relayproto.Shape has only ever been applied on the WebSocket road. The
+// two roads cover sizes by different means and to different degrees, and this
+// line is what the difference is read from - journals were read through it
+// while two users' sessions were dying.
+func TestTheQUICRoadDoesNotClaimTheCellGrid(t *testing.T) {
+	t.Parallel()
+	if contractPadded == contractShaped {
+		t.Fatal("the two roads report the same shape; the label says nothing")
+	}
+	// Shape is what contractShaped means. If it ever starts being applied on
+	// the QUIC road, this test is the reminder to change the label back.
+	source, err := os.ReadFile("quic.go")
+	if err != nil {
+		t.Fatalf("read quic.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("relayproto.Shape(")) {
+		t.Fatal("the QUIC road now shapes; the contract label must say so")
+	}
+	if !bytes.Contains(source, []byte("contractPadded")) {
+		t.Fatal("the QUIC road no longer reports the padded contract")
+	}
 }

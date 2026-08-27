@@ -43,13 +43,24 @@ const (
 	refusedSubprotocol = "subprotocol"
 )
 
-// contractShaped is what the session log calls the one tunnel contract left.
-// The name it is negotiated under is derived from the password and never
-// leaves the process; the label is what an operator reads. It stays a named
-// constant rather than a literal now that there is one value, because the
-// retirement was decided by reading exactly this line, and the next one will
-// be too.
-const contractShaped = "shaped"
+// The session log names the shape each road puts on the wire. The name the
+// tunnel is negotiated under is derived from the password and never leaves the
+// process; these labels are what an operator reads, and decisions get made by
+// reading exactly this line - the retirement of the plain contract was one.
+//
+// Which is why the QUIC road spent its whole life logging the wrong one.
+// contractShaped means relayproto.Shape: every frame is one 256-byte cell.
+// Shape is applied in exactly two places, internal/relay/handler.go and
+// internal/mumble/wss.go, and neither is on the QUIC road - there the sizes
+// are covered by the Salamander obfuscator's random padding instead, which is
+// a different and weaker thing. The label said otherwise, and journals were
+// read through it while diagnosing two users whose sessions were dying.
+const (
+	// contractShaped is the cell grid: one size on the wire from the first byte.
+	contractShaped = "shaped"
+	// contractPadded is per-datagram random padding, no grid (salamander.go).
+	contractPadded = "padded"
+)
 
 const (
 	defaultAuthFailuresBeforeBan = 5
@@ -297,8 +308,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceBlock := sourceKey(sourceIP)
 	if retryAfter, banned := h.authFailures.banRemaining(sourceBlock); banned {
 		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", retryAfter)
-		h.cover.decorate(w)
-		writeRateLimited(w, r, retryAfter)
+		writeRateLimited(h.cover, w, r, retryAfter)
 		return
 	}
 	result := h.authorize(r.Header.Get("Authorization"))
@@ -313,8 +323,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", ban.retryAfter)
 			}
-			h.cover.decorate(w)
-			writeRateLimited(w, r, ban.retryAfter)
+			writeRateLimited(h.cover, w, r, ban.retryAfter)
 			return
 		}
 		// No WWW-Authenticate: it announced the software by name to anyone who
@@ -326,8 +335,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// A concurrent failed request may have activated the ban while this
 		// request was validating its credential. Recheck under the limiter lock
 		// before accepting it.
-		h.cover.decorate(w)
-		writeRateLimited(w, r, retryAfter)
+		writeRateLimited(h.cover, w, r, retryAfter)
 		return
 	}
 	subprotocol, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
@@ -342,8 +350,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	release, scope, ok := h.acquire(sourceBlock)
 	if !ok {
 		h.logger.Warn("relay capacity rejected", "source", sourceIP, "scope", scope)
-		h.cover.decorate(w)
-		writeCapacityRejected(w, capacityRetryAfter)
+		writeCapacityRejected(h.cover, w, r, capacityRetryAfter)
 		return
 	}
 	defer release()

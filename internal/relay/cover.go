@@ -114,6 +114,68 @@ func (c *coverSite) decorate(w http.ResponseWriter) {
 	w.Header().Set("Server", c.server)
 }
 
+// setETag writes the header under the spelling every other server on the web
+// uses.
+//
+// Header.Set would canonicalise it to "Etag", because Go capitalises after
+// hyphens and "ETag" has none. Nothing else emits that spelling: RFC 9110 names
+// the field ETag, nginx and Apache send ETag, and a lone "Etag" on the wire
+// says "this is a Go program" in four characters - on a host whose whole
+// purpose is to look like a stock nginx install.
+//
+// Measured against production on 2026-08-27, before this: our front page came
+// back with "Etag:" while nginx.org came back with "ETag:". The value beside it
+// was already shaped like nginx's hex(mtime)-hex(length) on purpose. The shape
+// was right and the name was wrong, and no test could see it, because every
+// test read the header map - where the key is whatever Set canonicalised it to
+// - instead of the bytes.
+//
+// Assigning the map entry directly is the documented way past the
+// canonicalisation: net/http writes back exactly the key it was given.
+func setETag(w http.ResponseWriter, value string) {
+	w.Header()["ETag"] = []string{value}
+}
+
+// Error writes the page nginx gives for a status, in the same shape as the 404
+// above.
+//
+// It exists because two of the relay's answers were leaving as Go's own:
+// http.Error writes "text/plain; charset=utf-8" and adds
+// X-Content-Type-Options: nosniff, so a host claiming to be a stock nginx
+// install answered its 429 and its 503 in a voice nothing on that host uses
+// anywhere else. Only somebody who already knows the derived path reaches
+// them - the ban counter sits behind that check - so this was never the first
+// thing an outsider saw. It was still one host with two personalities, which
+// is the thing the cover site exists to prevent.
+func (c *coverSite) Error(w http.ResponseWriter, r *http.Request, status int) {
+	c.decorate(w)
+	page := c.errorPage(status)
+	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+	w.WriteHeader(status)
+	if r != nil && r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(page)
+}
+
+// errorPage renders nginx's error body for a status. nginx builds every one of
+// them from the same template, so one renderer covers them all.
+func (c *coverSite) errorPage(status int) []byte {
+	if status == http.StatusNotFound {
+		return c.notFound
+	}
+	line := strconv.Itoa(status) + " " + http.StatusText(status)
+	return fmt.Appendf(nil, `<html>
+<head><title>%s</title></head>
+<body>
+<center><h1>%s</h1></center>
+<hr><center>%s</center>
+</body>
+</html>
+`, line, line, c.server)
+}
+
 // ServeHTTP is the site itself: a front page, and the same "not found" for
 // everything else.
 func (c *coverSite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +192,7 @@ func (c *coverSite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ETag - and no Content-Type, so those two are set here, before the
 	// conditional check, and Content-Type is set only on the body path below.
 	w.Header().Set("Last-Modified", c.modified.Format(http.TimeFormat))
-	w.Header().Set("ETag", c.indexETag)
+	setETag(w, c.indexETag)
 	// No Accept-Ranges, and ranges are not honoured: this is the `max_ranges 0`
 	// nginx personality, a real and consistent one. Advertising byte ranges
 	// while answering a Range request with the whole body - which is what

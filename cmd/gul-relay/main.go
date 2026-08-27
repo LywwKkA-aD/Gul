@@ -24,7 +24,11 @@ import (
 )
 
 const (
-	upstreamAddress = "127.0.0.1:64738"
+	// defaultUpstreamAddress is Murmur on the loopback the relay shares with
+	// it. It is a default rather than a constant because the dev stand, the
+	// live tests and any second relay all need to point somewhere else, and a
+	// value compiled into the binary means rebuilding to move it.
+	defaultUpstreamAddress = "127.0.0.1:64738"
 	// defaultListenAddress deliberately names no address family. The relay
 	// exists for networks the native Mumble port cannot cross, which includes
 	// IPv6-only ones, and a bare port binds both families.
@@ -59,6 +63,7 @@ var version = "dev"
 
 type options struct {
 	listen         string
+	upstream       string
 	expectedHost   string
 	certFile       string
 	keyFile        string
@@ -90,6 +95,7 @@ func main() {
 	opts := options{}
 	logLevel := ""
 	flag.StringVar(&opts.listen, "listen", defaultListenAddress, "TCP address for HTTPS/WSS; a bare port serves both address families")
+	flag.StringVar(&opts.upstream, "upstream", defaultUpstreamAddress, "Mumble server to carry tunnels to")
 	flag.StringVar(&opts.expectedHost, "host", "murmur.gulvox.com", "required HTTP Host")
 	flag.StringVar(&opts.certFile, "cert", "/run/relay-tls/mumble.crt", "TLS certificate chain")
 	flag.StringVar(&opts.keyFile, "key", "/run/relay-tls/mumble.key", "TLS private key")
@@ -252,7 +258,7 @@ func relayServer(address string, handler http.Handler, getCertificate func(*tls.
 func relayConfig(opts options, credentials []relayproto.Credential, logger *slog.Logger) relay.Config {
 	return relay.Config{
 		ExpectedHost:            opts.expectedHost,
-		Upstream:                upstreamAddress,
+		Upstream:                opts.upstream,
 		BearerCredentials:       credentials,
 		MaxConnections:          maxRelayConnections,
 		MaxConnectionsPerIP:     maxSessionsPerIP,

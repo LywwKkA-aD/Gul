@@ -398,6 +398,7 @@ func testDaemonOptions(t *testing.T) (options, *x509.CertPool) {
 	}
 	return options{
 		listen:         "127.0.0.1:0",
+		upstream:       defaultUpstreamAddress,
 		expectedHost:   "murmur.example.test",
 		certFile:       certFile,
 		keyFile:        keyFile,

@@ -220,18 +220,18 @@ func retryAfterSeconds(duration time.Duration) string {
 // writeRateLimited answers a temporarily banned source. Retry-After is always
 // present so a legitimate client behind a shared address waits and retries
 // instead of treating the rejection as final.
-func writeRateLimited(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
+func writeRateLimited(cover *coverSite, w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
 	r.Close = true
-	http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+	cover.Error(w, r, http.StatusTooManyRequests)
 }
 
 // writeCapacityRejected answers a request that authenticated but found the
 // relay full. Retry-After keeps a rejected client from hammering the endpoint.
-func writeCapacityRejected(w http.ResponseWriter, retryAfter time.Duration) {
+func writeCapacityRejected(cover *coverSite, w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
-	http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+	cover.Error(w, r, http.StatusServiceUnavailable)
 }
