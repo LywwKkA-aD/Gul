@@ -42,8 +42,18 @@ type DialConfig struct {
 	Address  string // host[:port] or wss://host[:port]/mumble
 	Username string
 	Password string
-	// Certificate is the persistent client identity. When nil the server sees
-	// an anonymous client and User.Hash stays empty.
+	// Certificate is the persistent client identity.
+	//
+	// Nothing reads it at the moment, and saying so is the point: the tunnel
+	// contract took the client's own TLS session away, so there is no longer a
+	// handshake for this key to sign. Every session Murmur sees is anonymous
+	// and every User.Hash comes back empty until the exchange that proves
+	// possession of this key exists.
+	//
+	// It stays loaded rather than removed because the file on disk is the
+	// user's identity: deleting the plumbing would let cert.pem stop being
+	// created, and the first build that wants it back would hand everybody a
+	// new one.
 	Certificate *tls.Certificate
 	// RelayCredential is the bearer for the WSS relay. Deriving it costs
 	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
