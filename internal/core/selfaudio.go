@@ -227,7 +227,7 @@ func (a *App) reconcileSelfAudio(root domain.ChannelNode) {
 	if !ok {
 		return
 	}
-	if ctrl, err := a.controller(); err == nil && ctrl.SelfAudioPending() {
+	if ctrl, err := a.controller(); err == nil && !ctrl.SelfAudioSettled(self.SelfMute, self.SelfDeaf) {
 		return
 	}
 	server := domain.SelfAudioState{Muted: self.SelfMute, Deafened: self.SelfDeaf}

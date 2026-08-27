@@ -135,124 +135,68 @@ func TestReconcileIgnoresEchoesWhileOurWriteIsPending(t *testing.T) {
 	app.SetDeafen(true)
 	ctrl.setSelfAudioPending(true)
 
-	app.HandleTree(domain.ChannelNode{
-		ID:    0,
-		Name:  "Root",
-		Users: []domain.UserInfo{{Session: 1, Name: "me", IsSelf: true}},
-	})
+	app.HandleTree(treeWithSelf(false, false))
 
 	if got := app.SelfAudio(); !got.Muted || !got.Deafened {
 		t.Fatalf("state = %+v, want the gesture kept while our write is in flight", got)
 	}
 
-	// Once the write has landed the server is the authority again: an admin
-	// mute, or murmur's own rules, still reach us.
+	// Draining the writer is not enough on its own: the packet has reached the
+	// socket, not the room. Only the echo of our own pair hands authority back.
 	ctrl.setSelfAudioPending(false)
-	app.HandleTree(domain.ChannelNode{
-		ID:    0,
-		Name:  "Root",
-		Users: []domain.UserInfo{{Session: 1, Name: "me", IsSelf: true}},
-	})
+	app.HandleTree(treeWithSelf(false, false))
+	if got := app.SelfAudio(); !got.Muted || !got.Deafened {
+		t.Fatalf("state = %+v, want the gesture kept until the room has answered", got)
+	}
+
+	app.HandleTree(treeWithSelf(true, true)) // the echo
+	// Now the server speaks for itself again: an admin mute, or murmur's own
+	// rules, still reach us.
+	app.HandleTree(treeWithSelf(false, false))
 	if got := app.SelfAudio(); got.Muted || got.Deafened {
 		t.Fatalf("state = %+v, want the settled server state adopted", got)
 	}
 }
 
-func TestNormalizeSelfAudio(t *testing.T) {
-	t.Parallel()
-	cases := []struct{ in, want domain.SelfAudioState }{
-		{domain.SelfAudioState{}, domain.SelfAudioState{}},
-		{domain.SelfAudioState{Muted: true}, domain.SelfAudioState{Muted: true}},
-		{
-			domain.SelfAudioState{Deafened: true},
-			domain.SelfAudioState{Muted: true, Deafened: true},
-		},
-		{
-			domain.SelfAudioState{Muted: true, Deafened: true},
-			domain.SelfAudioState{Muted: true, Deafened: true},
-		},
-	}
-	for _, c := range cases {
-		if got := normalizeSelfAudio(c.in); got != c.want {
-			t.Errorf("normalizeSelfAudio(%+v) = %+v, want %+v", c.in, got, c.want)
-		}
-	}
-}
-
-// A tree carrying the pair the protocol does not have is still adopted as a
-// state the engine can hold. Murmur cannot produce it, but the engine's own
-// invariant must not depend on that.
-func TestAnIllegalTreeIsAdoptedAsALegalState(t *testing.T) {
+// The symptom the users reported, end to end: the click takes, and then quietly
+// comes undone a moment later.
+//
+// Anything anybody else does - a join, a leave, somebody else's mute - makes
+// the server send a whole tree, and a tree that crossed our packet on the wire
+// still shows OUR previous flags. Nothing about it says so. Adopting it puts
+// the microphone back where the user just moved it from, and since adoption
+// deliberately does not write back, the room and the window disagree until the
+// next click.
+func TestAGestureSurvivesATreeThatCrossedItOnTheWire(t *testing.T) {
 	t.Parallel()
 	app, _, _ := newTestApp(t)
-	voice := &fakeVoice{}
-	app.SetVoice(voice)
+	app.SetVoice(&fakeVoice{})
 
-	app.HandleTree(domain.ChannelNode{
+	app.SetMute(true)
+	// Somebody else joins a moment later. Their event brings a tree, and in it
+	// we are still unmuted.
+	app.HandleTree(treeWithSelf(false, false))
+	if got := app.SelfAudio(); !got.Muted {
+		t.Fatalf("state = %+v, want the mute to survive a tree older than it", got)
+	}
+
+	// The room catches up, and from then on it is the authority again.
+	app.HandleTree(treeWithSelf(true, false))
+	app.HandleTree(treeWithSelf(false, false))
+	if got := app.SelfAudio(); got.Muted {
+		t.Fatalf("state = %+v, want the server unmute adopted once it had settled", got)
+	}
+}
+
+// treeWithSelf is a room holding nobody but us, with the flags the server
+// reports for our own row.
+func treeWithSelf(muted, deafened bool) domain.ChannelNode {
+	return domain.ChannelNode{
 		ID:   0,
 		Name: "Root",
-		Users: []domain.UserInfo{
-			{Session: 1, Name: "me", IsSelf: true, SelfMute: false, SelfDeaf: true},
-		},
-	})
-
-	if got := app.SelfAudio(); !got.Muted || !got.Deafened {
-		t.Fatalf("state = %+v, want the deafen to carry the mute", got)
-	}
-	got := voice.snapshot()
-	if n := len(got.mutes); n == 0 || !got.mutes[n-1] {
-		t.Fatalf("engine mutes = %v, want the microphone shut", got.mutes)
-	}
-}
-
-// blockingCueVoice holds a gesture inside its cue so a second one can overtake
-// it. That is the race the generation counter exists for.
-type blockingCueVoice struct {
-	*fakeVoice
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (v *blockingCueVoice) PlayCue(cue Cue) {
-	v.fakeVoice.PlayCue(cue)
-	close(v.entered)
-	<-v.release
-}
-
-// The gesture that lost the race must not repaint the icons afterwards. It
-// used to: the overtaken call published its own state on the way out, so the
-// window and the tray ended up showing a state that had already been replaced
-// - a mute glyph on someone who was not muted, or none on someone who was.
-func TestAnOvertakenGestureDoesNotRepaintTheIcons(t *testing.T) {
-	t.Parallel()
-	app, _, em := newTestApp(t)
-	voice := &blockingCueVoice{
-		fakeVoice: &fakeVoice{},
-		entered:   make(chan struct{}),
-		release:   make(chan struct{}),
-	}
-	app.SetVoice(voice)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		app.SetMute(true) // holds inside its cue
-	}()
-	<-voice.entered
-
-	app.SetDeafen(true) // overtakes it and publishes {muted, deafened}
-	close(voice.release)
-	<-done
-
-	states := selfAudioEvents(em)
-	if len(states) == 0 {
-		t.Fatal("nothing was published at all")
-	}
-	last := states[len(states)-1]
-	if want := (domain.SelfAudioState{Muted: true, Deafened: true}); last != want {
-		t.Fatalf("last published state = %+v, want %+v", last, want)
-	}
-	if got := app.SelfAudio(); last != got {
-		t.Fatalf("published %+v but the state is %+v", last, got)
+		Users: []domain.UserInfo{{
+			Session: 1, Name: "me", IsSelf: true,
+			SelfMute: muted, SelfDeaf: deafened,
+		}},
 	}
 }

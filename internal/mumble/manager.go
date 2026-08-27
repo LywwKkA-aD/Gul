@@ -120,13 +120,19 @@ type Manager struct {
 	hasRestore bool
 
 	// Desired self mute/deafen, remembered so a reconnect can re-publish it.
-	// One goroutine writes it (selfaudio.go); dirty and writing are what
-	// core reads to tell a pending intent from the server's own opinion.
-	selfMuted        bool
-	selfDeafened     bool
-	hasSelfAudio     bool
-	selfAudioDirty   bool
-	selfAudioWriting bool
+	// One goroutine writes it (selfaudio.go).
+	selfMuted    bool
+	selfDeafened bool
+	hasSelfAudio bool
+	// dirty and writing say an intent has not reached the socket; sent, sentAt
+	// and awaiting say one has, and is still waiting for the room to echo it.
+	// Together they are what SelfAudioSettled answers with, and the second half
+	// is the one that matters: a written packet is not an acknowledged one.
+	selfAudioDirty    bool
+	selfAudioWriting  bool
+	selfAudioSent     selfAudioPair
+	selfAudioSentAt   time.Time
+	selfAudioAwaiting bool
 
 	closed bool
 }
@@ -811,6 +817,9 @@ func (m *Manager) clearSession() {
 	m.mu.Lock()
 	m.session = nil
 	m.client = nil
+	// Nothing is in flight any more: the packet went down with the session, and
+	// the next one's trees speak for themselves.
+	m.selfAudioAwaiting = false
 	m.mu.Unlock()
 
 	m.voice.unbind()

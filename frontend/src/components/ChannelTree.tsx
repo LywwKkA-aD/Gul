@@ -2,6 +2,7 @@ import { HashIcon } from '@phosphor-icons/react/dist/csr/Hash';
 import { ChannelsService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import { useSpeaking } from '../state/speaking';
+import { useVoiceGates } from '../state/voiceGates';
 import type { ChannelNode, UserInfo } from '../state/types';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar, Tooltip, VoiceStateIcon } from './ui';
@@ -86,6 +87,10 @@ function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index:
   // Ours comes from the transmit gate, everyone else's from user:talking; the
   // halo is the same either way (state/speaking.ts).
   const speaking = useSpeaking(user);
+  // Our own gates come from core, not from the tree: the tree learns of a
+  // change only after the server has echoed it, and until then it would draw
+  // the state the user has just left (state/voiceGatesRule.ts).
+  const gates = useVoiceGates(user);
 
   return (
     <li
@@ -108,7 +113,7 @@ function UserRow({ user, depth, index }: { user: UserInfo; depth: number; index:
       <span className="min-w-0 flex-1 truncate">{user.name}</span>
       {/* Same order as the prototype's sidebar row: name, then the gates
           (prototype-source.html:9792). */}
-      <VoiceStateIcon muted={user.selfMute} deaf={user.selfDeaf} surface="sidebar" />
+      <VoiceStateIcon muted={gates.muted} deaf={gates.deaf} surface="sidebar" />
     </li>
   );
 }

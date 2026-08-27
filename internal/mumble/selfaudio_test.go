@@ -10,9 +10,6 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 )
 
-// selfAudioPair is one packet as the writer put it on the wire.
-type selfAudioPair struct{ muted, deafened bool }
-
 // selfAudioRecorder captures the writes and can hold the first one open, which
 // is the only way to be inside the window the bug lived in.
 type selfAudioRecorder struct {
@@ -92,12 +89,12 @@ func TestSelfAudioWriterSendsTheLatestIntentAndCoalesces(t *testing.T) {
 		m.SetSelfAudio(i%2 == 0, false)
 	}
 	m.SetSelfAudio(false, false)
-	if !m.SelfAudioPending() {
-		t.Fatal("SelfAudioPending() is false with an unwritten intent")
+	if !m.selfAudioPending() {
+		t.Fatal("selfAudioPending() is false with an unwritten intent")
 	}
 	close(rec.release)
 
-	waitFor(t, "the writer to drain", func() bool { return !m.SelfAudioPending() })
+	waitFor(t, "the writer to drain", func() bool { return !m.selfAudioPending() })
 
 	writes := rec.snapshot()
 	if len(writes) == 0 {
@@ -125,12 +122,12 @@ func TestSelfAudioIntentSurvivesUntilThereIsASession(t *testing.T) {
 	// Wait for the writer to answer the wake and find no session, so the
 	// session below is genuinely the thing that has to revive the intent.
 	<-flushed
-	if !m.SelfAudioPending() {
+	if !m.selfAudioPending() {
 		t.Fatal("the offline intent was dropped")
 	}
 
 	m.setSession(&Session{client: &gumble.Client{}})
-	waitFor(t, "the writer to pick the session up", func() bool { return !m.SelfAudioPending() })
+	waitFor(t, "the writer to pick the session up", func() bool { return !m.selfAudioPending() })
 
 	writes := rec.snapshot()
 	if len(writes) != 1 || writes[0] != (selfAudioPair{true, true}) {
@@ -227,7 +224,78 @@ func TestSelfAudioWriterWaitsForTheServersBudget(t *testing.T) {
 	if got := rec.snapshot(); len(got) != 1 {
 		t.Fatalf("packets = %+v, want only the one the budget allowed", got)
 	}
-	if !m.SelfAudioPending() {
+	if !m.selfAudioPending() {
 		t.Fatal("the click held back by the budget was forgotten")
+	}
+}
+
+// A written packet is not a settled state, and treating it as one silently
+// undoes the click.
+//
+// The packet reaches the socket in microseconds; the room's answer comes back a
+// round trip later. In between, anything anybody else does - a join, a leave,
+// somebody else's mute - makes the server send a tree, and that tree still
+// carries OUR old flags, because gumble learns ours only from the echo
+// (snapshot.go reads Self.SelfMuted). Core asks this package whether such a
+// tree can be trusted; answering yes there adopts the state the user just left,
+// and adoption deliberately does not write back, so nothing corrects it.
+//
+// That is what "the icon sometimes stays" was.
+func TestSelfAudioIsNotSettledUntilTheRoomEchoesItBack(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	close(rec.release) // the writer never blocks in this test
+	m.mu.Lock()
+	m.client = &gumble.Client{}
+	m.mu.Unlock()
+
+	m.SetSelfAudio(true, true)
+	waitFor(t, "the packet to reach the socket", func() bool {
+		return len(rec.snapshot()) == 1
+	})
+
+	// The packet is on the wire and nothing of ours is unwritten, but the room
+	// has not answered yet.
+	if m.SelfAudioSettled(false, false) {
+		t.Fatal("a tree carrying the state before the gesture was called settled")
+	}
+	// The same is true of any other pair that is not what we sent.
+	if m.SelfAudioSettled(true, false) {
+		t.Fatal("a tree carrying a state we never asked for was called settled")
+	}
+	// The echo of our own pair settles it, and everything after it is the
+	// server speaking for itself again - an admin mute has to get through.
+	if !m.SelfAudioSettled(true, true) {
+		t.Fatal("the echo of our own pair was not accepted")
+	}
+	if !m.SelfAudioSettled(false, false) {
+		t.Fatal("the server lost its authority after the echo had settled")
+	}
+}
+
+// Waiting for an echo cannot be unbounded: a packet the server drops would
+// otherwise leave the room's opinion ignored for the rest of the session.
+func TestSelfAudioStopsWaitingForAnEchoThatNeverComes(t *testing.T) {
+	t.Parallel()
+	m, rec := newSelfAudioManager(t)
+	close(rec.release)
+	m.mu.Lock()
+	m.client = &gumble.Client{}
+	m.mu.Unlock()
+
+	m.SetSelfAudio(true, true)
+	waitFor(t, "the packet to reach the socket", func() bool {
+		return len(rec.snapshot()) == 1
+	})
+	if m.SelfAudioSettled(false, false) {
+		t.Fatal("the disagreeing tree was accepted immediately")
+	}
+
+	m.mu.Lock()
+	m.selfAudioSentAt = m.selfAudioSentAt.Add(-2 * selfAudioEchoWait)
+	m.mu.Unlock()
+
+	if !m.SelfAudioSettled(false, false) {
+		t.Fatal("the wait for an echo never expires: the room can no longer be heard")
 	}
 }

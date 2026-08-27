@@ -4,6 +4,7 @@ import { SpeakerSimpleXIcon } from '@phosphor-icons/react/dist/csr/SpeakerSimple
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { useGulStore } from '../state/store';
 import { useSpeaking } from '../state/speaking';
+import { useVoiceGates } from '../state/voiceGates';
 import type { ChannelNode, UserInfo } from '../state/types';
 import {
   VOLUME_MAX,
@@ -25,10 +26,14 @@ const DRAG_REGION = { '--wails-draggable': 'drag' } as CSSProperties;
     person closed, and whether we have silenced them here. The visible glyphs
     carry the same two facts, and they stay two facts: their microphone being
     off is theirs, our silence is ours. */
-function memberRowLabel(user: UserInfo, mutedHere: boolean): string {
-  const state = user.selfDeaf
+function memberRowLabel(
+  user: UserInfo,
+  gates: { muted: boolean; deaf: boolean },
+  mutedHere: boolean,
+): string {
+  const state = gates.deaf
     ? ', звук выключен, микрофон тоже'
-    : user.selfMute
+    : gates.muted
       ? ', микрофон выключен'
       : '';
   const local = mutedHere ? ', заглушён для вас' : '';
@@ -74,6 +79,10 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   // everyone else (state/speaking.ts). Both selectors are booleans on purpose -
   // returning the Set would re-render the whole list on every gate transition.
   const speaking = useSpeaking(user);
+  // Our own gates come from core, not from the tree: the tree learns of a
+  // change only after the server has echoed it, and until then it would draw
+  // the state the user has just left (state/voiceGatesRule.ts).
+  const gates = useVoiceGates(user);
   const setUserVolume = useGulStore((s) => s.setUserVolume);
 
   // The engine keys per-user gain by the certificate hash, so it survives the
@@ -132,7 +141,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
           aria-hidden="true"
         />
       )}
-      <VoiceStateIcon muted={user.selfMute} deaf={user.selfDeaf} surface="light" />
+      <VoiceStateIcon muted={gates.muted} deaf={gates.deaf} surface="light" />
     </>
   );
 
@@ -153,7 +162,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
             // The button's label replaces its whole subtree for assistive
             // tech, so the glyph's own label would never be heard: the state
             // is spelled into the name instead.
-            aria-label={memberRowLabel(user, mutedHere)}
+            aria-label={memberRowLabel(user, gates, mutedHere)}
             className={cx(rowClass, 'cursor-pointer')}
           >
             {row}

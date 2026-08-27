@@ -49,10 +49,13 @@ type Controller interface {
 	// It must never block and never call back into core: core calls it while
 	// holding the lock that decides the transition.
 	SetSelfAudio(muted, deafened bool)
-	// SelfAudioPending reports whether a state we asked for has still to reach
-	// the server. Core uses it to tell the server's own opinion apart from the
-	// echo of an intent it has already moved on from.
-	SelfAudioPending() bool
+	// SelfAudioSettled reports whether the pair a channel tree carries can be
+	// taken as the server's own opinion, rather than an echo of a state we
+	// have already moved on from. It is false while an intent of ours is
+	// unwritten AND for as long as a written one is still unacknowledged: the
+	// packet reaches the socket long before the room answers, and a tree that
+	// arrives in between still carries our previous flags.
+	SelfAudioSettled(muted, deafened bool) bool
 	// PreferTransport seeds the road to try first for one server, from what
 	// was remembered about it. Call before Connect; an unknown road is
 	// ignored, which leaves the ordinary search in place.

@@ -83,10 +83,11 @@ type fakeController struct {
 	sendErr error
 	status  domain.ConnectionStatus
 
-	selfMutes    []bool
-	selfDeafs    []bool
-	selfAudioPnd bool
-	preferred    []string
+	selfMutes       []bool
+	selfDeafs       []bool
+	selfAudioPnd    bool
+	selfAudioEchoed bool
+	preferred       []string
 }
 
 func (c *fakeController) SetSelfAudio(muted, deafened bool) {
@@ -94,6 +95,7 @@ func (c *fakeController) SetSelfAudio(muted, deafened bool) {
 	defer c.mu.Unlock()
 	c.selfMutes = append(c.selfMutes, muted)
 	c.selfDeafs = append(c.selfDeafs, deafened)
+	c.selfAudioEchoed = false
 }
 
 func (c *fakeController) PreferTransport(address, transport string) {
@@ -102,10 +104,26 @@ func (c *fakeController) PreferTransport(address, transport string) {
 	c.preferred = append(c.preferred, address+"="+transport)
 }
 
-func (c *fakeController) SelfAudioPending() bool {
+// The fake answers the same question the Manager does, and the same way: a
+// tree is the server's opinion only once nothing of ours is in flight, AND once
+// the pair it carries is the one we last sent. Anything else is a tree that
+// crossed our packet on the wire.
+func (c *fakeController) SelfAudioSettled(muted, deafened bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.selfAudioPnd
+	if c.selfAudioPnd {
+		return false
+	}
+	if len(c.selfMutes) == 0 || c.selfAudioEchoed {
+		return true
+	}
+	last := len(c.selfMutes) - 1
+	if muted == c.selfMutes[last] && deafened == c.selfDeafs[last] {
+		// The room has caught up. From here it speaks for itself again.
+		c.selfAudioEchoed = true
+		return true
+	}
+	return false
 }
 
 func (c *fakeController) setSelfAudioPending(pending bool) {

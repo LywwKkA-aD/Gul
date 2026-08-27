@@ -36,6 +36,10 @@ const (
 	selfAudioInterval = 1500 * time.Millisecond
 )
 
+// selfAudioPair is the two flags as one value: they are decided together, sent
+// together, and compared together against what the room reports.
+type selfAudioPair struct{ muted, deafened bool }
+
 // sendBudget spaces packets the way the server expects them: a burst of
 // capacity, then one per interval. It keeps the moment the next packet is
 // allowed rather than a token count, so it needs no ticker of its own.
@@ -107,13 +111,47 @@ func (m *Manager) SetSelfAudio(muted, deafened bool) {
 	m.wakeSelfAudio()
 }
 
-// SelfAudioPending reports whether an intent of ours has still to reach the
-// server. Core uses it to tell the server's own opinion apart from the echo of
-// a state we have already moved on from (internal/core/selfaudio.go).
-func (m *Manager) SelfAudioPending() bool {
+// selfAudioEchoWait bounds how long a written pair waits to be echoed.
+//
+// It has to outlast a round trip on a bad link, and it has to end: the server
+// drops a command message it considers too fast without a word, and a client
+// that waited forever for that echo would ignore the room for the rest of the
+// session - including an admin muting it.
+const selfAudioEchoWait = 4 * time.Second
+
+// SelfAudioSettled reports whether the pair a channel tree carries can be taken
+// as the server's own opinion.
+//
+// It cannot while an intent of ours is unwritten, and - this is the part that
+// is easy to get wrong - it cannot for a while after the packet has been
+// written either. Handing a packet to the socket takes microseconds; the room's
+// answer comes back a round trip later, and in between any event from anybody
+// else makes the server send a tree that still carries OUR previous flags,
+// because gumble learns ours only from the echo. Trusting such a tree adopts
+// the state the user has just left, and adoption deliberately does not write
+// back, so nothing corrects it afterwards.
+//
+// So a written pair is awaited: a tree that carries it settles the wait, a tree
+// that carries anything else is older than our write and is refused, and the
+// wait expires on its own so a dropped packet cannot silence the room forever.
+func (m *Manager) SelfAudioSettled(muted, deafened bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.selfAudioDirty || m.selfAudioWriting
+	if m.selfAudioDirty || m.selfAudioWriting {
+		return false
+	}
+	if !m.selfAudioAwaiting {
+		return true
+	}
+	if muted == m.selfAudioSent.muted && deafened == m.selfAudioSent.deafened {
+		m.selfAudioAwaiting = false
+		return true
+	}
+	if time.Since(m.selfAudioSentAt) >= selfAudioEchoWait {
+		m.selfAudioAwaiting = false
+		return true
+	}
+	return false
 }
 
 // wakeSelfAudio nudges the writer. The channel holds one token: a wake that
@@ -203,6 +241,12 @@ func (m *Manager) flushSelfAudio() {
 
 	m.mu.Lock()
 	m.selfAudioWriting = false
+	// From here the pair is on the wire and not yet acknowledged. Until the
+	// room echoes it, a tree saying anything else is older than this write
+	// (SelfAudioSettled).
+	m.selfAudioSent = selfAudioPair{muted: muted, deafened: deafened}
+	m.selfAudioSentAt = time.Now()
+	m.selfAudioAwaiting = true
 	m.mu.Unlock()
 }
 
@@ -220,6 +264,15 @@ func (m *Manager) restoreSelfAudio(client *gumble.Client) {
 		return
 	}
 	writeSelfAudio(client, muted, deafened)
+
+	// This packet waits for its echo exactly like any other. The first trees of
+	// a fresh session arrive while it is still in flight, and they show the
+	// unmuted state the session started in.
+	m.mu.Lock()
+	m.selfAudioSent = selfAudioPair{muted: muted, deafened: deafened}
+	m.selfAudioSentAt = time.Now()
+	m.selfAudioAwaiting = true
+	m.mu.Unlock()
 }
 
 // writeSelfAudio sends the pair. Caller runs on the read loop or inside
@@ -234,4 +287,13 @@ func writeSelfAudio(client *gumble.Client, muted, deafened bool) {
 		SelfMute: &muted,
 		SelfDeaf: &deafened,
 	})
+}
+
+// selfAudioPending reports whether an intent has still to reach the socket. It
+// is the first half of SelfAudioSettled and exists on its own so a test can
+// wait for the writer to drain without also waiting for a room to answer.
+func (m *Manager) selfAudioPending() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selfAudioDirty || m.selfAudioWriting
 }
