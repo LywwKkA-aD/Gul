@@ -21846,10 +21846,7 @@ typedef enum
 
 typedef enum
 {
-    MA_AudioCategory_Other = 0,  /* <-- miniaudio is only caring about Other. */
-    /* GUL PATCH: Communications marks the stream for the OS voice pipeline
-       (Windows 11 Voice Clarity: system AEC/NS/reverb suppression). */
-    MA_AudioCategory_Communications = 3
+    MA_AudioCategory_Other = 0  /* <-- miniaudio is only caring about Other. */
 } MA_AUDIO_STREAM_CATEGORY;
 
 typedef enum
@@ -23689,24 +23686,6 @@ static ma_result ma_device_init_internal__wasapi(ma_context* pContext, ma_device
             }
 
             pAudioClient2->lpVtbl->Release(pAudioClient2);
-        }
-    }
-
-    /* GUL PATCH: mark both capture and render streams as Communications so
-       Windows 11 Voice Clarity (system AEC/NS) engages for this client.
-       Runs after the offloading block so this category always wins.
-       See docs/research/alternatives/audio-io.md. */
-    {
-        ma_IAudioClient2* pAudioClient2Comms;
-        hr = ma_IAudioClient_QueryInterface(pData->pAudioClient, &MA_IID_IAudioClient2, (void**)&pAudioClient2Comms);
-        if (SUCCEEDED(hr)) {
-            ma_AudioClientProperties clientProperties;
-            MA_ZERO_OBJECT(&clientProperties);
-            clientProperties.cbSize = sizeof(clientProperties);
-            clientProperties.bIsOffload = 0;
-            clientProperties.eCategory = MA_AudioCategory_Communications;
-            ma_IAudioClient2_SetClientProperties(pAudioClient2Comms, &clientProperties);
-            pAudioClient2Comms->lpVtbl->Release(pAudioClient2Comms);
         }
     }
 

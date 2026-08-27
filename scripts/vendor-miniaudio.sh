@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Vendors miniaudio (split .c/.h pair, available since 0.11.22) into
-# third_party/miniaudio and applies our patches from
-# third_party/miniaudio/patches/. To bump: update VERSION and the SHA256
-# pins, run the script, review the diff, re-run the audio tests.
+# third_party/miniaudio and applies any patches from
+# third_party/miniaudio/patches/. There are none at present: the vendored copy
+# is byte-identical to upstream, which the checksums below assert. To bump:
+# update VERSION and the SHA256 pins, run the script, review the diff, re-run
+# the audio tests.
 #
 # GitHub publishes no checksums for raw files: the pins below were computed
 # on first vendoring (trust-on-first-use) and guard against silent drift.
@@ -29,7 +31,7 @@ ${SHA256_C}  ${TMP}/miniaudio.c
 ${SHA256_LICENSE}  ${TMP}/LICENSE
 EOF
 
-echo "refreshing $VENDOR (patches/ is kept)"
+echo "refreshing $VENDOR (patches/, if any, is kept)"
 mkdir -p "$VENDOR"
 rm -f "$VENDOR/miniaudio.h" "$VENDOR/miniaudio.c" "$VENDOR/LICENSE" "$VENDOR/VERSION"
 cp "$TMP/miniaudio.h" "$TMP/miniaudio.c" "$TMP/LICENSE" "$VENDOR/"
@@ -46,7 +48,8 @@ source: ${BASE}/{miniaudio.h,miniaudio.c,LICENSE}
 sha256 (pristine, before patches):
   miniaudio.h ${SHA256_H}
   miniaudio.c ${SHA256_C}
-patches: patches/*.patch (applied on top by this script)
+patches: none - the vendored copy matches the checksums above exactly.
+  Anything under patches/*.patch is applied on top by this script.
 update: scripts/vendor-miniaudio.sh
 EOF
 

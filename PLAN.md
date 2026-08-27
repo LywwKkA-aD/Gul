@@ -64,7 +64,7 @@
 | Opus | **вендоренный libopus 1.6.1** + свой `gumble.AudioCodec` | tarball c downloads.xiph.org по SHA256 | BSD-3. Float-сборка БЕЗ DRED/OSCE/BWE, без intrinsics/RTCD (цена ~8-10% CPU при абсолютных ~1% ядра). НЕ импортировать `stieneee/gumble/opus` (тянет системный libopus через pkg-config). 137 stub-.c, +443 КБ к бинарнику — проверено сборкой |
 | AEC + AGC + NS | **webrtc-audio-processing v2.1** (freedesktop, WebRTC M131): AEC3 + GainController2 + NoiseSuppression + HPF | тег `v2.1` + свой каталог patches/ | BSD-3 + PATENTS; вендорится со срезом abseil-cpp (Apache-2.0), единый `-std=c++17`. C-шим свой (~200-300 строк extern "C", референс — livekit/rust-sdks webrtc-sys/src/apm.cpp). speexdsp из проекта исключён |
 | Шумодав + VAD | **RNNoise, ветка main** (НЕ тег v0.2 и НЕ ветка master) | коммит main от 2025-02-22 | BSD-3. Модель main ~1.34M параметров (против 0.06M у «RNNoise 2018»). Веса: один раз собрать `weights_blob.bin` (dump_weights_blob, факт: **14.75 МБ** — float32-веса всех слоёв 11.5 МБ + int8-копии семи слоёв 2.8 МБ; compute_linear предпочитает float, безопасного урезания нет — conv1/dense_out/vad_dense существуют только во float, отсутствующая запись молча зануляет слой; детали в third_party/rnnoise/VERSION), закоммитить, грузить через `rnnoise_model_from_buffer` + `go:embed`; сборка с `-DUSE_WEIGHTS_FILE`. За Go-интерфейсом `Denoiser` (замена на DeepFilterNet/FastEnhancer — вопрос одного файла) |
-| Аудио I/O | **вендоренный miniaudio 0.11.25** (`miniaudio.c`/`.h`) + собственная тонкая cgo-обёртка | файлы из репо mackron/miniaudio + patches/ | MIT-0/public domain. НЕ gen2brain/malgo (не экспонирует нужные поля) и НЕ duplex-режим (см. §4.2). Два патча: WASAPI `eCategory = AudioCategory_Communications` (Windows 11 Voice Clarity); опциональный `kAudioUnitSubType_VoiceProcessingIO` на macOS |
+| Аудио I/O | **вендоренный miniaudio 0.11.25** (`miniaudio.c`/`.h`) + собственная тонкая cgo-обёртка | файлы из репо mackron/miniaudio, без патчей | MIT-0/public domain. НЕ gen2brain/malgo (не экспонирует нужные поля) и НЕ duplex-режим (см. §4.2). Патчей нет: копия побайтно равна апстриму. Патч `eCategory = AudioCategory_Communications` откачен 2026-08-27 — он глушил чужой звук в системе (DECISIONS). `kAudioUnitSubType_VoiceProcessingIO` на macOS так и не применялся |
 | Frontend | **React 19 + TypeScript + Vite 8 + Tailwind v4** | TypeScript **6.0.2** (НЕ 7.x до выхода 7.1 — не работает typescript-eslint) | Состояние — zustand v5 (setState из Wails-колбэков вне React-дерева — это фича). Иконки — **@phosphor-icons/react** 2.1.10, только точечные импорты (не баррель). Шаблон Wails даёт React 18 — апгрейд до 19 руками сразу после init |
 | Сервер (не пишем) | **mumblevoip/mumble-server** | тег `v1.5.915` | Конфиг через `MUMBLE_CONFIG_*`, том `/data` (UID/GID 10000). 1.6 — RC, не брать. `opusthreshold` больше не трогаем (дефолт нормальный в 1.4+) |
 | CI | GitHub Actions | матрица ubuntu-24.04 / windows-2025 / macos-latest | Linux-база: GTK4 + WebKitGTK 6.0 (`libgtk-4-dev`, `libwebkitgtk-6.0-dev`); `-tags gtk3` — только временный фолбэк, удаляется в v3.1 |
@@ -358,7 +358,7 @@ mic s16[480]  (из capture ring)
 - [ ] Метрики в debug-оверлей: RTT, джиттер, глубина буфера, дропы, дрейф ppm, ERLE.
 - [ ] Дробный ресемплер дрейфа (если drop/dup слышен).
 - [ ] Deep PLC libopus за build-тегом (если TCP-берсты дают слышимые провалы; +1.75 МБ).
-- [ ] Эксперименты с системными улучшениями: VoiceProcessingIO на macOS (переключатель, два известных дефекта — AGC Apple и BT+встроенный микрофон), Voice Clarity на Windows 11 (IAcousticEchoCancellationControl; при активации глушить свой AEC3).
+- [ ] Эксперименты с системными улучшениями: VoiceProcessingIO на macOS (переключатель, два известных дефекта — AGC Apple и BT+встроенный микрофон). Voice Clarity на Windows 11 ЗАКРЫТ: цена — приглушение всего остального звука в системе на 80%, отказаться от него приложение не может (DECISIONS 2026-08-27). Возвращаться к нему можно только если найдётся способ включить обработку без категории Communications.
 - [ ] Пересмотр FastEnhancer/faster-enhancer.c (замена RNNoise, если C-рантайм дозрел — вотчлист от 2026-08).
 - [ ] На Linux: переключатель «использовать PipeWire echo-cancel source» (свой AEC выключать).
 
@@ -519,7 +519,7 @@ Taskfile-задачи: `task dev` (wails3 dev) · `task murmur:up|down` · `task
 | Форк gumble требует правок | Наш публичный форк уже в плане (MPL-2.0 соблюдён) |
 | Wayland: глобальный PTT через портал может не дать нужную комбинацию | Показывать фактическую, PTT при фокусе окна как fallback |
 | macOS: нотаризация/разрешения затягивают M4 | Заложено в M4 отдельным пунктом; тестировать на чистой машине |
-| miniaudio 0.12 не выйдет / без дрейф-фикса | Мы на вендоренном 0.11.25 со своими патчами; на 0.12 не рассчитываем |
+| miniaudio 0.12 не выйдет / без дрейф-фикса | Мы на вендоренном 0.11.25 (без патчей); на 0.12 не рассчитываем |
 
 ## 12. CLAUDE.md (выжимка — лежит в корне, поддерживать в синхроне)
 
