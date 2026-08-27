@@ -60,6 +60,9 @@ const (
 	contractShaped = "shaped"
 	// contractPadded is per-datagram random padding, no grid (salamander.go).
 	contractPadded = "padded"
+	// contractTunnel is the contract with no nested TLS: the relay terminates
+	// and speaks Mumble TLS to the server itself (tunnel.go).
+	contractTunnel = "tunnel"
 )
 
 const (
@@ -77,6 +80,12 @@ const (
 type Config struct {
 	ExpectedHost string
 	Upstream     string
+	// UpstreamName is the SNI the relay sends the server behind it, and
+	// UpstreamFingerprint is the SHA-256 of the leaf it must present, in hex.
+	// An empty fingerprint means the relay records what it saw and passes it
+	// on rather than checking it - see upstreamTLS.
+	UpstreamName        string
+	UpstreamFingerprint string
 	// BearerCredentials are the expected credentials, precomputed by
 	// `gul-relay derive-credential`. Deriving one costs tens of milliseconds,
 	// so it must never happen while a request is being served. At least one
@@ -118,15 +127,17 @@ type Config struct {
 // Handler upgrades authenticated requests and proxies them to one loopback
 // upstream. It is safe for concurrent use.
 type Handler struct {
-	expectedHost string
-	upstream     string
-	credentials  []relayproto.Credential
-	pseudonymKey [sha256.Size]byte
-	dialer       net.Dialer
-	messageSize  int64
-	idleTimeout  time.Duration
-	writeTimeout time.Duration
-	cover        *coverSite
+	expectedHost        string
+	upstream            string
+	upstreamName        string
+	upstreamFingerprint string
+	credentials         []relayproto.Credential
+	pseudonymKey        [sha256.Size]byte
+	dialer              net.Dialer
+	messageSize         int64
+	idleTimeout         time.Duration
+	writeTimeout        time.Duration
+	cover               *coverSite
 	// obfuscator scrambles the QUIC datagrams (relayproto.Salamander). Keyed
 	// by the primary credential, so both ends reach it from the password.
 	obfuscator *relayproto.Obfuscator
@@ -136,7 +147,7 @@ type Handler struct {
 	// it can never become a proxy to somewhere else. Precomputed, because a
 	// request must never spend a key derivation.
 	paths        map[string]bool
-	subprotocols map[string]bool
+	subprotocols map[string]string
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -224,28 +235,30 @@ func NewHandler(cfg Config) (*Handler, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &Handler{
-		expectedHost: strings.ToLower(cfg.ExpectedHost),
-		upstream:     cfg.Upstream,
-		credentials:  credentials,
-		pseudonymKey: sourceAddressKey([]byte(primary)),
-		dialer:       net.Dialer{Timeout: cfg.DialTimeout, KeepAlive: 30 * time.Second},
-		messageSize:  cfg.MaxWebSocketMessageSize,
-		idleTimeout:  cfg.SessionIdleTimeout,
-		writeTimeout: cfg.SessionWriteTimeout,
-		cover:        newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
-		obfuscator:   relayproto.NewObfuscator(primary),
-		paths:        tunnelPaths(credentials),
-		subprotocols: tunnelSubprotocols(credentials),
-		drainTimeout: cfg.ShutdownDrainTimeout,
-		global:       make(chan struct{}, cfg.MaxConnections),
-		perSourceMax: cfg.MaxConnectionsPerIP,
-		authFailures: newAuthFailureLimiter(cfg),
-		logger:       loggerOrDefault(cfg.Logger),
-		perSource:    make(map[string]int),
-		active:       make(map[*websocket.Conn]struct{}),
-		streams:      make(map[io.Closer]struct{}),
-		ctx:          ctx,
-		cancel:       cancel,
+		expectedHost:        strings.ToLower(cfg.ExpectedHost),
+		upstream:            cfg.Upstream,
+		upstreamName:        cfg.UpstreamName,
+		upstreamFingerprint: strings.ToLower(cfg.UpstreamFingerprint),
+		credentials:         credentials,
+		pseudonymKey:        sourceAddressKey([]byte(primary)),
+		dialer:              net.Dialer{Timeout: cfg.DialTimeout, KeepAlive: 30 * time.Second},
+		messageSize:         cfg.MaxWebSocketMessageSize,
+		idleTimeout:         cfg.SessionIdleTimeout,
+		writeTimeout:        cfg.SessionWriteTimeout,
+		cover:               newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
+		obfuscator:          relayproto.NewObfuscator(primary),
+		paths:               tunnelPaths(credentials),
+		subprotocols:        tunnelSubprotocols(credentials),
+		drainTimeout:        cfg.ShutdownDrainTimeout,
+		global:              make(chan struct{}, cfg.MaxConnections),
+		perSourceMax:        cfg.MaxConnectionsPerIP,
+		authFailures:        newAuthFailureLimiter(cfg),
+		logger:              loggerOrDefault(cfg.Logger),
+		perSource:           make(map[string]int),
+		active:              make(map[*websocket.Conn]struct{}),
+		streams:             make(map[io.Closer]struct{}),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 	h.upstreamLocalAddress = h.pseudonymousUpstreamAddress
 	return h, nil
@@ -329,7 +342,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.cover.NotFound(w, r)
 		return
 	}
-	subprotocol, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
+	subprotocol, contract, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
 	if !ok {
 		// Reaching here means the path was right, so the credential was too:
 		// this is a request that knows where the tunnel is and still did not ask
@@ -381,6 +394,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// not when a courtesy close frame finishes timing out.
 	defer func() { go func() { _ = stream.Close() }() }()
 
+	if contract == contractTunnel {
+		// The tunnel says for itself which side is at fault, in a frame the
+		// client reads, so it needs no out-of-band way to report a dead
+		// upstream (tunnel.go).
+		h.serveTunnel(stream, sourceIP, sourceBlock, "websocket")
+		return
+	}
+
 	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", contractShaped, func() {
 		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
 	})
@@ -398,12 +419,7 @@ func (h *Handler) pumpSession(
 	sourceIP, sourceBlock, transport, contract string,
 	onUpstreamFailure func(),
 ) {
-	dialer := h.dialer
-	localAddress := h.upstreamLocalAddress(sourceBlock)
-	if localAddress != nil {
-		dialer.LocalAddr = &net.TCPAddr{IP: localAddress}
-	}
-	upstream, err := dialer.DialContext(h.ctx, "tcp", h.upstream)
+	upstream, localAddress, err := h.dialUpstream(sourceBlock)
 	if err != nil {
 		h.logger.Error("relay upstream dial failed",
 			"source", sourceIP, "transport", transport, "upstream", h.upstream, "error", err)
@@ -413,10 +429,37 @@ func (h *Handler) pumpSession(
 		return
 	}
 	defer func() { _ = upstream.Close() }()
+	h.pump(stream, upstream, sourceIP, localAddress, transport, contract)
+}
+
+// dialUpstream opens the connection to the server behind the relay, bound to
+// the pseudonymous local address this source block maps to so Murmur keeps one
+// autoban bucket per block without learning the public address.
+func (h *Handler) dialUpstream(sourceBlock string) (net.Conn, net.IP, error) {
+	dialer := h.dialer
+	localAddress := h.upstreamLocalAddress(sourceBlock)
+	if localAddress != nil {
+		dialer.LocalAddr = &net.TCPAddr{IP: localAddress}
+	}
+	upstream, err := dialer.DialContext(h.ctx, "tcp", h.upstream)
+	if err != nil {
+		return nil, nil, err
+	}
 	if tcp, ok := upstream.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
 	}
+	return upstream, localAddress, nil
+}
 
+// pump carries the session and writes the two lines an operator reads. It
+// knows nothing about how either side was established, which is what lets a
+// second contract reuse it whole.
+func (h *Handler) pump(
+	stream, upstream net.Conn,
+	sourceIP string,
+	localAddress net.IP,
+	transport, contract string,
+) {
 	opened := time.Now()
 	openAttrs := []any{"source", sourceIP, "transport", transport, "contract", contract}
 	if localAddress != nil {
@@ -618,16 +661,25 @@ func tunnelPaths(credentials []relayproto.Credential) map[string]bool {
 	return paths
 }
 
-// tunnelSubprotocols answers on the shaped contract and nothing else.
+// tunnelSubprotocols maps every name this relay answers on to the contract it
+// stands for, one pair per configured credential.
 //
-// The plain byte stream that predates it was retired on 2026-08-27, once the
+// The plain byte stream that predates both was retired on 2026-08-27, once the
 // journal could show who was still on it. A client that offers only the older
 // name now gets what any unknown address gets - the cover site's 404 - because
 // a refusal of its own would say this host used to answer there.
-func tunnelSubprotocols(credentials []relayproto.Credential) map[string]bool {
-	names := make(map[string]bool, len(credentials))
+//
+// Two names are answered because two contracts exist: the shaped one, which
+// carries a client's own TLS session to Murmur untouched, and the tunnel,
+// which the relay terminates. The client offers the newer first and the
+// WebSocket handshake picks it, exactly as it picked the shaped one over the
+// plain one - no flag on the server, and the journal shows which is in use.
+func tunnelSubprotocols(credentials []relayproto.Credential) map[string]string {
+	names := make(map[string]string, 2*len(credentials))
 	for _, credential := range credentials {
-		names[relayproto.NamesFor(credential).Shaped] = true
+		derived := relayproto.NamesFor(credential)
+		names[derived.Shaped] = contractShaped
+		names[derived.Tunnel] = contractTunnel
 	}
 	return names
 }
@@ -654,16 +706,18 @@ func (h *Handler) refuse(w http.ResponseWriter, r *http.Request, reason string) 
 // matchSubprotocol returns the offered subprotocol this relay accepts. The
 // answer has to be echoed back to the client, so it is the matched name and
 // not a fixed one.
-func (h *Handler) matchSubprotocol(values []string) (string, bool) {
+// matchSubprotocol answers on the first offered name it knows, and reports the
+// contract that name stands for.
+func (h *Handler) matchSubprotocol(values []string) (name, contract string, ok bool) {
 	for _, value := range values {
 		for _, offered := range strings.Split(value, ",") {
 			offered = strings.TrimSpace(offered)
-			if h.subprotocols[offered] {
-				return offered, true
+			if contract, known := h.subprotocols[offered]; known {
+				return offered, contract, true
 			}
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func requestHost(value string) string {
