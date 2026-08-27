@@ -85,6 +85,28 @@ func (a *App) RememberServer(address, username, password string) {
 	go a.rememberPassword(address, password)
 }
 
+// HandleTransport records the road that proved it carries our packets to this
+// server. Called from the Manager when the round-trip gate passes, which is
+// the only moment that means anything: a road that merely connected has proved
+// nothing (internal/mumble/transport.go).
+func (a *App) HandleTransport(address, transport string) {
+	address = strings.TrimSpace(address)
+	if address == "" || transport == "" {
+		return
+	}
+	a.log.Info("remembering the road that worked", "transport", transport)
+	a.updateSettings(func(c *config.Config) {
+		c.Servers = config.RememberTransport(c.Servers, address, transport)
+	})
+}
+
+// rememberedTransport reports the road last known to work for a server.
+func (a *App) rememberedTransport(address string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return config.TransportFor(a.cfg.Servers, address)
+}
+
 // rememberPassword writes, or clears, the password of one remembered server.
 func (a *App) rememberPassword(address, password string) {
 	store := a.secretStore()

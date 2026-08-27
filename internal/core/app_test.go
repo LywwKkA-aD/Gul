@@ -86,6 +86,7 @@ type fakeController struct {
 	selfMutes    []bool
 	selfDeafs    []bool
 	selfAudioPnd bool
+	preferred    []string
 }
 
 func (c *fakeController) SetSelfAudio(muted, deafened bool) {
@@ -93,6 +94,12 @@ func (c *fakeController) SetSelfAudio(muted, deafened bool) {
 	defer c.mu.Unlock()
 	c.selfMutes = append(c.selfMutes, muted)
 	c.selfDeafs = append(c.selfDeafs, deafened)
+}
+
+func (c *fakeController) PreferTransport(address, transport string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.preferred = append(c.preferred, address+"="+transport)
 }
 
 func (c *fakeController) SelfAudioPending() bool {

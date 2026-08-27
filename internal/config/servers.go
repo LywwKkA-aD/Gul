@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,7 +36,17 @@ type Server struct {
 	// hint, not a log: a nonsensical value costs the entry its place in the
 	// list, not the entry itself.
 	LastUsed int64 `json:"last_used"`
+	// Transport is the road that last carried packets to this server there and
+	// back (internal/mumble/transport.go). Remembering it is what spares
+	// somebody whose usual road is blocked from paying the round-trip gate on
+	// every launch. Empty means "not known yet", which is also what an
+	// unrecognised value becomes.
+	Transport string `json:"transport,omitempty"`
 }
+
+// KnownTransports are the roads a stored value may name. Anything else in the
+// file is somebody else's idea, or a typo, and is dropped rather than tried.
+var KnownTransports = []string{"wss", "quic", "direct"}
 
 // RememberServer records a server the user has just connected to, and returns
 // the new list. The caller passes the current time; nothing here reads a
@@ -49,11 +60,53 @@ type Server struct {
 //
 // An address or username the document would not accept is not remembered; the
 // list comes back sanitized either way.
+// RememberTransport records the road that proved itself for one server. A
+// server that is not in the list is not added: the road is worth remembering
+// only about a server the user actually connects to.
+func RememberTransport(list []Server, address, transport string) []Server {
+	address = strings.TrimSpace(address)
+	if address == "" || !knownTransport(transport) {
+		return sanitizeServers(list)
+	}
+	out := make([]Server, len(list))
+	copy(out, list)
+	for i := range out {
+		if strings.TrimSpace(out[i].Address) == address {
+			out[i].Transport = transport
+			break
+		}
+	}
+	return sanitizeServers(out)
+}
+
+// TransportFor reports the remembered road for a server, or empty.
+func TransportFor(list []Server, address string) string {
+	address = strings.TrimSpace(address)
+	for _, s := range list {
+		if strings.TrimSpace(s.Address) == address {
+			return s.Transport
+		}
+	}
+	return ""
+}
+
+func knownTransport(transport string) bool {
+	return slices.Contains(KnownTransports, transport)
+}
+
 func RememberServer(list []Server, address, username string, at time.Time) []Server {
 	entry := Server{
 		Address:  strings.TrimSpace(address),
 		Username: strings.TrimSpace(username),
 		LastUsed: at.Unix(),
+	}
+	// The road is a property of the server, not of this connect, so replacing
+	// the entry must not forget it.
+	for _, s := range list {
+		if strings.TrimSpace(s.Address) == entry.Address {
+			entry.Transport = s.Transport
+			break
+		}
 	}
 	if !entry.usable() {
 		return sanitizeServers(list)
@@ -108,6 +161,12 @@ func sanitizeServers(list []Server) []Server {
 			// Only the ordering is nonsense; the address and nickname are
 			// still perfectly good to connect with.
 			s.LastUsed = 0
+		}
+		if !knownTransport(s.Transport) {
+			// A road nobody has heard of costs the hint, not the entry: the
+			// client simply searches for one, which is what it does anyway
+			// when nothing is remembered.
+			s.Transport = ""
 		}
 		if !s.usable() {
 			// A hand-edited or truncated entry is dropped rather than

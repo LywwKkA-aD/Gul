@@ -1,6 +1,7 @@
 package mumble
 
 import (
+	"slices"
 	"strings"
 	"sync"
 )
@@ -88,7 +89,28 @@ func (c *transportChooser) next(address string) Transport {
 }
 
 // succeeded records that this road carried a packet of ours there and back.
-func (c *transportChooser) succeeded(address string, transport Transport) {
+// It reports whether that is news, so the same road proving itself on every
+// reconnect does not rewrite the settings file each time.
+func (c *transportChooser) succeeded(address string, transport Transport) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if known, ok := c.known[address]; ok && known == transport {
+		return false
+	}
+	c.known[address] = transport
+	return true
+}
+
+// prefer seeds the road to try first, from what was remembered about this
+// server across launches. It is a hint, not a verdict: the road still has to
+// prove itself, and failing sends the search on as usual.
+//
+// Unknown roads are ignored rather than refused - a settings file is editable,
+// and a road nobody has heard of should cost the hint and nothing else.
+func (c *transportChooser) prefer(address string, transport Transport) {
+	if !slices.Contains(c.roads(address), transport) {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.known[address] = transport

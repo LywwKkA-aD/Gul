@@ -29,16 +29,16 @@ func TestSelfAudioReachesOtherClients(t *testing.T) {
 	waitRoot(t, b)
 
 	a.mgr.SetSelfAudio(true, false)
-	waitSelfAudio(t, b, "gul-selfaudio-a", true, false)
+	waitSelfAudio(t, b, "gul-selfaudio-a", true, false, 5*time.Second)
 
 	// The deafen cycle is the one that used to strand the user: murmur forces
 	// self_mute alongside self_deaf and never clears it, so a client that
 	// sends the flags one at a time comes back permanently inaudible.
 	a.mgr.SetSelfAudio(true, true)
-	waitSelfAudio(t, b, "gul-selfaudio-a", true, true)
+	waitSelfAudio(t, b, "gul-selfaudio-a", true, true, 5*time.Second)
 
 	a.mgr.SetSelfAudio(false, false)
-	waitSelfAudio(t, b, "gul-selfaudio-a", false, false)
+	waitSelfAudio(t, b, "gul-selfaudio-a", false, false, 5*time.Second)
 }
 
 // Fast clicking must settle on the last click, and the room must see it.
@@ -87,16 +87,22 @@ func TestRapidSelfAudioTogglesSettleOnTheLastIntent(t *testing.T) {
 		wg.Wait()
 
 		a.mgr.SetSelfAudio(want.muted, want.deafened)
-		waitSelfAudio(t, b, "gul-selfaudio-spam-a", want.muted, want.deafened)
+		waitSelfAudio(t, b, "gul-selfaudio-spam-a", want.muted, want.deafened, 20*time.Second)
 		t.Logf("round %d: 100 clicks settled on mute=%v deaf=%v", i, want.muted, want.deafened)
 	}
 }
 
 // waitSelfAudio blocks until the observer's tree shows the named user with the
 // expected flags.
-func waitSelfAudio(t *testing.T, c *liveClient, name string, muted, deafened bool) {
+//
+// within is generous on purpose for the spam test: the client holds packets
+// back to stay inside the server's own rate limit (selfaudio.go), so after a
+// burst each further change legitimately waits about a second for its turn.
+// A round of a hundred clicks settles quickly; six rounds back to back with no
+// pause between them do not, and must not.
+func waitSelfAudio(t *testing.T, c *liveClient, name string, muted, deafened bool, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(within)
 	var last domain.UserInfo
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
@@ -112,8 +118,8 @@ func waitSelfAudio(t *testing.T, c *liveClient, name string, muted, deafened boo
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("%s never reported mute=%v deaf=%v; last seen mute=%v deaf=%v",
-		name, muted, deafened, last.SelfMute, last.SelfDeaf)
+	t.Fatalf("%s never reported mute=%v deaf=%v within %v; last seen mute=%v deaf=%v",
+		name, muted, deafened, within, last.SelfMute, last.SelfDeaf)
 }
 
 // findUser walks the channel tree looking for a user by name.
@@ -147,9 +153,9 @@ func TestVoiceSurvivesADeafenCycle(t *testing.T) {
 	waitRoot(t, b)
 
 	a.mgr.SetSelfAudio(false, true)
-	waitSelfAudio(t, b, "gul-deafcycle-a", true, true)
+	waitSelfAudio(t, b, "gul-deafcycle-a", true, true, 5*time.Second)
 	a.mgr.SetSelfAudio(false, false)
-	waitSelfAudio(t, b, "gul-deafcycle-a", false, false)
+	waitSelfAudio(t, b, "gul-deafcycle-a", false, false, 5*time.Second)
 
 	if got := voiceFramesThrough(t, a, b); got == 0 {
 		t.Fatal("no voice reached the room after a deafen cycle - the server still holds a forced mute")

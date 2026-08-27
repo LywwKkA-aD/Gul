@@ -622,3 +622,43 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// The road that proved itself is stored with the server, and offered back the
+// next time that server is dialled - which is the whole point of storing it.
+func TestRememberedRoadIsOfferedOnTheNextConnect(t *testing.T) {
+	t.Parallel()
+	app, ctrl, _ := newTestApp(t)
+
+	app.RememberServer("wss://murmur.example.test", "gul", "")
+	app.HandleTransport("wss://murmur.example.test", "quic")
+
+	if err := app.Connect("wss://murmur.example.test", "gul", "secret"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	ctrl.mu.Lock()
+	preferred := append([]string(nil), ctrl.preferred...)
+	ctrl.mu.Unlock()
+	want := "wss://murmur.example.test=quic"
+	if len(preferred) != 1 || preferred[0] != want {
+		t.Fatalf("preferred = %v, want [%s]", preferred, want)
+	}
+}
+
+// A server nothing is known about is dialled with no hint at all, which leaves
+// the ordinary search in place.
+func TestConnectWithoutAKnownRoadOffersNoHint(t *testing.T) {
+	t.Parallel()
+	app, ctrl, _ := newTestApp(t)
+
+	if err := app.Connect("wss://unknown.example.test", "gul", "secret"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	ctrl.mu.Lock()
+	preferred := append([]string(nil), ctrl.preferred...)
+	ctrl.mu.Unlock()
+	if len(preferred) != 1 || preferred[0] != "wss://unknown.example.test=" {
+		t.Fatalf("preferred = %v, want one empty hint", preferred)
+	}
+}

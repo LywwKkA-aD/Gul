@@ -172,11 +172,12 @@ func (a *App) SetController(c mumble.Controller) {
 // wire the controller without knowing which method maps to which hook.
 func (a *App) Callbacks() mumble.Callbacks {
 	return mumble.Callbacks{
-		OnStatus:  a.HandleStatus,
-		OnLatency: a.HandleLatency,
-		OnTree:    a.HandleTree,
-		OnMessage: a.HandleMessage,
-		OnTofu:    a.HandleTofu,
+		OnStatus:    a.HandleStatus,
+		OnLatency:   a.HandleLatency,
+		OnTree:      a.HandleTree,
+		OnMessage:   a.HandleMessage,
+		OnTofu:      a.HandleTofu,
+		OnTransport: a.HandleTransport,
 	}
 }
 
@@ -228,6 +229,10 @@ func (a *App) Connect(address, username, password string) error {
 	// Address and username are deliberately omitted: malformed WSS URLs may
 	// contain credentials, and diagnostics logs are intended to be shareable.
 	a.log.Info("connect requested")
+	// What worked last time for this server, so a client whose usual road is
+	// blocked does not pay the round-trip gate again on every launch
+	// (internal/mumble/transport.go).
+	ctrl.PreferTransport(address, a.rememberedTransport(address))
 	ctrl.Connect(address, username, password)
 	return nil
 }

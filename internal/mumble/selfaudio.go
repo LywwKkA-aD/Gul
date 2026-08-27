@@ -19,8 +19,21 @@ import (
 // the state is coalesced anyway, so holding a packet back costs nothing but a
 // moment of the room seeing the previous state.
 const (
-	selfAudioBurst    = 3
-	selfAudioInterval = time.Second
+	selfAudioBurst = 3
+	// selfAudioInterval is deliberately LONGER than the server's own refill.
+	//
+	// Murmur allows one command message per second sustained. Sending at
+	// exactly that rate leaves no margin: our packets arrive as fast as its
+	// bucket refills, so the bucket hovers on empty, and a packet it drops is
+	// gone for good - a written one is never retried, and if the dropped one
+	// carried the last state the room keeps showing a state the user has left.
+	//
+	// This is reasoning about margin, not a demonstrated fix. It was reached
+	// while chasing an intermittent failure of the live spam test, and it did
+	// NOT turn out to be the cause: the test fails at either interval and
+	// passes at either, and what it was actually short of was waiting time
+	// (selfaudio_live_test.go). The margin is kept on its own merits.
+	selfAudioInterval = 1500 * time.Millisecond
 )
 
 // sendBudget spaces packets the way the server expects them: a burst of

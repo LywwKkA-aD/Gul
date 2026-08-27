@@ -160,3 +160,51 @@ func TestManagerDoesNotSearchTheRoadsWhenTheServerAnswered(t *testing.T) {
 		t.Fatalf("dial attempts = %d, want exactly 1", got)
 	}
 }
+
+// A road remembered across launches is a hint, taken before the search.
+func TestChooserTakesTheRememberedRoadFirst(t *testing.T) {
+	t.Parallel()
+	c := newTransportChooser()
+	c.prefer(testRelayAddress, TransportQUIC)
+	if got := c.next(testRelayAddress); got != TransportQUIC {
+		t.Fatalf("first road = %q, want the remembered %q", got, TransportQUIC)
+	}
+	// Still only a hint: it has to prove itself, and failing sends the search
+	// on as usual.
+	c.failed(testRelayAddress)
+	if got := c.next(testRelayAddress); got == TransportQUIC {
+		t.Fatal("the hint survived the road failing")
+	}
+}
+
+// A settings file is editable, so a road nobody has heard of costs the hint
+// and nothing else.
+func TestChooserIgnoresARoadItDoesNotKnow(t *testing.T) {
+	t.Parallel()
+	c := newTransportChooser()
+	c.prefer(testRelayAddress, Transport("carrier pigeon"))
+	if got := c.next(testRelayAddress); got != TransportWSS {
+		t.Fatalf("road = %q, want the ordinary first one", got)
+	}
+	// And a road that exists but not for this address is equally ignored.
+	c.prefer("murmur.example.test:64738", TransportQUIC)
+	if got := c.next("murmur.example.test:64738"); got != TransportDirect {
+		t.Fatalf("direct server took %q", got)
+	}
+}
+
+// The same road proving itself on every reconnect must not rewrite the
+// settings file each time.
+func TestChooserReportsAProvenRoadOnlyWhenItIsNews(t *testing.T) {
+	t.Parallel()
+	c := newTransportChooser()
+	if !c.succeeded(testRelayAddress, TransportWSS) {
+		t.Fatal("the first proof was not news")
+	}
+	if c.succeeded(testRelayAddress, TransportWSS) {
+		t.Fatal("the same road was reported twice")
+	}
+	if !c.succeeded(testRelayAddress, TransportQUIC) {
+		t.Fatal("a different road was not news")
+	}
+}

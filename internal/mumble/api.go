@@ -20,6 +20,10 @@ type Callbacks struct {
 	OnTree    func(domain.ChannelNode)
 	OnMessage func(RawMessage)
 	OnTofu    func(domain.TofuPrompt)
+	// OnTransport fires when a road has proved it carries our packets there
+	// and back (transport.go). It is the only moment worth remembering: a
+	// road that merely connected has proved nothing.
+	OnTransport func(address, transport string)
 }
 
 // Controller is the surface core uses to drive the Mumble layer.
@@ -49,6 +53,10 @@ type Controller interface {
 	// the server. Core uses it to tell the server's own opinion apart from the
 	// echo of an intent it has already moved on from.
 	SelfAudioPending() bool
+	// PreferTransport seeds the road to try first for one server, from what
+	// was remembered about it. Call before Connect; an unknown road is
+	// ignored, which leaves the ordinary search in place.
+	PreferTransport(address, transport string)
 	// AcceptFingerprint confirms the pending TOFU mismatch (OnTofu) and
 	// retries the connection with the new pinned fingerprint.
 	AcceptFingerprint()

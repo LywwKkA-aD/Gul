@@ -493,7 +493,12 @@ func (m *Manager) waitSession(
 			}
 			// Packets of ours go there and come back on this road. That is the
 			// only thing worth remembering about it (transport.go).
-			m.transports.succeeded(address, transport)
+			if m.transports.succeeded(address, transport) {
+				m.log.Info("road proved itself", "transport", string(transport))
+				if cb := m.cb.OnTransport; cb != nil {
+					cb(address, string(transport))
+				}
+			}
 		case <-ticker.C:
 			sample(client)
 		}
@@ -584,6 +589,12 @@ func (m *Manager) publishConnected(session *Session, server string) {
 	if haveTree && m.cb.OnTree != nil {
 		m.cb.OnTree(tree)
 	}
+}
+
+// PreferTransport seeds the road to try first for one server. Anything the
+// chooser does not recognise is ignored, which simply leaves the search alone.
+func (m *Manager) PreferTransport(address, transport string) {
+	m.transports.prefer(address, Transport(transport))
 }
 
 // restoreChannel moves self back to the channel that was joined before the
