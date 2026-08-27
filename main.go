@@ -428,13 +428,27 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 // image only replaces the first. Those two get the single ink chosen to clear
 // both a near-white and a near-black panel.
 func setTrayIcon(systemTray *application.SystemTray, icon core.TrayIcon) {
-	muted := icon == core.TrayIconMicMuted
+	state := trayGlyph(icon)
 	if runtime.GOOS == "windows" {
-		systemTray.SetIcon(tray.Icon(tray.PanelLight, muted))
-		systemTray.SetDarkModeIcon(tray.Icon(tray.PanelDark, muted))
+		systemTray.SetIcon(tray.Icon(tray.PanelLight, state))
+		systemTray.SetDarkModeIcon(tray.Icon(tray.PanelDark, state))
 		return
 	}
-	systemTray.SetIcon(tray.Icon(tray.PanelEither, muted))
+	systemTray.SetIcon(tray.Icon(tray.PanelEither, state))
+}
+
+// trayGlyph maps core's vocabulary onto the drawing's. An icon core has not
+// heard of falls back to the open glyph: a wrong drawing is worse than a plain
+// one, the same rule PlayCue follows.
+func trayGlyph(icon core.TrayIcon) tray.State {
+	switch icon {
+	case core.TrayIconMuted:
+		return tray.StateMuted
+	case core.TrayIconDeafened:
+		return tray.StateDeafened
+	default:
+		return tray.StateOpen
+	}
 }
 
 // showWindow brings the window back from wherever it went: hidden by the close

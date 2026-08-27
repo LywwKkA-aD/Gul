@@ -23,18 +23,20 @@ const (
 type TrayIcon int
 
 const (
-	// TrayIconMic is the plain microphone.
-	TrayIconMic TrayIcon = iota
-	// TrayIconMicMuted is the crossed-out microphone.
-	TrayIconMicMuted
+	// TrayIconOpen is the plain glyph, TrayIconMuted the crossed-out one, and
+	// TrayIconDeafened the crossed-out one with the sound taken out of it.
+	TrayIconOpen TrayIcon = iota
+	TrayIconMuted
+	TrayIconDeafened
 )
 
 // TrayState is everything the system tray renders. Deriving it here keeps the
 // tray in main.go down to four setter calls and puts the rules under test.
 //
-// The icon follows the microphone alone: deafen silences other people and says
-// nothing about what we are sending, so it belongs in the tooltip, not in the
-// glyph.
+// The icon carries both gates, and it has to: the tooltip that used to carry
+// the deafened half is an empty function on macOS and on Linux (main.go,
+// setTrayIcon), so on two platforms of three it said nothing at all and a
+// closed microphone was indistinguishable from a closed everything.
 type TrayState struct {
 	Muted    bool
 	Deafened bool
@@ -44,9 +46,12 @@ type TrayState struct {
 
 // trayStateOf derives the tray rendering from the self audio state.
 func trayStateOf(s domain.SelfAudioState) TrayState {
-	state := TrayState{Muted: s.Muted, Deafened: s.Deafened, Icon: TrayIconMic}
-	if s.Muted {
-		state.Icon = TrayIconMicMuted
+	state := TrayState{Muted: s.Muted, Deafened: s.Deafened, Icon: TrayIconOpen}
+	switch {
+	case s.Deafened:
+		state.Icon = TrayIconDeafened
+	case s.Muted:
+		state.Icon = TrayIconMuted
 	}
 	switch {
 	case s.Muted && s.Deafened:

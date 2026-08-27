@@ -73,10 +73,10 @@ func TestSetMuteReachesTheEngineTheUIAndTheTray(t *testing.T) {
 	if len(seen) != 3 {
 		t.Fatalf("tray updates = %+v, want one per change", seen)
 	}
-	if !seen[0].Muted || seen[0].Icon != TrayIconMicMuted {
+	if !seen[0].Muted || seen[0].Icon != TrayIconMuted {
 		t.Errorf("first tray update = %+v, want a muted microphone", seen[0])
 	}
-	if seen[2].Icon != TrayIconMic || seen[2].Deafened {
+	if seen[2].Icon != TrayIconOpen || seen[2].Deafened {
 		t.Errorf("last tray update = %+v, want everything back open", seen[2])
 	}
 }
@@ -136,13 +136,15 @@ func TestSelfAudioSnapshot(t *testing.T) {
 	if got := app.SelfAudio(); !got.Muted || got.Deafened {
 		t.Fatalf("SelfAudio() = %+v, want muted only", got)
 	}
-	if got := app.TrayState(); !got.Muted || got.Icon != TrayIconMicMuted {
+	if got := app.TrayState(); !got.Muted || got.Icon != TrayIconMuted {
 		t.Fatalf("TrayState() = %+v, want the muted rendering", got)
 	}
 }
 
-// The tooltip is the only place deafen is visible: the glyph tracks the
-// microphone, because that is what other people hear.
+// The glyph carries both gates. It used to carry the microphone alone, with
+// deafen left to the tooltip - and the tooltip is an empty function on macOS
+// and on Linux, so on two platforms of three a closed microphone and a closed
+// everything looked identical.
 func TestTrayStateDerivation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -150,10 +152,10 @@ func TestTrayStateDerivation(t *testing.T) {
 		wantIcon    TrayIcon
 		wantTooltip string
 	}{
-		{domain.SelfAudioState{}, TrayIconMic, trayTooltipIdle},
-		{domain.SelfAudioState{Muted: true}, TrayIconMicMuted, trayTooltipMuted},
-		{domain.SelfAudioState{Deafened: true}, TrayIconMic, trayTooltipDeafened},
-		{domain.SelfAudioState{Muted: true, Deafened: true}, TrayIconMicMuted, trayTooltipBoth},
+		{domain.SelfAudioState{}, TrayIconOpen, trayTooltipIdle},
+		{domain.SelfAudioState{Muted: true}, TrayIconMuted, trayTooltipMuted},
+		{domain.SelfAudioState{Deafened: true}, TrayIconDeafened, trayTooltipDeafened},
+		{domain.SelfAudioState{Muted: true, Deafened: true}, TrayIconDeafened, trayTooltipBoth},
 	}
 	for _, c := range cases {
 		got := trayStateOf(c.state)

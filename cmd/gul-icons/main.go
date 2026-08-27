@@ -128,7 +128,7 @@ func icon(size int) *image.NRGBA {
 	drawTile(img)
 
 	markSize := int(math.Round(float64(size) * markScale))
-	mark := tray.Render(markSize, markInk, false)
+	mark := tray.Render(markSize, markInk, tray.StateOpen)
 
 	// Centre the mark's own bounds, not its canvas: the shape sits high in the
 	// square it is drawn in, and centring the canvas would leave it looking

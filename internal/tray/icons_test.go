@@ -26,11 +26,11 @@ var panels = map[string]Panel{"light": PanelLight, "dark": PanelDark, "either": 
 func TestIconsAreSquarePNGs(t *testing.T) {
 	t.Parallel()
 	for name, panel := range panels {
-		for _, muted := range []bool{false, true} {
-			bounds := decode(t, Icon(panel, muted)).Bounds()
+		for _, state := range states {
+			bounds := decode(t, Icon(panel, state)).Bounds()
 			if bounds.Dx() != iconSize || bounds.Dy() != iconSize {
-				t.Errorf("%s icon (muted=%v) is %dx%d, want %dx%d",
-					name, muted, bounds.Dx(), bounds.Dy(), iconSize, iconSize)
+				t.Errorf("%s icon (state=%d) is %dx%d, want %dx%d",
+					name, state, bounds.Dx(), bounds.Dy(), iconSize, iconSize)
 			}
 		}
 	}
@@ -43,7 +43,7 @@ func TestPlainIconIsOneFlatInk(t *testing.T) {
 	t.Parallel()
 	inks := map[Panel]color.NRGBA{PanelLight: inkOnLight, PanelDark: inkOnDark, PanelEither: inkEither}
 	for name, panel := range panels {
-		img := decode(t, Icon(panel, false))
+		img := decode(t, Icon(panel, StateOpen))
 		want := inks[panel]
 		var opaque, translucent int
 		for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
@@ -93,7 +93,7 @@ func near(got, want uint32) bool {
 // fill in and the creature would lose its eyes entirely.
 func TestEyesAreHoles(t *testing.T) {
 	t.Parallel()
-	img := decode(t, Icon(PanelLight, false))
+	img := decode(t, Icon(PanelLight, StateOpen))
 	at := func(fx, fy float64) uint32 {
 		_, _, _, a := img.At(int(fx*iconSize), int(fy*iconSize)).RGBA()
 		return a
@@ -133,7 +133,7 @@ func TestTheWaveIsCoarseEnoughForTheSmallestPanel(t *testing.T) {
 func TestTheLowerEdgeIsNotAStraightLine(t *testing.T) {
 	t.Parallel()
 	const small = 16
-	img := Render(small, inkOnLight, false)
+	img := Render(small, inkOnLight, StateOpen)
 
 	lowest := make([]int, 0, small)
 	for x := range small {
@@ -161,12 +161,54 @@ func TestTheLowerEdgeIsNotAStraightLine(t *testing.T) {
 	}
 }
 
+// Deafened takes the wave away, and that is the whole signal: the wave is the
+// sound in this mark. Where a tooltip could carry the state - Windows - this is
+// redundant; on macOS and Linux the tooltip is an empty function and this is
+// the only thing that says it at all.
+func TestTheDeafenedLowerEdgeIsFlat(t *testing.T) {
+	t.Parallel()
+	// Measured on the outline itself, not on inked pixels or on the drawn
+	// layer: the slash runs to the corner well below the body, and the
+	// transparent knockout around it cuts the body away in the columns it
+	// crosses. Neither has anything to do with where the lower edge is.
+	const steps = 400
+	bottom := func(state State) (low, high float64) {
+		low, high = 1, 0
+		for i := range steps {
+			x := (bodyCX - bodyRX) + 2*bodyRX*(float64(i)+0.5)/steps
+			edge := 0.0
+			for j := range steps {
+				y := float64(j) / steps
+				if inCreature(x, y, state) {
+					edge = y
+				}
+			}
+			low = math.Min(low, edge)
+			high = math.Max(high, edge)
+		}
+		return low, high
+	}
+
+	low, high := bottom(StateDeafened)
+	if spread := high - low; spread > 1.0/steps {
+		t.Errorf("the deafened lower edge varies by %.4f, want it flat: the wave is still there", spread)
+	}
+	// And the open one is not flat, or the two would be saying the same thing.
+	openLow, openHigh := bottom(StateOpen)
+	if spread := openHigh - openLow; spread < waveAmp {
+		t.Errorf("the open lower edge varies by %.4f, want about %.2f", spread, 2*waveAmp)
+	}
+	if bytes.Equal(Icon(PanelLight, StateMuted), Icon(PanelLight, StateDeafened)) {
+		t.Error("the muted and deafened glyphs are the same image")
+	}
+}
+
 // The muted variant has to be recognisably different, or the tray would report
 // an open microphone while it is closed - and the slash carries its own colour,
 // so the state reads without comparing shapes.
 func TestMutedIconIsSlashedInTheDangerInk(t *testing.T) {
 	t.Parallel()
-	plain, muted := decode(t, Icon(PanelLight, false)), decode(t, Icon(PanelLight, true))
+	plain, muted := decode(t, Icon(PanelLight, StateOpen)), decode(t, Icon(PanelLight, StateMuted))
 
 	differing, danger := 0, 0
 	for y := range iconSize {
@@ -196,7 +238,7 @@ func TestMutedIconIsSlashedInTheDangerInk(t *testing.T) {
 // bleeding into the border loses its shape.
 func TestIconsKeepAMargin(t *testing.T) {
 	t.Parallel()
-	img := decode(t, Icon(PanelLight, true))
+	img := decode(t, Icon(PanelLight, StateMuted))
 	for i := range iconSize {
 		for _, p := range []image.Point{{X: i, Y: 0}, {X: i, Y: iconSize - 1}, {X: 0, Y: i}, {X: iconSize - 1, Y: i}} {
 			if _, _, _, a := img.At(p.X, p.Y).RGBA(); a != 0 {
@@ -210,7 +252,7 @@ func TestIconsKeepAMargin(t *testing.T) {
 // the very same bytes, not a fresh render that could differ.
 func TestIconsAreRenderedOnce(t *testing.T) {
 	t.Parallel()
-	first, second := Icon(PanelLight, true), Icon(PanelLight, true)
+	first, second := Icon(PanelLight, StateMuted), Icon(PanelLight, StateMuted)
 	if !bytes.Equal(first, second) {
 		t.Fatal("Icon rendered two different images")
 	}
@@ -219,7 +261,7 @@ func TestIconsAreRenderedOnce(t *testing.T) {
 	}
 	seen := make(map[string]string, len(panels))
 	for name, panel := range panels {
-		key := string(Icon(panel, false))
+		key := string(Icon(panel, StateOpen))
 		if other, ok := seen[key]; ok {
 			t.Errorf("the %s and %s panels got the same image", name, other)
 		}
@@ -233,7 +275,7 @@ func TestIconsAreRenderedOnce(t *testing.T) {
 func TestMarkBoundsBoundTheDrawing(t *testing.T) {
 	t.Parallel()
 	const size = 256
-	img := Render(size, inkOnLight, false)
+	img := Render(size, inkOnLight, StateOpen)
 	left, top, right, bottom := MarkBounds()
 
 	inked := func(x, y int) bool {
@@ -315,8 +357,8 @@ func TestTheVectorWaveFollowsTheRasterWave(t *testing.T) {
 			t.Fatalf("wave point x=%.4f is outside %.2f..%.2f", fx, left, right)
 		}
 		// One decimal on this canvas is the whole error budget.
-		if diff := math.Abs(fy - waveY(fx)); diff > 1e-3 {
-			t.Fatalf("wave point at x=%.4f has y=%.4f, the drawing says %.4f", fx, fy, waveY(fx))
+		if diff := math.Abs(fy - waveY(fx, StateOpen)); diff > 1e-3 {
+			t.Fatalf("wave point at x=%.4f has y=%.4f, the drawing says %.4f", fx, fy, waveY(fx, StateOpen))
 		}
 	}
 

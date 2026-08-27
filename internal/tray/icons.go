@@ -90,6 +90,23 @@ var (
 	inkSlash   = color.NRGBA{R: 0xCE, G: 0x4A, B: 0x55, A: 0xFF} // --danger
 )
 
+// State is what the glyph has to say.
+//
+// Three, not two, because on macOS and Linux the tray icon is the only thing
+// that can say it: Wails' SetTooltip is an empty function on both
+// (systemtray_darwin.go, systemtray_linux.go), and the tooltip is where the
+// deafened state used to live. A user there had no way to tell a closed
+// microphone from a closed everything without opening the menu.
+type State uint8
+
+const (
+	// StateOpen is the microphone open, StateMuted the microphone closed, and
+	// StateDeafened both closed and hearing nothing.
+	StateOpen State = iota
+	StateMuted
+	StateDeafened
+)
+
 // Panel is the background the tray will paint the icon on.
 type Panel uint8
 
@@ -107,30 +124,27 @@ const (
 	PanelEither
 )
 
-// Icon returns the glyph for one panel and mute state. The bytes are a PNG and
-// must not be modified.
-func Icon(panel Panel, muted bool) []byte { return rendered()[index(panel, muted)] }
+// Icon returns the glyph for one panel and state. The bytes are a PNG and must
+// not be modified.
+func Icon(panel Panel, state State) []byte { return rendered()[index(panel, state)] }
+
+// states is every state a glyph is drawn for, in order.
+var states = [...]State{StateOpen, StateMuted, StateDeafened}
 
 // rendered draws every icon once, on first use. A process that never shows a
 // tray pays nothing.
-var rendered = sync.OnceValue(func() [6][]byte {
+var rendered = sync.OnceValue(func() [9][]byte {
 	inks := [...]color.NRGBA{PanelLight: inkOnLight, PanelDark: inkOnDark, PanelEither: inkEither}
-	var out [6][]byte
+	var out [9][]byte
 	for panel, ink := range inks {
-		for _, muted := range []bool{false, true} {
-			out[index(Panel(panel), muted)] = encode(Render(iconSize, ink, muted))
+		for _, state := range states {
+			out[index(Panel(panel), state)] = encode(Render(iconSize, ink, state))
 		}
 	}
 	return out
 })
 
-func index(panel Panel, muted bool) int {
-	i := int(panel) * 2
-	if muted {
-		i++
-	}
-	return i
-}
+func index(panel Panel, state State) int { return int(panel)*len(states) + int(state) }
 
 // Render rasterizes the mark at any size, in the given ink, over a transparent
 // background. The icon generator uses it to paint the mark onto a tile; the
@@ -139,7 +153,7 @@ func index(panel Panel, muted bool) int {
 // Coverage is counted per subsample and split between the two inks rather than
 // blended per shape, so the knockout around the slash stays exact where it
 // crosses the body, and the two never bleed into each other.
-func Render(size int, ink color.NRGBA, muted bool) *image.NRGBA {
+func Render(size int, ink color.NRGBA, state State) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	const samples = subsamples * subsamples
 	for py := range size {
@@ -149,7 +163,7 @@ func Render(size int, ink color.NRGBA, muted bool) *image.NRGBA {
 				for sx := range subsamples {
 					x := (float64(px) + (float64(sx)+0.5)/subsamples) / float64(size)
 					y := (float64(py) + (float64(sy)+0.5)/subsamples) / float64(size)
-					switch classify(x, y, muted) {
+					switch classify(x, y, state) {
 					case layerBody:
 						body++
 					case layerSlash:
@@ -189,8 +203,8 @@ const (
 )
 
 // classify reports which layer one sample point belongs to.
-func classify(x, y float64, muted bool) layer {
-	if muted {
+func classify(x, y float64, state State) layer {
+	if state != StateOpen {
 		if inCapsule(x, y, slashX1, slashY1, slashX2, slashY2, slashRadius) {
 			return layerSlash
 		}
@@ -198,7 +212,7 @@ func classify(x, y float64, muted bool) layer {
 			return layerNone
 		}
 	}
-	if inCreature(x, y) {
+	if inCreature(x, y, state) {
 		return layerBody
 	}
 	return layerNone
@@ -208,6 +222,8 @@ func classify(x, y float64, muted bool) layer {
 // edge. The shape sits high in its square - the dome reaches further up than
 // the wave reaches down - so anything placing the mark has to centre these
 // bounds rather than the canvas.
+// The open state is what they describe: the application icon says which
+// application it is, not what the microphone is doing.
 func MarkBounds() (left, top, right, bottom float64) {
 	return bodyCX - bodyRX, bodyCY - bodyRY, bodyCX + bodyRX, waveMid + waveAmp
 }
@@ -241,7 +257,7 @@ func MarkPath(canvas float64) string {
 	for i := waveSteps; i >= 0; i-- {
 		x := left + (right-left)*float64(i)/waveSteps
 		b.WriteString("L")
-		point(x, waveY(x))
+		point(x, waveY(x, StateOpen))
 	}
 	b.WriteString("Z")
 
@@ -258,7 +274,7 @@ func MarkPath(canvas float64) string {
 // inCreature reports whether the point is inside the body and outside the
 // eyes. The eyes are subtracted here rather than painted over, so the mark has
 // real holes and sits on any background.
-func inCreature(x, y float64) bool {
+func inCreature(x, y float64, state State) bool {
 	if x < bodyCX-bodyRX || x > bodyCX+bodyRX {
 		return false
 	}
@@ -268,7 +284,7 @@ func inCreature(x, y float64) bool {
 		if dx*dx+dy*dy > 1 {
 			return false
 		}
-	} else if y > waveY(x) {
+	} else if y > waveY(x, state) {
 		return false
 	}
 	return !inEyes(x, y)
@@ -276,7 +292,16 @@ func inCreature(x, y float64) bool {
 
 // waveY is the lower edge: a sine whose ends land on the midline, so the wave
 // meets the straight sides exactly and the outline closes.
-func waveY(x float64) float64 {
+//
+// Deafened flattens it. The wave is the sound in this mark, so taking it away
+// is the mark's own way of saying there is none - no second vocabulary, no
+// glyph borrowed from somewhere else. It is deliberately the quieter of the two
+// signals: the slash says the microphone is shut, which is what a user needs at
+// a glance, and this says the ears are too, which they mostly already know.
+func waveY(x float64, state State) float64 {
+	if state == StateDeafened {
+		return waveMid
+	}
 	phase := (x - (bodyCX - bodyRX)) / (2 * bodyRX)
 	return waveMid + waveAmp*math.Sin(2*math.Pi*waveCycles*phase)
 }
