@@ -43,12 +43,12 @@ func (r *recorder) SendMessage(_ uint32, text string) error {
 	r.sends = append(r.sends, text)
 	return nil
 }
-func (r *recorder) AcceptFingerprint()              { r.mu.Lock(); defer r.mu.Unlock(); r.accepts++ }
-func (r *recorder) SetSelfAudio(bool, bool)         {}
+func (r *recorder) AcceptFingerprint()               { r.mu.Lock(); defer r.mu.Unlock(); r.accepts++ }
+func (r *recorder) SetSelfAudio(bool, bool)          {}
 func (r *recorder) SelfAudioSettled(bool, bool) bool { return true }
-func (r *recorder) PreferTransport(string, string)  {}
-func (r *recorder) Status() domain.ConnectionStatus { return domain.ConnectionStatus{} }
-func (r *recorder) Close()                          {}
+func (r *recorder) PreferTransport(string, string)   {}
+func (r *recorder) Status() domain.ConnectionStatus  { return domain.ConnectionStatus{} }
+func (r *recorder) Close()                           {}
 
 var _ mumble.Controller = (*recorder)(nil)
 

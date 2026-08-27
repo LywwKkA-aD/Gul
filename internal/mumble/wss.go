@@ -121,8 +121,8 @@ func dialWSS(
 	header.Set("Authorization", credential.Header())
 	applyBrowserHeaders(header, relayOrigin(address))
 	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
-		HTTPClient:      client,
-		HTTPHeader:      header,
+		HTTPClient: client,
+		HTTPHeader: header,
 		// Newest first. The relay picks the first name it knows, so a relay
 		// that predates the shaped contract falls back to the plain stream
 		// without either side asking a question.
@@ -156,7 +156,7 @@ func dialWSS(
 	// The dial context only bounds connection setup. A background lifetime is
 	// deliberate: cancelling the 10-second setup context must not kill a live
 	// voice session. Session.Disconnect owns and closes the returned stream.
-	var stream net.Conn = websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+	stream := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	// Load-bearing order: NetConn disables the read limit (sets it to -1), so
 	// the bound has to be re-applied afterwards or an unbounded message can
 	// exhaust memory.

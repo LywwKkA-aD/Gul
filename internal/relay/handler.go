@@ -335,7 +335,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.unregisterWebSocket(ws)
-	var stream net.Conn = websocket.NetConn(h.ctx, ws, websocket.MessageBinary)
+	stream := websocket.NetConn(h.ctx, ws, websocket.MessageBinary)
 	// Order is load-bearing: websocket.NetConn disables the read limit, so the
 	// bound has to be reinstated after it, not before. Without it a peer can
 	// make the relay buffer a message of any size.
