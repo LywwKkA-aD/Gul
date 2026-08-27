@@ -54,6 +54,13 @@ type Names struct {
 	// needing to ask.
 	Subprotocol string
 	Shaped      string
+	// Tunnel is the contract that carries no nested TLS: a short
+	// authenticated handshake and then records, instead of a second TLS
+	// session inside the first. It is a third name rather than a version byte
+	// for the same reason the second one was - the WebSocket handshake
+	// already negotiates exactly this - and it costs nothing to derive,
+	// because NamesFor had twelve bytes of its HMAC spare.
+	Tunnel string
 }
 
 // NamesFor derives the tunnel names from the credential.
@@ -72,6 +79,7 @@ func NamesFor(c Credential) Names {
 		Path:        "/ws/" + hex.EncodeToString(sum[:8]),
 		Subprotocol: hex.EncodeToString(sum[8:14]),
 		Shaped:      hex.EncodeToString(sum[14:20]),
+		Tunnel:      hex.EncodeToString(sum[20:26]),
 	}
 }
 

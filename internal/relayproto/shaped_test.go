@@ -276,3 +276,39 @@ func TestShapedNameIsDerivedAndDistinct(t *testing.T) {
 		t.Fatal("two servers derived the same shaped name")
 	}
 }
+
+// Every name a server answers on has to be its own, and none of them may
+// coincide with another server's or with each other. The names come out of one
+// HMAC, so a slicing mistake would hand two contracts the same string and the
+// relay would answer the wrong one - silently, because both are valid hex and
+// neither side has anything to compare against.
+func TestEveryDerivedNameStandsApart(t *testing.T) {
+	t.Parallel()
+	names := NamesFor(Derive([]byte("server secret")))
+	other := NamesFor(Derive([]byte("another server")))
+
+	mine := map[string]string{
+		"path":   names.Path,
+		"plain":  names.Subprotocol,
+		"shaped": names.Shaped,
+		"tunnel": names.Tunnel,
+	}
+	theirs := map[string]string{
+		"path": other.Path, "plain": other.Subprotocol,
+		"shaped": other.Shaped, "tunnel": other.Tunnel,
+	}
+	seen := map[string]string{}
+	for name, value := range mine {
+		if value == "" {
+			t.Errorf("%s name is empty", name)
+			continue
+		}
+		if previous, clash := seen[value]; clash {
+			t.Errorf("%s and %s derived the same name %q", previous, name, value)
+		}
+		seen[value] = name
+		if value == theirs[name] {
+			t.Errorf("two servers derived the same %s name", name)
+		}
+	}
+}
