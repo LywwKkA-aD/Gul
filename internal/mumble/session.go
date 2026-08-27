@@ -16,10 +16,26 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
-// dialTimeout bounds one attempt end to end: gumble.DialWithDialer only returns
-// after the server has finished syncing its state, and uses the dialer timeout
-// as the deadline for that sync too.
+// dialTimeout bounds getting the connection open: the transport dial, the TLS
+// handshake, and on the relay roads the tunnel handshake in front of them. All
+// of that is small and fixed in size, so a fixed budget fits it.
 const dialTimeout = 10 * time.Second
+
+// syncSilence bounds what happens next, and it is measured differently on
+// purpose.
+//
+// gumble returns from a dial only once the server has finished sending its
+// state, and how much that is depends on the room, not on us: the channel and
+// user tree, and - because the server starts relaying to a client the moment it
+// has authenticated - everyone else's voice while they talk. On a thin link
+// that is easily more than ten seconds of data.
+//
+// Bounding it by total time is therefore the wrong rule, and it was the bug: a
+// user on a slow connection was cut off at exactly ten seconds, every attempt,
+// forever, while the server's log showed the login succeeding every time. What
+// says a connection is dead is silence, not slowness, so this is the longest
+// the server may deliver nothing at all before we give up on it.
+const syncSilence = 10 * time.Second
 
 // DialConfig carries everything needed to establish one Mumble session.
 type DialConfig struct {
@@ -126,9 +142,15 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 
 	var client *gumble.Client
 	if ep.kind == endpointWSS {
-		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
-		defer cancel()
-		conn, dialErr := dialRelay(ctx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.Certificate)
+		// Two budgets, because the two phases fail differently. Opening the
+		// connection is bounded by the clock; the sync that follows is bounded
+		// by silence (syncSilence).
+		dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
+		conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.Certificate)
+		// The road is open or it is not; neither dial keeps this context past
+		// its own handshake (wss.go, quic.go), so it is released here rather
+		// than being left to bound the sync as well.
+		cancelDial()
 		if dialErr != nil {
 			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 		}
@@ -136,7 +158,9 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		// wrapper belongs on the connection gumble writes packets into.
 		packets := newPacketConn(conn)
 		s.packets = packets
-		client, err = gumble.DialWithConn(ctx, packets, gc)
+		syncCtx, cancelSync := syncingContext(packets)
+		defer cancelSync()
+		client, err = gumble.DialWithConn(syncCtx, packets, gc)
 	} else {
 		tlsConfig := tofu.TLSConfig(ep.host)
 		if cfg.Certificate != nil {
@@ -150,6 +174,40 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	}
 	s.client = client
 	return s, nil
+}
+
+// syncingContext ends when the connection has been silent for syncSilence.
+//
+// A sync that is merely slow keeps its context; one that has stopped loses it.
+// The connection itself is the evidence - packetConn records every read - so
+// this asks the same question the rest of the transport does: is anything still
+// arriving?
+func syncingContext(packets *packetConn) (context.Context, context.CancelFunc) {
+	return syncingContextSince(packets, time.Now())
+}
+
+// syncingContextSince is syncingContext with the start of the wait supplied, so
+// a test can reach the timeout without spending it.
+func syncingContextSince(packets *packetConn, started time.Time) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// A quarter of the budget: often enough to notice promptly, rarely
+		// enough that a slow sync pays nothing for being watched.
+		ticker := time.NewTicker(syncSilence / 4)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if packets.SilentFor(started) >= syncSilence {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
 }
 
 // dialRelay takes the road it is given.

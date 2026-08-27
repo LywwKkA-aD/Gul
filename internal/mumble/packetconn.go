@@ -105,6 +105,17 @@ func (c *packetConn) Read(p []byte) (int, error) {
 // stopped getting through while the server's kept arriving.
 func (c *packetConn) StalledUplink() bool { return c.stalled.Load() }
 
+// SilentFor is how long the connection has delivered nothing. Before the first
+// byte it is measured from whenever the caller started watching, which is what
+// the sync watchdog wants: a server that never answers at all has to time out
+// too.
+func (c *packetConn) SilentFor(since time.Time) time.Duration {
+	if last := c.lastRead.Load(); last != 0 {
+		return time.Since(time.Unix(0, last))
+	}
+	return time.Since(since)
+}
+
 // writeWithDeadline bounds one write and diagnoses the stall.
 //
 // Failing the write is not enough on its own: the send path only logs a failed

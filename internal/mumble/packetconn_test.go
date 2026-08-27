@@ -326,3 +326,84 @@ func (c *readOnceConn) Read(p []byte) (int, error) {
 	c.done = true
 	return copy(p, c.payload), nil
 }
+
+// A sync that is slow is not a sync that is dead, and telling them apart by the
+// clock is what broke a real user's connection.
+//
+// Their server log showed the login succeeding on every attempt while the
+// client gave up at exactly ten seconds, every time, on both roads. The room
+// was simply sending more than their link could carry in ten seconds - the
+// channel tree, and everyone else's voice, which the server starts relaying the
+// moment it has authenticated somebody. Nothing was blocking anything.
+func TestSilentForMeasuresTheGapNotTheTotal(t *testing.T) {
+	t.Parallel()
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	packets := newPacketConn(client)
+	started := time.Now().Add(-time.Hour) // long since started, by the clock
+
+	// Nothing has arrived yet, so the wait is measured from the start and this
+	// connection has been silent for an hour.
+	if got := packets.SilentFor(started); got < time.Hour {
+		t.Fatalf("silent for %s before the first byte, want the whole wait", got)
+	}
+
+	go func() { _, _ = server.Write([]byte{0x01}) }()
+	buf := make([]byte, 1)
+	if _, err := packets.Read(buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// One byte, an hour late, and the connection is no longer silent at all:
+	// what counts is the gap since the last delivery, not how long the whole
+	// thing has taken.
+	if got := packets.SilentFor(started); got > time.Second {
+		t.Fatalf("silent for %s just after a read, want almost nothing", got)
+	}
+}
+
+// The watchdog keeps a slow sync alive and ends a dead one. This is the rule
+// the dial timeout used to get wrong, so it is checked on both sides.
+func TestSyncingContextEndsOnSilenceNotOnSlowness(t *testing.T) {
+	t.Parallel()
+	t.Run("a trickle keeps it alive", func(t *testing.T) {
+		server, client := net.Pipe()
+		t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+		packets := newPacketConn(client)
+		// The wait started long ago - longer than the whole budget - and data
+		// is still trickling in. By the rule that broke the user's connection
+		// this is over; by the rule that replaced it, it is merely slow. The
+		// start is dated rather than waited out so the test costs a second
+		// instead of a minute.
+		ctx, cancel := syncingContextSince(packets, time.Now().Add(-4*syncSilence))
+		t.Cleanup(cancel)
+
+		buf := make([]byte, 1)
+		for range 8 {
+			go func() { _, _ = server.Write([]byte{0x01}) }()
+			if _, err := packets.Read(buf); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			time.Sleep(syncSilence / 20)
+			if ctx.Err() != nil {
+				t.Fatal("the sync was given up on while it was still arriving")
+			}
+		}
+	})
+
+	t.Run("silence ends it", func(t *testing.T) {
+		server, client := net.Pipe()
+		t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+		packets := newPacketConn(client)
+		// Nothing ever arrives. Starting the clock in the past is what makes
+		// this a test rather than a ten-second wait.
+		ctx, cancel := syncingContextSince(packets, time.Now().Add(-2*syncSilence))
+		t.Cleanup(cancel)
+
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * syncSilence / 3):
+			t.Fatal("a connection that delivered nothing at all was never given up on")
+		}
+	})
+}
