@@ -77,9 +77,25 @@ func retryAfterMessage(base error, retryAfter time.Duration) string {
 type relayStream struct {
 	net.Conn
 	ws *websocket.Conn
+	// stopChaff ends the goroutine that keeps the tunnel talking. It is a
+	// no-op on a session that negotiated the plain contract, so both paths
+	// close the same way.
+	stopChaff func()
 }
 
-func (s *relayStream) closeNow() { _ = s.ws.CloseNow() }
+// Close stops the chaff before closing the stream. A goroutine writing into a
+// closed connection would only produce errors, but it would also outlive the
+// session that owns it, and reconnects are the normal case on the networks
+// this exists for.
+func (s *relayStream) Close() error {
+	s.stopChaff()
+	return s.Conn.Close()
+}
+
+func (s *relayStream) closeNow() {
+	s.stopChaff()
+	_ = s.ws.CloseNow()
+}
 
 func dialWSS(
 	ctx context.Context,
@@ -107,7 +123,10 @@ func dialWSS(
 	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      header,
-		Subprotocols:    []string{names.Subprotocol},
+		// Newest first. The relay picks the first name it knows, so a relay
+		// that predates the shaped contract falls back to the plain stream
+		// without either side asking a question.
+		Subprotocols:    []string{names.Shaped, names.Subprotocol},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
@@ -128,7 +147,8 @@ func dialWSS(
 		}
 		return nil, fmt.Errorf("WSS relay handshake failed: %w", err)
 	}
-	if ws.Subprotocol() != names.Subprotocol {
+	negotiated := ws.Subprotocol()
+	if negotiated != names.Shaped && negotiated != names.Subprotocol {
 		_ = ws.CloseNow()
 		return nil, errors.New("WSS relay did not negotiate the required protocol")
 	}
@@ -136,12 +156,25 @@ func dialWSS(
 	// The dial context only bounds connection setup. A background lifetime is
 	// deliberate: cancelling the 10-second setup context must not kill a live
 	// voice session. Session.Disconnect owns and closes the returned stream.
-	stream := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+	var stream net.Conn = websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
 	// Load-bearing order: NetConn disables the read limit (sets it to -1), so
 	// the bound has to be re-applied afterwards or an unbounded message can
 	// exhaust memory.
 	ws.SetReadLimit(relayproto.MaxMessageBytes)
-	return &relayStream{Conn: stream, ws: ws}, nil
+
+	stopChaff := func() {}
+	if negotiated == names.Shaped {
+		// Every write leaves as a fixed-size frame and the tunnel keeps
+		// talking through the silences (relayproto.Shape). The chaff outlives
+		// the dial context on purpose, exactly as the stream does: cancelling
+		// setup must not stop a live session from being shaped.
+		shaped := relayproto.Shape(stream)
+		var chaffCtx context.Context
+		chaffCtx, stopChaff = context.WithCancel(context.Background())
+		go shaped.SendChaff(chaffCtx)
+		stream = shaped
+	}
+	return &relayStream{Conn: stream, ws: ws, stopChaff: stopChaff}, nil
 }
 
 // relayOrigin is the Origin a browser loading a page from this relay would

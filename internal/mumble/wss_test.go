@@ -409,3 +409,63 @@ func TestDialWSSReportsAFullRelayWithRetryAfter(t *testing.T) {
 		t.Fatal("a full relay clears on its own")
 	}
 }
+
+// The shaped contract, end to end from the client's side. The relay offers it,
+// the client takes it, and what lands on the wire no longer follows the writes
+// that produced it: three payloads of three different sizes arrive as messages
+// of one size, and so does the chaff between them.
+func TestDialWSSTakesTheShapedContractAndPadsToIt(t *testing.T) {
+	sizes := make(chan int, 64)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != relayTestNames().Path || !authorizeRelayRequest(w, r) {
+			http.NotFound(w, r)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			// Newest first, the way the deployed relay answers.
+			Subprotocols: []string{relayTestNames().Shaped, relayTestNames().Subprotocol},
+		})
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		conn.SetReadLimit(relayproto.MaxMessageBytes)
+		for {
+			_, data, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			select {
+			case sizes <- len(data):
+			default:
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	stream, err := dialWSS(t.Context(), relayAddress(t, server), relayTestCredential(), server.Client())
+	if err != nil {
+		t.Fatalf("dial WSS: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	// Three sizes a variable-bitrate encoder would produce, well apart.
+	for _, n := range []int{40, 90, 160} {
+		if _, err := stream.Write(make([]byte, n)); err != nil {
+			t.Fatalf("write %d: %v", n, err)
+		}
+	}
+
+	seen := make(map[int]bool)
+	for range 3 {
+		select {
+		case n := <-sizes:
+			seen[n] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("the relay saw fewer messages than were written")
+		}
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the relay saw %d distinct message sizes %v, want 1: the client did not take the shaped contract", len(seen), seen)
+	}
+}

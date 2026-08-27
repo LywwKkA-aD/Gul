@@ -87,3 +87,43 @@ func TestTunnelPathsFollowTheCredentials(t *testing.T) {
 		t.Fatalf("paths = %v, want exactly [%s]", paths, want)
 	}
 }
+
+// The relay answers on both contracts and lets the client choose. This is the
+// whole compatibility mechanism for the shaped stream: no version byte inside
+// the tunnel, no flag on the server, just the name the client asked for.
+func TestTheClientChoosesTheContract(t *testing.T) {
+	t.Parallel()
+	cfg := baseConfig(defaultTestSecret)
+	cfg.Upstream = echoServer(t)
+	server := httptest.NewServer(mustHandler(t, cfg))
+	t.Cleanup(server.Close)
+
+	names := relayproto.NamesFor(testCredential(defaultTestSecret))
+	for name, want := range map[string]string{
+		"a client that offers only the plain stream":  names.Subprotocol,
+		"a client that offers only the shaped stream": names.Shaped,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := dialNames(t, server, defaultTestSecret, names.Path, want); got != http.StatusSwitchingProtocols {
+				t.Fatalf("status = %d, want 101", got)
+			}
+		})
+	}
+
+	// Offered together, the client's order decides, and a current client puts
+	// the shaped one first.
+	conn, response, err := websocket.Dial(t.Context(),
+		"ws"+server.URL[len("http"):]+names.Path,
+		&websocket.DialOptions{
+			HTTPHeader:   bearerHeader(defaultTestSecret),
+			Host:         testHost,
+			Subprotocols: []string{names.Shaped, names.Subprotocol},
+		})
+	if err != nil {
+		t.Fatalf("dial with both offered: %v (status %v)", err, response)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	if got := conn.Subprotocol(); got != names.Shaped {
+		t.Fatalf("negotiated %q, want the shaped contract %q", got, names.Shaped)
+	}
+}

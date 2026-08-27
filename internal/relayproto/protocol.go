@@ -45,8 +45,15 @@ const (
 // where the tunnel is, and knowing that still gets them a "not found" without
 // the credential.
 type Names struct {
-	Path        string
+	Path string
+	// Subprotocol is the plain byte stream, Shaped the framed one that pads
+	// every write to a fixed grid (shaped.go). Two names rather than a version
+	// byte inside the tunnel, because the WebSocket handshake already
+	// negotiates exactly this: the client offers both, newest first, and an
+	// older relay that only knows the plain one picks it without either side
+	// needing to ask.
 	Subprotocol string
+	Shaped      string
 }
 
 // NamesFor derives the tunnel names from the credential.
@@ -64,6 +71,7 @@ func NamesFor(c Credential) Names {
 	return Names{
 		Path:        "/ws/" + hex.EncodeToString(sum[:8]),
 		Subprotocol: hex.EncodeToString(sum[8:14]),
+		Shaped:      hex.EncodeToString(sum[14:20]),
 	}
 }
 

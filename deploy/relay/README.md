@@ -7,10 +7,18 @@ wss://murmur.gulvox.com/ws/<16 hex> -> 127.0.0.1:64738
 ```
 
 Both the path and the required WebSocket subprotocol are derived from the
-credential (`relayproto.NamesFor`), so every server has its own pair and only
+credential (`relayproto.NamesFor`), so every server has its own set and only
 somebody who already knows the server password can work out where the tunnel
-is. Everything else on the host - including the pair any other server uses -
+is. Everything else on the host - including the names any other server uses -
 gets the cover site's 404.
+
+There are two subprotocol names, and which one a client asks for is the whole
+of the contract negotiation. The newer one frames every write and pads it to a
+fixed grid, so the record lengths stop following the encoder
+(`relayproto.Shape`); the older one is the plain byte stream. A client offers
+both, newest first, so a relay that predates the shaped contract still answers.
+Once no session negotiates the plain name any more it can be dropped, the same
+way the fixed names were.
 
 The Gul client derives a domain-separated bearer credential from the server
 join password. The relay stores only that derived credential in the separate

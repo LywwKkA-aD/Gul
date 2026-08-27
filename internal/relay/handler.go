@@ -98,6 +98,10 @@ type Handler struct {
 	// request must never spend a key derivation.
 	paths        map[string]bool
 	subprotocols map[string]bool
+	// shaped is the subset of subprotocols whose sessions are framed and
+	// padded (relayproto.Shape). Which one the client asked for is the whole
+	// negotiation - there is no version byte inside the tunnel.
+	shaped       map[string]bool
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -197,6 +201,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		obfuscator:   relayproto.NewObfuscator(primary),
 		paths:        tunnelPaths(credentials),
 		subprotocols: tunnelSubprotocols(credentials),
+		shaped:       shapedSubprotocols(credentials),
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perSourceMax: cfg.MaxConnectionsPerIP,
@@ -330,11 +335,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.unregisterWebSocket(ws)
-	stream := websocket.NetConn(h.ctx, ws, websocket.MessageBinary)
+	var stream net.Conn = websocket.NetConn(h.ctx, ws, websocket.MessageBinary)
 	// Order is load-bearing: websocket.NetConn disables the read limit, so the
 	// bound has to be reinstated after it, not before. Without it a peer can
 	// make the relay buffer a message of any size.
 	ws.SetReadLimit(h.messageSize)
+	if h.shaped[subprotocol] {
+		// The name the client asked for says which contract this session runs
+		// on. Shaping is symmetric: the relay pads and sends chaff in its own
+		// direction too, because half a shaped conversation leaves the other
+		// half a metronome.
+		shaped := relayproto.Shape(stream)
+		chaffCtx, stopChaff := context.WithCancel(h.ctx)
+		defer stopChaff()
+		go shaped.SendChaff(chaffCtx)
+		stream = shaped
+	}
 	// Closing a WebSocket runs a close handshake that a vanished peer never
 	// answers, and the library bounds that wait at seconds. Keep it off the
 	// session goroutine: the capacity slot is released when the bytes stop,
@@ -578,10 +594,23 @@ func tunnelPaths(credentials []relayproto.Credential) map[string]bool {
 	return paths
 }
 
+// tunnelSubprotocols answers on both contracts: the shaped one and the plain
+// byte stream that predates it. A client offers both and the newest wins, so
+// the plain name can be dropped once no session negotiates it any more.
 func tunnelSubprotocols(credentials []relayproto.Credential) map[string]bool {
+	names := make(map[string]bool, 2*len(credentials))
+	for _, credential := range credentials {
+		derived := relayproto.NamesFor(credential)
+		names[derived.Subprotocol] = true
+		names[derived.Shaped] = true
+	}
+	return names
+}
+
+func shapedSubprotocols(credentials []relayproto.Credential) map[string]bool {
 	names := make(map[string]bool, len(credentials))
 	for _, credential := range credentials {
-		names[relayproto.NamesFor(credential).Subprotocol] = true
+		names[relayproto.NamesFor(credential).Shaped] = true
 	}
 	return names
 }
