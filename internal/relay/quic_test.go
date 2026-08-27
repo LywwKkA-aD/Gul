@@ -251,3 +251,30 @@ func TestQUICRelayRefusesASilentConnection(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// Close has to release the UDP socket, not just the listener and transport.
+// quic.Transport.Close does not close a Conn it was handed, so without an
+// explicit socket close the port stays bound - proven here by rebinding it,
+// which fails while the fd leaks.
+func TestQUICServerCloseReleasesThePort(t *testing.T) {
+	t.Parallel()
+	certificate, _ := quicTestCertificate(t)
+	handler := mustHandler(t, baseConfig(defaultTestSecret))
+	server, err := ListenQUIC("127.0.0.1:0",
+		func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &certificate, nil },
+		handler, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("listen quic: %v", err)
+	}
+	addr := server.Addr().String()
+	if err := server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// The same address must bind again immediately; a leaked socket holds it.
+	rebound, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		t.Fatalf("port still held after Close, socket leaked: %v", err)
+	}
+	_ = rebound.Close()
+}

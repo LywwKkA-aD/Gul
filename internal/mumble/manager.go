@@ -341,6 +341,14 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		if isStopped(stop) {
 			return
 		}
+		// A fresh wave - anything but continuing an in-flight road search - may
+		// search every road once again. Without replenishing here the budget is
+		// spent on the first wave and never restored, and the chooser pins to
+		// whichever road it stopped on even after another one recovers: a link
+		// that loses both roads and gets one back would never reconnect.
+		if !searching {
+			roadsLeft = len(m.transports.roads(c.address)) - 1
+		}
 		if !reconnecting && !searching {
 			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
 		}
@@ -412,7 +420,6 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 
 		attempt = 0
-		roadsLeft = len(m.transports.roads(c.address)) - 1
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
@@ -424,6 +431,11 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 
 		reason, terminal := disconnectReason(event)
+		// note is the diagnostic the user actually sees on the reconnect
+		// banner. Only the two cases below carry one: an ordinary drop leaves
+		// the banner as it was rather than flashing "connection lost" at every
+		// blip. Both constants are addressless, so neither is redacted.
+		note := ""
 		switch {
 		case silent:
 			// Nothing of ours ever came back. The session looks perfect from
@@ -434,8 +446,10 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			m.log.Info("giving up on this road, trying another",
 				"transport", string(transport))
 			reason, terminal = reasonNoRoundTrip, false
+			note = reasonNoRoundTrip
 		case session.stalledUplink():
 			reason = reasonUplinkStalled
+			note = reasonUplinkStalled
 		}
 		if terminal {
 			m.emitStatus(domain.ConnectionStatus{
@@ -445,7 +459,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 		m.log.Warn("connection lost", "reason", RedactServer(reason, c.address))
 		reconnecting = true
-		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address})
+		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address, Error: note})
 		if !sleepOrStop(m.backoffFn(attempt), stop) {
 			return
 		}

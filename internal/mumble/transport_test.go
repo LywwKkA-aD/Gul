@@ -2,6 +2,7 @@ package mumble
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,7 +100,14 @@ func TestManagerTakesAnotherRoadAfterASilentSession(t *testing.T) {
 	m.Connect(testRelayAddress, "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 	sink.expect(t, domain.StateConnected)
-	sink.expect(t, domain.StateReconnecting)
+	reconnecting := sink.expect(t, domain.StateReconnecting)
+
+	// The reconnect banner has to say what happened: an anti-censorship tool
+	// that silently retries teaches the user nothing about why nobody heard
+	// them. The diagnostic reaches ConnectionStatus.Error, not just the log.
+	if reconnecting.Error == "" {
+		t.Error("the silent-session reconnect carried no diagnostic for the user")
+	}
 
 	first := <-roads
 	second := <-roads
@@ -190,6 +198,62 @@ func TestChooserIgnoresARoadItDoesNotKnow(t *testing.T) {
 	c.prefer("murmur.example.test:64738", TransportQUIC)
 	if got := c.next("murmur.example.test:64738"); got != TransportDirect {
 		t.Fatalf("direct server took %q", got)
+	}
+}
+
+// A link that loses both roads and gets one back must reconnect over the one
+// that recovered. The road-search budget is spent once per reconnect wave and
+// must replenish between waves; without that the chooser froze on whichever
+// road it stopped on and never retried the one that came back - permanent
+// failure to reconnect in exactly the asymmetric-availability case the roads
+// exist for.
+func TestManagerRediscoversARoadThatRecovers(t *testing.T) {
+	sink := newStatusSink()
+	m := newTestManager(t, Callbacks{OnStatus: sink.record})
+	m.roundTripGrace = 5 * time.Millisecond
+	m.roundTripFn = func(*gumble.Client) bool { return true }
+
+	var mu sync.Mutex
+	avail := map[Transport]bool{TransportWSS: true, TransportQUIC: false}
+	setAvail := func(wss, quic bool) {
+		mu.Lock()
+		avail[TransportWSS], avail[TransportQUIC] = wss, quic
+		mu.Unlock()
+	}
+
+	hooksCh := make(chan sessionHooks, 16)
+	m.dialFn = func(cfg DialConfig, hooks sessionHooks) (*Session, error) {
+		mu.Lock()
+		ok := avail[cfg.Transport]
+		mu.Unlock()
+		if !ok {
+			return nil, errors.New("connection refused")
+		}
+		hooksCh <- hooks
+		return &Session{}, nil
+	}
+
+	m.Connect(testRelayAddress, "gul", "secret")
+	sink.expect(t, domain.StateConnecting)
+	sink.expect(t, domain.StateConnected) // over WSS
+	hooks := <-hooksCh
+	// Let the round-trip gate mark WSS as the known road, as it would live.
+	time.Sleep(15 * time.Millisecond)
+
+	// Both roads vanish, and the live session drops.
+	setAvail(false, false)
+	hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError, String: "lost"})
+	if _, ok := sink.await(t, domain.StateReconnecting, 2*time.Second); !ok {
+		t.Fatal("never entered reconnecting after the drop")
+	}
+	// Churn through several reconnect waves with both roads down, which is what
+	// used to exhaust the one-shot budget and pin the chooser.
+	time.Sleep(40 * time.Millisecond)
+
+	// WSS recovers; QUIC stays blocked. A chooser pinned to QUIC never returns.
+	setAvail(true, false)
+	if _, ok := sink.await(t, domain.StateConnected, 3*time.Second); !ok {
+		t.Fatal("never reconnected after the working road recovered")
 	}
 }
 

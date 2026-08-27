@@ -55,6 +55,24 @@ func (s *statusSink) drained() []domain.ConnectionStatus {
 	}
 }
 
+// await reads statuses until it sees want or the timeout elapses, skipping the
+// states in between. It is for tests that churn through many reconnect emits
+// and only care that a particular state is eventually reached.
+func (s *statusSink) await(t *testing.T, want domain.ConnState, timeout time.Duration) (domain.ConnectionStatus, bool) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case status := <-s.ch:
+			if status.State == want {
+				return status, true
+			}
+		case <-deadline:
+			return domain.ConnectionStatus{}, false
+		}
+	}
+}
+
 func (s *statusSink) expect(t *testing.T, want domain.ConnState) domain.ConnectionStatus {
 	t.Helper()
 	status := s.next(t)

@@ -358,6 +358,11 @@ func chaffGap() time.Duration {
 	if _, err := rand.Read(pick[:]); err != nil {
 		return chaffMaxGap
 	}
+	// Scale the draw across the spread, do NOT take it modulo the spread: a
+	// uint16 is at most 65535 nanoseconds, far below the 70ms spread, so a
+	// modulo would be an identity and every gap would be chaffMinGap - a fixed
+	// interval, the exact metronome this is meant to avoid.
 	spread := chaffMaxGap - chaffMinGap
-	return chaffMinGap + time.Duration(binary.BigEndian.Uint16(pick[:]))%spread
+	offset := time.Duration(uint64(binary.BigEndian.Uint16(pick[:])) * uint64(spread) / (1 << 16))
+	return chaffMinGap + offset
 }

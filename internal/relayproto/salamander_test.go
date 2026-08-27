@@ -111,6 +111,34 @@ func TestObfuscatorDropsWhatCannotBeUnscrambled(t *testing.T) {
 	}
 }
 
+// Chaff has to be spaced at a spread of intervals, not a fixed one: a fixed
+// interval is its own metronome. The bug this pins gave every gap a
+// near-constant ~20ms - the raw uint16 draw, in nanoseconds, taken modulo a
+// 70ms spread, which is an identity - so the whole band above 20.07ms was
+// unreachable.
+func TestChaffGapCoversTheBand(t *testing.T) {
+	t.Parallel()
+	lo, hi := chaffMinGap, chaffMaxGap
+	var seenLow, seenHigh bool
+	for range 4000 {
+		gap := chaffGap()
+		if gap < lo || gap >= hi {
+			t.Fatalf("gap %v outside [%v, %v)", gap, lo, hi)
+		}
+		if gap < lo+(hi-lo)/4 {
+			seenLow = true
+		}
+		// The old code never produced a gap this large; the whole point is
+		// that the upper band is reachable.
+		if gap > lo+(hi-lo)*3/4 {
+			seenHigh = true
+		}
+	}
+	if !seenLow || !seenHigh {
+		t.Fatalf("gaps did not span the band: sawLow=%v sawHigh=%v", seenLow, seenHigh)
+	}
+}
+
 func BenchmarkObfuscate(b *testing.B) {
 	o := testObfuscator("server password")
 	packet := bytes.Repeat([]byte{0x42}, 1200)

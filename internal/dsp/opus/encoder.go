@@ -91,24 +91,6 @@ func NewEncoder(bitrate int) (*Encoder, error) {
 	return e, nil
 }
 
-// SetVBR switches the encoder between constant and variable bitrate. Exposed
-// for measurement; production picks one at construction.
-func (e *Encoder) SetVBR(on int) error {
-	if e.st == nil {
-		return ErrClosed
-	}
-	return codeErr(C.gul_enc_set_vbr(e.st, C.opus_int32(on)))
-}
-
-// SetVBRConstraint bounds variable bitrate to the target, so peaks cannot run
-// past what the server allows.
-func (e *Encoder) SetVBRConstraint(on int) error {
-	if e.st == nil {
-		return ErrClosed
-	}
-	return codeErr(C.gul_enc_set_vbr_constraint(e.st, C.opus_int32(on)))
-}
-
 // SetBitrate applies a new target bitrate, e.g. when the server announces
 // its MaxBitrate. The application profile is fixed at creation: recreate the
 // encoder when the new rate crosses a profile boundary.

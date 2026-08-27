@@ -118,9 +118,13 @@ func (s *QUICServer) Serve(ctx context.Context) error {
 
 // Close stops accepting and releases the socket. Sessions already running end
 // with the handler's own shutdown, which is what owns the drain window.
+//
+// The UDP socket is closed explicitly: quic.Transport.Close does not close a
+// Conn it was handed rather than opened itself, so without this the file
+// descriptor and the bound port leak for the life of the process, and a
+// rebind to the same port after a restart fails.
 func (s *QUICServer) Close() error {
-	err := s.listener.Close()
-	return errors.Join(err, s.transport.Close())
+	return errors.Join(s.listener.Close(), s.transport.Close(), s.packets.Close())
 }
 
 // serveConn authenticates one connection and runs its tunnel.

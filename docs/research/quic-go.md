@@ -40,6 +40,17 @@ Mumble-TLS, gumble) работает поверх QUIC без единого и�
 сценарий — `stream never opened` и `preamble rejected`, — и таймаут преамбулы
 обязан висеть на `AcceptStream`, а не только на чтении из потока.
 
+### [ГРАБЛИ] `quic.Transport.Close` НЕ закрывает переданный ему `Conn`
+
+Если `quic.Transport.Conn` задан своим (наш `ObfuscatedPacketConn` поверх
+`net.ListenPacket`), quic-go считает сокет чужим (`createdConn=false`) и при
+`Transport.Close()` только ставит read-дедлайн — сам сокет не закрывает.
+Значит закрывать UDP-сокет надо явно, отдельно от `Transport.Close()`, иначе
+на каждый жизненный цикл слушателя течёт файловый дескриптор и держится порт,
+а повторная привязка к нему после рестарта падает. Найдено ревизией: серверный
+`QUICServer.Close` тёк, клиентский путь закрывал сокет правильно. Запинено
+`TestQUICServerCloseReleasesThePort` (перепривязка порта после Close).
+
 ### [ФАКТ] QUIC Initial читается снаружи, поэтому ALPN — `h3`
 
 Initial-пакет защищён ключами, которые выводятся из Connection ID и известной

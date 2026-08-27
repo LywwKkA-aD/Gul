@@ -2,11 +2,85 @@ package relay
 
 import (
 	"bytes"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// coverGet fetches a path from a fresh cover site and returns the recorder.
+func coverGet(path string, header http.Header) *httptest.ResponseRecorder {
+	cover := NewCover("", "", "")
+	r := httptest.NewRequest(http.MethodGet, "https://"+testHost+path, nil)
+	maps.Copy(r.Header, header)
+	w := httptest.NewRecorder()
+	cover.ServeHTTP(w, r)
+	return w
+}
+
+// The front page's validators have to look like a static file served by
+// nginx, or an active prober that knows nginx's formats sees straight through
+// the disguise. These were the tells found in review.
+func TestCoverFrontPageMatchesNginxValidators(t *testing.T) {
+	t.Parallel()
+	w := coverGet("/", nil)
+
+	// nginx's ETag is hex(mtime)-hex(length): two hex runs joined by a dash.
+	// Sixteen hex characters with no dash is a value no nginx produces.
+	etag := w.Header().Get("ETag")
+	if !regexp.MustCompile(`^"[0-9a-f]+-[0-9a-f]+"$`).MatchString(etag) {
+		t.Errorf("ETag = %q, want the nginx hex(mtime)-hex(len) shape", etag)
+	}
+
+	// Last-Modified must be the fixed cover date, not the process start time -
+	// a value derived from time.Now would move between two probes an hour
+	// apart, which no static file does. Pinning it to the constant catches any
+	// clock-derived value, which a same-second stability check would not.
+	want := coverModified.UTC().Format(http.TimeFormat)
+	if got := w.Header().Get("Last-Modified"); got != want {
+		t.Errorf("Last-Modified = %q, want the fixed %q", got, want)
+	}
+}
+
+// nginx answers a matching conditional request with only the validators, no
+// Content-Type. Sending Content-Type on a 304 is a tell.
+func TestCoverConditionalRequestOmitsContentType(t *testing.T) {
+	t.Parallel()
+	etag := coverGet("/", nil).Header().Get("ETag")
+	w := coverGet("/", http.Header{"If-None-Match": {etag}})
+
+	if w.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "" {
+		t.Errorf("304 carries Content-Type %q; nginx sends none", got)
+	}
+	if w.Header().Get("ETag") == "" || w.Header().Get("Last-Modified") == "" {
+		t.Error("304 dropped the validators nginx keeps")
+	}
+}
+
+// The cover is the max_ranges-0 nginx personality: it does not advertise byte
+// ranges and does not honour them. Advertising them while returning the whole
+// body - the previous behaviour - is something no nginx config produces.
+func TestCoverDoesNotAdvertiseOrHonourRanges(t *testing.T) {
+	t.Parallel()
+	if got := coverGet("/", nil).Header().Get("Accept-Ranges"); got != "" {
+		t.Errorf("Accept-Ranges = %q, want it absent", got)
+	}
+	w := coverGet("/", http.Header{"Range": {"bytes=0-0"}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("range request status = %d, want a plain 200", w.Code)
+	}
+	if got := w.Header().Get("Content-Range"); got != "" {
+		t.Errorf("Content-Range = %q, want none when ranges are not offered", got)
+	}
+	if w.Body.Len() <= 1 {
+		t.Errorf("range request got a %d-byte body; the whole page was expected", w.Body.Len())
+	}
+}
 
 // A prober must not be able to tell one refusal from another.
 //

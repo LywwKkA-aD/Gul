@@ -1,8 +1,7 @@
 package relay
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -73,6 +72,13 @@ type coverSite struct {
 	modified  time.Time
 }
 
+// coverModified is the front page's modification time when the caller supplies
+// none. It is fixed, not the process start time: a Last-Modified - and the
+// ETag derived from it - that changed on every restart is a value no static
+// file produces, and a censor comparing two probes an hour apart would see it
+// move. An ordinary past date.
+var coverModified = time.Date(2024, time.March, 4, 9, 21, 14, 0, time.UTC)
+
 // newCoverSite builds the site. Empty fields take the stock pages, and a
 // caller that wants a real site of its own passes its own bytes.
 func newCoverSite(server, index, notFound string, modified time.Time) *coverSite {
@@ -86,15 +92,18 @@ func newCoverSite(server, index, notFound string, modified time.Time) *coverSite
 		notFound = defaultNotFoundPage
 	}
 	if modified.IsZero() {
-		modified = time.Now().UTC().Truncate(time.Second)
+		modified = coverModified
 	}
-	sum := sha256.Sum256([]byte(index))
+	modified = modified.UTC().Truncate(time.Second)
 	return &coverSite{
-		server:    server,
-		index:     []byte(index),
-		notFound:  []byte(notFound),
-		indexETag: `"` + hex.EncodeToString(sum[:8]) + `"`,
-		modified:  modified.UTC().Truncate(time.Second),
+		server:   server,
+		index:    []byte(index),
+		notFound: []byte(notFound),
+		// nginx's ETag is hex(mtime)-hex(length), not a hash of the body
+		// (ngx_http_set_etag). Matching the shape is the point: an ETag of
+		// sixteen bytes with no dash is a value no nginx emits.
+		indexETag: fmt.Sprintf(`"%x-%x"`, modified.Unix(), len(index)),
+		modified:  modified,
 	}
 }
 
@@ -117,14 +126,22 @@ func (c *coverSite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.decorate(w)
-	w.Header().Set("Content-Type", "text/html")
+	// On a 304 nginx returns only the validators - Server, Date, Last-Modified,
+	// ETag - and no Content-Type, so those two are set here, before the
+	// conditional check, and Content-Type is set only on the body path below.
 	w.Header().Set("Last-Modified", c.modified.Format(http.TimeFormat))
 	w.Header().Set("ETag", c.indexETag)
-	w.Header().Set("Accept-Ranges", "bytes")
+	// No Accept-Ranges, and ranges are not honoured: this is the `max_ranges 0`
+	// nginx personality, a real and consistent one. Advertising byte ranges
+	// while answering a Range request with the whole body - which is what
+	// setting the header without handling it would do - is something no nginx
+	// config produces, and that inconsistency is a sharper tell than a missing
+	// header.
 	if match := r.Header.Get("If-None-Match"); match == c.indexETag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html")
 	w.Header().Set("Content-Length", strconv.Itoa(len(c.index)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
