@@ -146,6 +146,7 @@ the level (`info` by default). What an operator sees per failure class:
 | --- | --- | --- |
 | Session opened and closed | info | `source`, `transport`, `contract` (`plain`, `shaped`), `duration`, `bytes_from_client`, `bytes_to_client`, `reason` |
 | Rejected credential (401) | warn | `source`, `credential` (`missing`, `malformed`, `legacy`, `v2`) |
+| Refused request (404) | warn | `source`, `reason` (`path`, `query`, `host`, `method`, `body`, `origin`, `subprotocol`) |
 | Ban activated (429) | warn | `source`, `retry_after` |
 | Relay full (503) | warn | `source`, `scope` (`global`, `source` or `shutdown`) |
 | Pre-authentication connections rejected | warn | `scope`, `rejected` since the last line |
