@@ -257,6 +257,81 @@ func TestManagerRediscoversARoadThatRecovers(t *testing.T) {
 	}
 }
 
+// The road memory has to key a server the way the CALLER spells it, not the
+// way Connect normalizes it. Core stores the road beside its own server list,
+// keyed by the string the user or the picker supplied - and a server saved by
+// an older build is spelled "wss://host/mumble", which normalizes to
+// "wss://host". Keyed differently on the two sides, the hint is written under
+// one name and looked for under another, and the memory silently never applies:
+// the very case it exists for pays the round-trip gate on every launch.
+func TestTransportMemoryUsesTheCallersSpelling(t *testing.T) {
+	// As an older build stored it. Connect normalizes this to
+	// "wss://murmur.example.test", so the two spellings differ.
+	const saved = "wss://murmur.example.test/mumble"
+
+	newManager := func(t *testing.T, onTransport func(string, string)) (*Manager, *statusSink, chan Transport) {
+		t.Helper()
+		sink := newStatusSink()
+		m := newTestManager(t, Callbacks{OnStatus: sink.record, OnTransport: onTransport})
+		m.roundTripGrace = 10 * time.Millisecond
+		m.roundTripFn = func(*gumble.Client) bool { return true }
+		roads := make(chan Transport, 4)
+		m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
+			roads <- cfg.Transport
+			return &Session{}, nil
+		}
+		return m, sink, roads
+	}
+
+	// Reading side: a hint seeded with the caller's spelling has to be found
+	// when the same server is dialled.
+	t.Run("the hint is found", func(t *testing.T) {
+		m, sink, roads := newManager(t, nil)
+		m.PreferTransport(saved, string(TransportQUIC))
+
+		m.Connect(saved, "gul", "secret")
+		sink.expect(t, domain.StateConnecting)
+		sink.expect(t, domain.StateConnected)
+
+		if got := <-roads; got != TransportQUIC {
+			t.Fatalf("dialled over %q; the remembered road was not used", got)
+		}
+	})
+
+	// Writing side: what comes back has to carry the caller's spelling, or
+	// core cannot match it to the server it belongs to.
+	t.Run("the proof carries the same spelling", func(t *testing.T) {
+		var mu sync.Mutex
+		var reported []string
+		m, sink, _ := newManager(t, func(address, _ string) {
+			mu.Lock()
+			reported = append(reported, address)
+			mu.Unlock()
+		})
+
+		m.Connect(saved, "gul", "secret")
+		sink.expect(t, domain.StateConnecting)
+		sink.expect(t, domain.StateConnected)
+
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			mu.Lock()
+			seen := append([]string(nil), reported...)
+			mu.Unlock()
+			if len(seen) > 0 {
+				if seen[0] != saved {
+					t.Fatalf("road reported for %q, want the caller's %q", seen[0], saved)
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the proven road was never reported")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+}
+
 // The same road proving itself on every reconnect must not rewrite the
 // settings file each time.
 func TestChooserReportsAProvenRoadOnlyWhenItIsNews(t *testing.T) {

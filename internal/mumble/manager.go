@@ -40,7 +40,15 @@ const statsPollInterval = 5 * time.Second
 const roundTripGrace = 12 * time.Second
 
 type credentials struct {
-	address  string
+	address string
+	// key identifies this server the way the CALLER spells it, which is not
+	// how address spells it: Connect normalizes, so a saved "wss://host/mumble"
+	// becomes "wss://host" here. Anything the caller has to match up with -
+	// the road remembered for a server, which core stores beside its own list
+	// keyed by its own string - has to use the caller's spelling, or the two
+	// sides key the same server differently and the memory silently never
+	// applies. address stays the normalized one: it is what the user is shown.
+	key      string
 	username string
 	password string
 	// bearer is the derived WSS relay credential. PBKDF2 makes derivation cost
@@ -197,7 +205,12 @@ func (m *Manager) Connect(address, username, password string) {
 	m.stop, m.done = stop, done
 	m.mu.Unlock()
 
-	go m.run(credentials{address: addr, username: username, password: password}, stop, done)
+	go m.run(credentials{
+		address:  addr,
+		key:      address,
+		username: username,
+		password: password,
+	}, stop, done)
 }
 
 // Disconnect stops the session and any reconnect loop.
@@ -332,7 +345,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 	reconnecting := false
 	// roadsLeft bounds one immediate search across the roads, so a server that
 	// is simply down cannot become a loop of instant retries.
-	roadsLeft := len(m.transports.roads(c.address)) - 1
+	roadsLeft := len(m.transports.roads(c.key)) - 1
 	// Moving to the next road continues the same attempt rather than starting
 	// a new one, so it must not announce itself again.
 	searching := false
@@ -347,7 +360,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		// whichever road it stopped on even after another one recovers: a link
 		// that loses both roads and gets one back would never reconnect.
 		if !searching {
-			roadsLeft = len(m.transports.roads(c.address)) - 1
+			roadsLeft = len(m.transports.roads(c.key)) - 1
 		}
 		if !reconnecting && !searching {
 			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
@@ -355,7 +368,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		searching = false
 
 		dropped := make(chan *gumble.DisconnectEvent, 1)
-		transport := m.transports.next(c.address)
+		transport := m.transports.next(c.key)
 		session, err := m.dialOnce(c, transport, dropped)
 		if err != nil {
 			var mismatch *MismatchError
@@ -400,7 +413,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			if roadsLeft > 0 && isRoadFailure(err) {
 				roadsLeft--
 				searching = true
-				m.transports.failed(c.address)
+				m.transports.failed(c.key)
 				m.log.Info("road did not open, trying another", "transport", string(transport))
 				continue
 			}
@@ -423,7 +436,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
-		event, stopped, silent := m.waitSession(session.client, c.address, transport, dropped, stop)
+		event, stopped, silent := m.waitSession(session.client, c.key, transport, dropped, stop)
 		m.clearSession()
 		if stopped {
 			_ = session.Disconnect()
@@ -442,7 +455,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			// the inside, so it has to be taken down here - and the road it
 			// took is the one to stop using.
 			_ = session.Disconnect()
-			m.transports.failed(c.address)
+			m.transports.failed(c.key)
 			m.log.Info("giving up on this road, trying another",
 				"transport", string(transport))
 			reason, terminal = reasonNoRoundTrip, false
