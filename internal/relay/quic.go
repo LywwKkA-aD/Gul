@@ -166,10 +166,6 @@ func (s *QUICServer) serveConn(conn *quic.Conn) {
 			"source", sourceIP, "credential", result.class)
 		return
 	}
-	if result.legacy {
-		s.logger.Warn("relay accepted legacy bearer credential",
-			"source", sourceIP, "transport", "quic")
-	}
 	if _, banned := s.handler.authFailures.clearIfAllowed(sourceBlock); banned {
 		return
 	}

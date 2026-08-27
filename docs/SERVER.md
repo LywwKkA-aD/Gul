@@ -42,12 +42,11 @@ IPv6 маскируется до /64) — в `deploy/relay/README.md`, разд�
   действий через официальный клиент (регистрация, ACL, каналы).
 - `MUMBLE_CONFIG_SERVER_PASSWORD` — пароль входа на сервер; его знают все
   участники. Из него клиент выводит bearer релея.
-- `GUL_RELAY_BEARER` — podman-секрет с предвычисленными bearer-строками
-  (`gul-relay derive-credential`, v2 первой строкой, legacy второй). Релей
+- `GUL_RELAY_BEARER` — podman-секрет с предвычисленной bearer-строкой
+  (`gul-relay derive-credential`, одна строка с префиксом `v2.`). Релей
   читает только его; сырой пароль в контейнер релея не монтируется.
-  **При обновлении релея до версии с bearer v2 секрет надо пересоздать** —
-  релей без `v2.`-строки не стартует. Процедура и жизненный цикл legacy —
-  в README релея.
+  Релей без `v2.`-строки не стартует; строка без префикса игнорируется.
+  Процедура — в README релея.
 
 Ротация пароля сервера = ротация `GUL_RELAY_BEARER` (они связаны по построению).
 
@@ -165,8 +164,8 @@ systemd-сессии) — это не поломка, штатные прове�
 2. Перенести `gul-relay`, `legal/` и `deploy/relay/Containerfile` на сервер,
    собрать образ: `podman build -t gul-wss-relay:<tag> -f Containerfile .`
 3. Взять digest: `podman inspect --format "{{.Digest}}" localhost/gul-wss-relay:<tag>`.
-4. **Пересоздать секрет** (обязательно при переходе на bearer v2 — без строки
-   `v2.` релей не стартует). Значение не должно попадать в терминал:
+4. **Пересоздать секрет** — только если меняется пароль сервера. Значение не
+   должно попадать в терминал:
    ```sh
    podman run --rm \
      --secret MUMBLE_CONFIG_SERVER_PASSWORD,type=mount,target=MUMBLE_CONFIG_SERVER_PASSWORD,uid=10000,gid=10000,mode=0400 \
@@ -174,24 +173,22 @@ systemd-сессии) — это не поломка, штатные прове�
      derive-credential --secret-file /run/secrets/MUMBLE_CONFIG_SERVER_PASSWORD > /tmp/cred.txt
    podman secret rm GUL_RELAY_BEARER; podman secret create GUL_RELAY_BEARER /tmp/cred.txt; shred -u /tmp/cred.txt
    ```
-   Проверка без раскрытия значения: `wc -l` = 2 и `head -c3` = `v2.`.
+   Проверка без раскрытия значения: `wc -l` = 1 и `head -c3` = `v2.`.
 5. В `~/.config/containers/systemd/gul-relay.container` заменить `Image=` на
-   новый digest и дописать в `Exec=` флаги `--accept-legacy-bearer=true
-   --log-level info`. Старый файл сохранить рядом как `.bak-<дата>` — это и
-   есть путь отката (вернуть файл, `daemon-reload`, `restart`).
+   новый digest. Старый файл сохранить рядом как `.bak-<дата>` — это и есть
+   путь отката (вернуть файл, `daemon-reload`, `restart`); прежний образ
+   остаётся на хосте, `Pull=never` его не тронет.
 6. `systemctl --user daemon-reload && systemctl --user restart gul-relay.service`
 7. Проверить: `podman ps` показывает `(healthy)`, а в журнале появляется
-   `relay ready` с `accept_legacy_bearer=true`. Подключиться клиентом; в
-   журнале должны быть `relay session opened` / `closed` с байтами и причиной.
-   Клиент версии alpha.2 даст дополнительную строку `relay accepted legacy
-   bearer credential` с адресом источника — по ней видно, кому ещё обновляться.
+   `relay ready`. Подключиться клиентом; в журнале должны быть
+   `relay session opened` / `closed` с байтами, транспортом и причиной.
 
-**Состояние на 2026-08-24: legacy отключён.** Секрет пересоздан с
-`derive-credential --v2-only` (одна строка), в `Exec=` стоит
-`--accept-legacy-bearer=false`. Клиенты сборки v0.3.0-alpha.2 и старше
-получают 401, в журнале — `relay authorization rejected` с
-`credential=legacy`. Чтобы временно вернуть совместимость: пересоздать секрет
-без `--v2-only` и переставить флаг в `true`.
+**Состояние на 2026-08-27: оба окна совместимости закрыты.** Секрет — одна
+строка `v2.`; фиксированной пары `/mumble` + `gul-mumble-v1` больше нет в коде,
+как и флагов `--accept-legacy-bearer` / `--accept-legacy-names`. Клиенты
+v0.4.0-alpha.2 и старше не подключаются: старый путь отдаёт ту же 404, что и
+любой несуществующий адрес, а старый ключ — `relay authorization rejected` с
+`credential=legacy`. Откат — только развернуть прежний образ (шаг 5).
 
 ## Обновление
 
@@ -202,8 +199,9 @@ systemd-сессии) — это не поломка, штатные прове�
   и перезапуск юнита. Quadlet объявляет `PartOf=gul-murmur.service`: рестарт
   murmur перезапускает релей; релей дренирует сессии close-фреймом до 5 с,
   после чего клиенты переподключаются сами.
-- Порядок при несовместимых изменениях протокола релея: сначала релей с
-  `--accept-legacy-bearer=true`, затем клиенты, затем отключение legacy.
+- Порядок при несовместимых изменениях протокола релея: сначала релей,
+  принимающий обе формы, затем клиенты, затем удаление старой формы. Оба
+  прошлых окна (bearer v1, фиксированные имена) прошли этот путь и закрыты.
 
 ## Ограничение соединений на фаерволе
 

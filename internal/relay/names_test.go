@@ -33,42 +33,29 @@ func dialNames(t *testing.T, server *httptest.Server, secret, path, subprotocol 
 	return response.StatusCode
 }
 
-// The pair that named the contents has to keep working while the clients that
-// predate the change are still out there, and every use has to be visible so
-// the operator knows when the window can be shut.
-func TestLegacyNamesWorkWhileTheWindowIsOpenAndAreLogged(t *testing.T) {
-	t.Parallel()
-	logger, records := newRecordingLogger()
-	cfg := baseConfig(defaultTestSecret)
-	cfg.Upstream = echoServer(t)
-	cfg.AcceptLegacyNames = true
-	cfg.Logger = logger
-	server := httptest.NewServer(mustHandler(t, cfg))
-	t.Cleanup(server.Close)
+// The names builds up to v0.4.0-alpha.2 used. Written out rather than imported:
+// nothing in the code refers to them any more, and this test exists to pin that
+// these particular historical strings get no answer.
+const (
+	retiredPath        = "/mumble"
+	retiredSubprotocol = "gul-mumble-v1"
+)
 
-	got := dialNames(t, server, defaultTestSecret, relayproto.LegacyPath, relayproto.LegacySubprotocol)
-	if got != http.StatusSwitchingProtocols {
-		t.Fatalf("legacy handshake status = %d, want 101", got)
-	}
-	records.await(t, "relay accepted the legacy tunnel names")
-}
-
-// Once the window is shut the old pair is not merely refused: it has to be
-// refused exactly like an address that does not exist, or shutting it would
-// itself become the signal that this host used to be a relay.
-func TestLegacyNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
+// The old pair is not merely refused: it has to be refused exactly like an
+// address that does not exist. A refusal of its own would be the signal that
+// this host used to be a relay - which is what the derived names removed.
+func TestRetiredNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 	t.Parallel()
 	cfg := baseConfig(defaultTestSecret)
 	cfg.Upstream = echoServer(t)
-	cfg.AcceptLegacyNames = false
 	server := httptest.NewServer(mustHandler(t, cfg))
 	t.Cleanup(server.Close)
 
 	names := testNames(defaultTestSecret)
 	cases := map[string]struct{ path, subprotocol string }{
-		"the old pair":              {relayproto.LegacyPath, relayproto.LegacySubprotocol},
-		"the old path":              {relayproto.LegacyPath, names.Subprotocol},
-		"the old subprotocol":       {names.Path, relayproto.LegacySubprotocol},
+		"the old pair":              {retiredPath, retiredSubprotocol},
+		"the old path":              {retiredPath, names.Subprotocol},
+		"the old subprotocol":       {names.Path, retiredSubprotocol},
 		"an address nobody serves":  {"/does-not-exist", names.Subprotocol},
 		"the pair of another relay": {relayproto.NamesFor(testCredential("elsewhere")).Path, names.Subprotocol},
 	}
@@ -88,22 +75,15 @@ func TestLegacyNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 }
 
 // A relay answers on the names its own credential produces and on no others:
-// knowing one server's path must not locate another.
+// knowing one server's path must not locate another, and no fixed name is
+// mounted alongside them.
 func TestTunnelPathsFollowTheCredentials(t *testing.T) {
 	t.Parallel()
-	cfg := baseConfig(defaultTestSecret)
-	cfg.AcceptLegacyNames = false
-	h := mustHandler(t, cfg)
+	h := mustHandler(t, baseConfig(defaultTestSecret))
 
 	paths := h.TunnelPaths()
 	want := testNames(defaultTestSecret).Path
 	if len(paths) != 1 || paths[0] != want {
 		t.Fatalf("paths = %v, want exactly [%s]", paths, want)
-	}
-
-	cfg.AcceptLegacyNames = true
-	withLegacy := mustHandler(t, cfg).TunnelPaths()
-	if len(withLegacy) != 2 {
-		t.Fatalf("paths with the window open = %v, want the derived and the legacy one", withLegacy)
 	}
 }

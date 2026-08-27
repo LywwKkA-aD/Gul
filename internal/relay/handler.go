@@ -24,15 +24,6 @@ import (
 )
 
 const (
-	// LegacyPath and LegacySubprotocol are the fixed pair every build up to
-	// v0.4.0-alpha.2 used. The current pair is derived per server from the
-	// credential (relayproto.NamesFor); these stay only while the relay accepts
-	// both. Neither is client-selected: the relay answers a fixed set it
-	// computed at startup, so it can never become a proxy to somewhere else.
-	LegacyPath = relayproto.LegacyPath
-	// LegacySubprotocol versions the byte-stream contract independently of the app.
-	LegacySubprotocol = relayproto.LegacySubprotocol
-
 	defaultAuthFailuresBeforeBan = 5
 	defaultAuthFailureWindow     = time.Minute
 	// defaultAuthBanDuration is short on purpose: the ban keys on a source
@@ -50,17 +41,10 @@ type Config struct {
 	// BearerCredentials are the expected credentials, precomputed by
 	// `gul-relay derive-credential`. Deriving one costs tens of milliseconds,
 	// so it must never happen while a request is being served. At least one
-	// v2 credential is required; legacy credentials are honored only while
-	// AcceptLegacyBearer is set. None of them is the raw Mumble password.
+	// v2 credential is required; anything older is refused. None of them is the
+	// raw Mumble password.
 	BearerCredentials []relayproto.Credential
-	// AcceptLegacyNames keeps the fixed /mumble path and gul-mumble-v1
-	// subprotocol usable while the clients that predate the derived pair are
-	// still out there. Every legacy match is logged at Warn.
-	AcceptLegacyNames bool
-	// AcceptLegacyBearer keeps the v0.3.0-alpha.2 credential usable for one
-	// release. Every legacy match is logged at Warn.
-	AcceptLegacyBearer bool
-	MaxConnections     int
+	MaxConnections    int
 	// MaxConnectionsPerIP bounds the sessions one source may hold. "IP" is the
 	// folded source key, not a single address: IPv4 by /32, IPv6 by /64. See
 	// sourceKey.
@@ -108,12 +92,12 @@ type Handler struct {
 	// by the primary credential, so both ends reach it from the password.
 	obfuscator *relayproto.Obfuscator
 	// paths and subprotocols are the names this relay answers on, derived from
-	// every configured credential (relayproto.NamesFor) plus, while the window
-	// is open, the fixed legacy pair. Precomputed: a request must never spend
-	// a key derivation.
+	// every configured credential (relayproto.NamesFor). Neither is
+	// client-selected: the relay answers a fixed set it computed at startup, so
+	// it can never become a proxy to somewhere else. Precomputed, because a
+	// request must never spend a key derivation.
 	paths        map[string]bool
 	subprotocols map[string]bool
-	legacyNames  bool
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -146,7 +130,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if err := validateLoopbackAddress(cfg.Upstream); err != nil {
 		return nil, fmt.Errorf("relay upstream: %w", err)
 	}
-	credentials, primary, err := prepareCredentials(cfg.BearerCredentials, cfg.AcceptLegacyBearer)
+	credentials, primary, err := prepareCredentials(cfg.BearerCredentials)
 	if err != nil {
 		return nil, fmt.Errorf("relay bearer credentials: %w", err)
 	}
@@ -211,9 +195,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		writeTimeout: cfg.SessionWriteTimeout,
 		cover:        newCoverSite(cfg.ServerHeader, cfg.CoverIndex, cfg.CoverNotFound, time.Time{}),
 		obfuscator:   relayproto.NewObfuscator(primary),
-		paths:        tunnelPaths(credentials, cfg.AcceptLegacyNames),
-		subprotocols: tunnelSubprotocols(credentials, cfg.AcceptLegacyNames),
-		legacyNames:  cfg.AcceptLegacyNames,
+		paths:        tunnelPaths(credentials),
+		subprotocols: tunnelSubprotocols(credentials),
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perSourceMax: cfg.MaxConnectionsPerIP,
@@ -311,9 +294,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.cover.NotFound(w, r)
 		return
 	}
-	if result.legacy {
-		h.logger.Warn("relay accepted legacy bearer credential", "source", sourceIP)
-	}
 	if retryAfter, banned := h.authFailures.clearIfAllowed(sourceBlock); banned {
 		// A concurrent failed request may have activated the ban while this
 		// request was validating its credential. Recheck under the limiter lock
@@ -327,12 +307,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.cover.NotFound(w, r)
 		return
 	}
-	if h.legacyNames && (r.URL.Path == relayproto.LegacyPath || subprotocol == relayproto.LegacySubprotocol) {
-		// The pair that names what the tunnel carries. Logged so the operator
-		// can see who still has to update before the window is shut.
-		h.logger.Warn("relay accepted the legacy tunnel names", "source", sourceIP)
-	}
-
 	release, scope, ok := h.acquire(sourceBlock)
 	if !ok {
 		h.logger.Warn("relay capacity rejected", "source", sourceIP, "scope", scope)
@@ -594,27 +568,20 @@ func validateLoopbackAddress(address string) error {
 }
 
 // tunnelPaths and tunnelSubprotocols precompute the names this relay answers
-// on: one pair per configured credential, plus the legacy pair while the
-// window is open. Derivation is one HMAC, but it belongs at startup - a
-// request must never spend one.
-func tunnelPaths(credentials []relayproto.Credential, legacy bool) map[string]bool {
-	paths := make(map[string]bool, len(credentials)+1)
+// on: one pair per configured credential. Derivation is one HMAC, but it
+// belongs at startup - a request must never spend one.
+func tunnelPaths(credentials []relayproto.Credential) map[string]bool {
+	paths := make(map[string]bool, len(credentials))
 	for _, credential := range credentials {
 		paths[relayproto.NamesFor(credential).Path] = true
-	}
-	if legacy {
-		paths[relayproto.LegacyPath] = true
 	}
 	return paths
 }
 
-func tunnelSubprotocols(credentials []relayproto.Credential, legacy bool) map[string]bool {
-	names := make(map[string]bool, len(credentials)+1)
+func tunnelSubprotocols(credentials []relayproto.Credential) map[string]bool {
+	names := make(map[string]bool, len(credentials))
 	for _, credential := range credentials {
 		names[relayproto.NamesFor(credential).Subprotocol] = true
-	}
-	if legacy {
-		names[relayproto.LegacySubprotocol] = true
 	}
 	return names
 }

@@ -22,7 +22,6 @@ const (
 
 type authResult struct {
 	authorized bool
-	legacy     bool
 	class      string
 }
 
@@ -46,7 +45,6 @@ func (h *Handler) authorize(header string) authResult {
 	for _, expected := range h.credentials {
 		if presented.Matches(expected) {
 			result.authorized = true
-			result.legacy = expected.Legacy()
 		}
 	}
 	return result
@@ -54,9 +52,10 @@ func (h *Handler) authorize(header string) authResult {
 
 // prepareCredentials validates the precomputed expected credentials and
 // returns the set the relay honors together with the v2 credential that keys
-// source pseudonymization. Legacy credentials are dropped unless the
-// deprecation window is still open.
-func prepareCredentials(credentials []relayproto.Credential, acceptLegacy bool) ([]relayproto.Credential, relayproto.Credential, error) {
+// source pseudonymization. A credential older than v2 is dropped: the
+// deprecation window closed on 2026-08-27, so a secret file that still carries
+// one boots on its v2 line and refuses to start without one.
+func prepareCredentials(credentials []relayproto.Credential) ([]relayproto.Credential, relayproto.Credential, error) {
 	if len(credentials) == 0 {
 		return nil, "", errors.New("at least one expected credential is required")
 	}
@@ -67,9 +66,6 @@ func prepareCredentials(credentials []relayproto.Credential, acceptLegacy bool) 
 			return nil, "", errors.New("must be values produced by `gul-relay derive-credential`")
 		}
 		if credential.Legacy() {
-			if acceptLegacy {
-				honored = append(honored, credential)
-			}
 			continue
 		}
 		if primary == "" {

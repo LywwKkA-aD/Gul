@@ -21,7 +21,7 @@ const (
 	maxExpectedCredentials = 4
 )
 
-// deriveCredentialCommand turns the raw Mumble password into the credentials
+// deriveCredentialCommand turns the raw Mumble password into the credential
 // the relay expects. It is the only place a Gul binary handles that password:
 // the derivation is deliberately expensive, and its output is what the
 // production secret holds, so the relay itself never sees the password.
@@ -29,7 +29,6 @@ func deriveCredentialCommand(args []string, stdin io.Reader, stdout io.Writer) e
 	flags := flag.NewFlagSet("derive-credential", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	secretFile := flags.String("secret-file", "", "absolute path to the raw Mumble password file")
-	currentOnly := flags.Bool("v2-only", false, "emit only the current credential, dropping the compatibility line")
 	if err := flags.Parse(args); err != nil {
 		return errors.New("invalid derive-credential flags")
 	}
@@ -65,17 +64,11 @@ func deriveCredentialCommand(args []string, stdin io.Reader, stdout io.Writer) e
 	}
 	defer clear(secret)
 
-	credentials := []relayproto.Credential{relayproto.Derive(secret)}
-	if !*currentOnly {
-		// One compatibility line for the alpha.2 clients. Dropping it is a
-		// one-line change to the secret once every client has been updated.
-		credentials = append(credentials, relayproto.DeriveLegacy(secret))
-	}
+	// One line, the current credential. Older builds had a second,
+	// compatibility line here; the window it served closed on 2026-08-27.
 	var rendered bytes.Buffer
-	for _, credential := range credentials {
-		if _, err := fmt.Fprintln(&rendered, string(credential)); err != nil {
-			return fmt.Errorf("render bearer credential: %w", err)
-		}
+	if _, err := fmt.Fprintln(&rendered, string(relayproto.Derive(secret))); err != nil {
+		return fmt.Errorf("render bearer credential: %w", err)
 	}
 	if _, err := stdout.Write(rendered.Bytes()); err != nil {
 		return fmt.Errorf("write bearer credential: %w", err)

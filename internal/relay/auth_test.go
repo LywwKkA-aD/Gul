@@ -40,40 +40,26 @@ func assertAuthorized(
 	}
 }
 
-func TestHandlerAcceptsLegacyBearerCredentialOnlyWhileEnabled(t *testing.T) {
+// A secret file left over from the deprecation window still carries the old
+// line. The relay must boot on such a file and refuse that line all the same:
+// there is no configuration left that turns it back on.
+func TestHandlerRefusesLegacyBearerCredentialEvenWhenConfigured(t *testing.T) {
 	const secret = "server secret"
 	legacyHeader := make(http.Header)
-	legacyHeader.Set("Authorization", testLegacyCredential(secret).Header())
+	legacyHeader.Set("Authorization", legacyCredential.Header())
 
-	t.Run("enabled", func(t *testing.T) {
-		logger, records := newRecordingLogger()
-		cfg := baseConfig(secret)
-		cfg.BearerCredentials = append(cfg.BearerCredentials, testLegacyCredential(secret))
-		cfg.AcceptLegacyBearer = true
-		cfg.Logger = logger
-		h := mustHandler(t, cfg)
+	logger, records := newRecordingLogger()
+	cfg := baseConfig(secret)
+	cfg.BearerCredentials = append(cfg.BearerCredentials, legacyCredential)
+	cfg.Logger = logger
+	h := mustHandler(t, cfg)
 
-		serveWithHeader(h, "192.0.2.10", legacyHeader)
-		record := records.await(t, "relay accepted legacy bearer credential")
-		if got := recordAttrs(record)["source"]; got != "192.0.2.10" {
-			t.Fatalf("logged source = %q, want 192.0.2.10", got)
-		}
-	})
-
-	t.Run("disabled", func(t *testing.T) {
-		logger, records := newRecordingLogger()
-		cfg := baseConfig(secret)
-		cfg.BearerCredentials = append(cfg.BearerCredentials, testLegacyCredential(secret))
-		cfg.AcceptLegacyBearer = false
-		cfg.Logger = logger
-		h := mustHandler(t, cfg)
-
-		if got := serveWithHeader(h, "192.0.2.10", legacyHeader).Code; got != http.StatusNotFound {
-			t.Fatalf("legacy credential status = %d, want 404", got)
-		}
-		// The current credential still works with the deprecation window shut.
-		assertAuthorized(t, h, records, "192.0.2.11", secret)
-	})
+	if got := serveWithHeader(h, "192.0.2.10", legacyHeader).Code; got != http.StatusNotFound {
+		t.Fatalf("legacy credential status = %d, want 404", got)
+	}
+	// The current credential still works, so the refusal is about the scheme
+	// and not about a relay that failed to load its secret.
+	assertAuthorized(t, h, records, "192.0.2.11", secret)
 }
 
 func TestHandlerRejectsMalformedAuthorizationHeaders(t *testing.T) {
@@ -90,7 +76,7 @@ func TestHandlerRejectsMalformedAuthorizationHeaders(t *testing.T) {
 		{name: "padded base64", value: "Bearer " + valid + "==", class: classMalformed},
 		{name: "oversized", value: "Bearer v2." + strings.Repeat("a", 200), class: classMalformed},
 		{name: "wrong secret", value: testCredential("other secret").Header(), class: classV2},
-		{name: "legacy shape", value: testLegacyCredential("server secret").Header(), class: classLegacy},
+		{name: "legacy shape", value: legacyCredential.Header(), class: classLegacy},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,15 +107,12 @@ func TestHandlerRejectsMalformedAuthorizationHeaders(t *testing.T) {
 }
 
 func TestNewHandlerRequiresCurrentCredential(t *testing.T) {
-	legacy := testLegacyCredential("server secret")
 	tests := []struct {
 		name        string
 		credentials []relayproto.Credential
-		legacyOK    bool
 	}{
 		{name: "none", credentials: nil},
-		{name: "legacy only", credentials: []relayproto.Credential{legacy}, legacyOK: true},
-		{name: "legacy only with window closed", credentials: []relayproto.Credential{legacy}},
+		{name: "legacy only", credentials: []relayproto.Credential{legacyCredential}},
 		{name: "raw password", credentials: []relayproto.Credential{relayproto.Credential("v2.not a credential")}},
 		{name: "padded", credentials: []relayproto.Credential{relayproto.Credential(string(testCredential("server secret")) + "==")}},
 	}
@@ -137,7 +120,6 @@ func TestNewHandlerRequiresCurrentCredential(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseConfig("server secret")
 			cfg.BearerCredentials = tc.credentials
-			cfg.AcceptLegacyBearer = tc.legacyOK
 			if _, err := NewHandler(cfg); err == nil {
 				t.Fatal("expected error")
 			}

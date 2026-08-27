@@ -8,34 +8,27 @@ import (
 	"testing"
 )
 
-// Known vectors for the password "secret": the current PBKDF2 credential and
-// the alpha.2 compatibility credential.
+// Known vectors for the password "secret": the current PBKDF2 credential, and
+// the value v0.3.0-alpha.2 clients sent. Nothing derives the second one any
+// more - it is written out here because the tests still need its shape.
 const (
 	currentVector = "v2.P1fPld_7YGIF3a4iPHzj38wXSnYZgJWjaS7G2Zgz3w4"
 	legacyVector  = "ecXjMdtgB9bAbJ4xSNptLwta9ET3_MHCKlC72qd_3Ik"
 )
 
-func TestDeriveCredentialCommandFromStandardInput(t *testing.T) {
+// One credential, on one line. The compatibility line that used to follow it
+// was the whole of the deprecation window, and it is gone: a secret written by
+// this command can no longer authorize a client that predates the v2 scheme.
+func TestDeriveCredentialCommandEmitsOnlyTheCurrentCredential(t *testing.T) {
 	var output bytes.Buffer
 	if err := deriveCredentialCommand(nil, strings.NewReader("secret\n"), &output); err != nil {
 		t.Fatalf("derive credential: %v", err)
 	}
-	want := currentVector + "\n" + legacyVector + "\n"
-	if got := output.String(); got != want {
-		t.Fatalf("credentials = %q, want the known vectors", got)
+	if got := output.String(); got != currentVector+"\n" {
+		t.Fatalf("credentials = %q, want only the current vector", got)
 	}
 	if strings.Contains(output.String(), "secret") {
 		t.Fatal("output leaked the raw Mumble password")
-	}
-}
-
-func TestDeriveCredentialCommandCanDropTheCompatibilityLine(t *testing.T) {
-	var output bytes.Buffer
-	if err := deriveCredentialCommand([]string{"--v2-only"}, strings.NewReader("secret\n"), &output); err != nil {
-		t.Fatalf("derive credential: %v", err)
-	}
-	if got := output.String(); got != currentVector+"\n" {
-		t.Fatalf("credentials = %q, want only the current one", got)
 	}
 }
 
@@ -64,6 +57,10 @@ func TestDeriveCredentialCommandRejectsUnsafeInput(t *testing.T) {
 		{name: "relative file", args: []string{"--secret-file", "relative-secret"}, input: "unused"},
 		{name: "positional secret", args: []string{"raw-password"}, input: "unused"},
 		{name: "unknown flag", args: []string{"--raw-secret", "raw-password"}, input: "unused"},
+		// The flag that used to select this behavior. It is now the only
+		// behavior, and a runbook still passing it should fail loudly rather
+		// than look like it did something.
+		{name: "the retired v2-only flag", args: []string{"--v2-only"}, input: "secret\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,6 +75,9 @@ func TestDeriveCredentialCommandRejectsUnsafeInput(t *testing.T) {
 	}
 }
 
+// A secret file written before the window closed still parses, so an operator
+// who has not recreated it is not locked out of their own relay: the handler
+// is what drops the second line (prepareCredentials).
 func TestReadCredentialFileAcceptsBothGenerations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "GUL_RELAY_BEARER")
 	if err := os.WriteFile(path, []byte(currentVector+"\n"+legacyVector+"\n"), 0o600); err != nil {

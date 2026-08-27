@@ -58,14 +58,12 @@ const (
 var version = "dev"
 
 type options struct {
-	listen             string
-	expectedHost       string
-	certFile           string
-	keyFile            string
-	credentialFile     string
-	acceptLegacyBearer bool
-	acceptLegacyNames  bool
-	quic               bool
+	listen         string
+	expectedHost   string
+	certFile       string
+	keyFile        string
+	credentialFile string
+	quic           bool
 }
 
 func main() {
@@ -96,8 +94,6 @@ func main() {
 	flag.StringVar(&opts.certFile, "cert", "/run/relay-tls/mumble.crt", "TLS certificate chain")
 	flag.StringVar(&opts.keyFile, "key", "/run/relay-tls/mumble.key", "TLS private key")
 	flag.StringVar(&opts.credentialFile, "credential-file", "/run/secrets/GUL_RELAY_BEARER", "pre-derived relay bearer credential file")
-	flag.BoolVar(&opts.acceptLegacyBearer, "accept-legacy-bearer", true, "accept the v0.3.0-alpha.2 bearer credential during the deprecation window")
-	flag.BoolVar(&opts.acceptLegacyNames, "accept-legacy-names", true, "accept the fixed /mumble path and gul-mumble-v1 subprotocol during the deprecation window")
 	flag.BoolVar(&opts.quic, "quic", true, "also accept tunnels over QUIC on the same address, UDP")
 	flag.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	flag.Parse()
@@ -206,8 +202,6 @@ func serve(ctx context.Context, opts options, logger *slog.Logger, listener net.
 		"version", version,
 		"listen", listener.Addr().String(),
 		"quic", quicServer != nil,
-		"accept_legacy_bearer", opts.acceptLegacyBearer,
-		"accept_legacy_names", opts.acceptLegacyNames,
 	)
 
 	select {
@@ -260,8 +254,6 @@ func relayConfig(opts options, credentials []relayproto.Credential, logger *slog
 		ExpectedHost:            opts.expectedHost,
 		Upstream:                upstreamAddress,
 		BearerCredentials:       credentials,
-		AcceptLegacyBearer:      opts.acceptLegacyBearer,
-		AcceptLegacyNames:       opts.acceptLegacyNames,
 		MaxConnections:          maxRelayConnections,
 		MaxConnectionsPerIP:     maxSessionsPerIP,
 		MaxWebSocketMessageSize: relayproto.MaxMessageBytes,

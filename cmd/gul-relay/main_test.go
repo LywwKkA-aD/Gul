@@ -64,13 +64,10 @@ func TestPreAuthorizationConnectionLimitsLeaveBoundedHandshakeHeadroom(t *testin
 
 func TestRelayConfigUsesTheSharedMessageBound(t *testing.T) {
 	credentials := []relayproto.Credential{relayproto.Credential(currentVector)}
-	cfg := relayConfig(options{expectedHost: "murmur.example.test", acceptLegacyBearer: true}, credentials, slog.New(slog.DiscardHandler))
+	cfg := relayConfig(options{expectedHost: "murmur.example.test"}, credentials, slog.New(slog.DiscardHandler))
 
 	if cfg.MaxWebSocketMessageSize != relayproto.MaxMessageBytes {
 		t.Fatalf("message bound = %d, want %d", cfg.MaxWebSocketMessageSize, relayproto.MaxMessageBytes)
-	}
-	if !cfg.AcceptLegacyBearer {
-		t.Fatal("legacy bearer acceptance was not passed through")
 	}
 	if cfg.AuthBanDuration != time.Minute {
 		t.Fatalf("ban duration = %s, want 1m", cfg.AuthBanDuration)
@@ -400,12 +397,11 @@ func testDaemonOptions(t *testing.T) (options, *x509.CertPool) {
 		t.Fatalf("write credential file: %v", err)
 	}
 	return options{
-		listen:             "127.0.0.1:0",
-		expectedHost:       "murmur.example.test",
-		certFile:           certFile,
-		keyFile:            keyFile,
-		credentialFile:     credentialFile,
-		acceptLegacyBearer: true,
+		listen:         "127.0.0.1:0",
+		expectedHost:   "murmur.example.test",
+		certFile:       certFile,
+		keyFile:        keyFile,
+		credentialFile: credentialFile,
 	}, roots
 }
 

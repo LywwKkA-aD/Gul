@@ -1,18 +1,23 @@
 # Gul WSS relay
 
-The relay exposes one protocol endpoint:
+The relay exposes one protocol endpoint, and its address is not a constant:
 
 ```text
-wss://murmur.gulvox.com/mumble -> 127.0.0.1:64738
+wss://murmur.gulvox.com/ws/<16 hex> -> 127.0.0.1:64738
 ```
+
+Both the path and the required WebSocket subprotocol are derived from the
+credential (`relayproto.NamesFor`), so every server has its own pair and only
+somebody who already knows the server password can work out where the tunnel
+is. Everything else on the host - including the pair any other server uses -
+gets the cover site's 404.
 
 The Gul client derives a domain-separated bearer credential from the server
 join password. The relay stores only that derived credential in the separate
 `GUL_RELAY_BEARER` Podman secret; the raw Mumble password is never mounted into
-the production relay. It requires the `gul-mumble-v1` WebSocket subprotocol,
-accepts binary frames only, and carries the inner Mumble TLS stream without
-inspecting it. The destination is compiled into the binary; request data cannot
-select another target.
+the production relay. It accepts binary frames only and carries the inner Mumble
+TLS stream without inspecting it. The destination is compiled into the binary;
+request data cannot select another target.
 
 Production runs as the same rootless Podman user as Murmur and joins only
 Murmur's existing pasta network namespace. Murmur's owner Quadlet publishes
@@ -40,24 +45,24 @@ podman run --rm \
   | podman secret create GUL_RELAY_BEARER -
 ```
 
-`derive-credential` writes one credential per line: the current PBKDF2
-credential (`v2.` prefix) first, then the single-HMAC credential that clients up
-to v0.3.0-alpha.2 send. The relay derives nothing at startup and nothing per
-request; it compares the presented header against these precomputed values.
+`derive-credential` writes one line: the current PBKDF2 credential, with a
+`v2.` prefix. The relay derives nothing at startup and nothing per request; it
+compares the presented header against these precomputed values.
 
-A file without a `v2.` line is refused at startup: an existing deployment that
-still holds only the alpha.2 credential must recreate the secret with the
-command above before this version starts.
+A file without a `v2.` line is refused at startup, and a line without the prefix
+is ignored: a secret left over from the deprecation window still boots the relay
+on its `v2.` line, and the older value it carries authorizes nothing.
 
-Legacy lifecycle:
+Both compatibility windows closed on 2026-08-27. The single-HMAC credential of
+v0.3.0-alpha.2 and the fixed `/mumble` + `gul-mumble-v1` pair of every build up
+to v0.4.0-alpha.2 are gone from the code, not merely switched off, so no flag
+and no stale secret can bring them back. Clients older than v0.5.0-alpha.1 do
+not connect at all; the old path answers with the same 404 as any address the
+host does not serve, which is the point - shutting it must not itself become
+the signal that this host used to be a relay.
 
-1. This release runs with `--accept-legacy-bearer` (the default). Every request
-   that matched the legacy credential is logged at warn level with its source,
-   so the journal shows exactly who still has to update.
-2. Once no such line has appeared for a full release cycle, recreate the secret
-   with `derive-credential --v2-only` and add `--accept-legacy-bearer=false` to
-   the `Exec=` line. Either change alone is enough to stop accepting it; doing
-   both removes the value from the host as well.
+Rolling that back means deploying an older image, which the host still holds
+(`Pull=never`): put its digest back in the Quadlet and restart.
 
 ## What counts as one source
 
@@ -125,7 +130,6 @@ the level (`info` by default). What an operator sees per failure class:
 | --- | --- | --- |
 | Session opened and closed | info | `source`, `duration`, `bytes_from_client`, `bytes_to_client`, `reason` |
 | Rejected credential (401) | warn | `source`, `credential` (`missing`, `malformed`, `legacy`, `v2`) |
-| Legacy credential accepted | warn | `source` |
 | Ban activated (429) | warn | `source`, `retry_after` |
 | Relay full (503) | warn | `source`, `scope` (`global`, `source` or `shutdown`) |
 | Pre-authentication connections rejected | warn | `scope`, `rejected` since the last line |

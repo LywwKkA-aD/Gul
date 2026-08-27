@@ -26,25 +26,25 @@ func TestDeriveIsDeterministicAndSecretBound(t *testing.T) {
 	}
 }
 
-func TestLegacyKnownVector(t *testing.T) {
-	// Pinned against the v0.3.0-alpha.2 Authorization() output so shipped
-	// clients keep passing during the deprecation window.
-	const want = "Bearer EFh3GkAqEN8212SD6yFQdvF7iRkDciWJHYuMloUCIoQ"
-	got := DeriveLegacy([]byte("correct horse battery staple"))
-	if got.Header() != want {
-		t.Fatalf("legacy header = %q, want %q", got.Header(), want)
+// The value v0.3.0-alpha.2 clients sent for this password. Nothing derives it
+// any more; it is written out so the tests can still present its shape.
+const legacyVector Credential = "EFh3GkAqEN8212SD6yFQdvF7iRkDciWJHYuMloUCIoQ"
+
+func TestLegacyIsRecognizedByShapeAlone(t *testing.T) {
+	if !legacyVector.Legacy() {
+		t.Fatal("a credential without the v2 prefix was not reported as legacy")
 	}
-	if !got.Legacy() {
-		t.Fatal("v1 credential not reported as legacy")
+	if Derive([]byte("correct horse battery staple")).Legacy() {
+		t.Fatal("a v2 credential was reported as legacy")
 	}
-	if got.Matches(Derive([]byte("correct horse battery staple"))) {
+	if legacyVector.Matches(Derive([]byte("correct horse battery staple"))) {
 		t.Fatal("v1 and v2 credentials of the same secret must differ")
 	}
 }
 
 func TestParseHeader(t *testing.T) {
 	v2 := Derive([]byte("secret"))
-	v1 := DeriveLegacy([]byte("secret"))
+	v1 := legacyVector
 	for _, header := range []string{v2.Header(), v1.Header(), "bearer " + string(v2)} {
 		c, ok := ParseHeader(header)
 		if !ok {

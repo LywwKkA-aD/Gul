@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/LywwKkA-aD/gumble/gumble"
-
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 type endpointKind uint8
@@ -20,6 +18,11 @@ const (
 	endpointDirect endpointKind = iota
 	endpointWSS
 )
+
+// retiredTunnelPath is the fixed path relays answered on up to v0.4.0-alpha.2,
+// published in the documentation of the time. The relay no longer answers on
+// it, but an address that still names it is treated as naming the server.
+const retiredTunnelPath = "/mumble"
 
 type endpoint struct {
 	kind    endpointKind
@@ -69,9 +72,11 @@ func parseWSSEndpoint(value string) (endpoint, error) {
 	// The address carries no tunnel path. Where the tunnel answers is derived
 	// from the server password at dial time and differs per server
 	// (relayproto.NamesFor), so it cannot be part of what the user types or of
-	// what a saved server remembers. The old fixed path is still accepted and
-	// dropped, so servers saved by earlier builds keep working.
-	if parsed.Path == "/" || parsed.Path == relayproto.LegacyPath {
+	// what a saved server remembers. The path earlier builds published is still
+	// accepted here and dropped: the relay stopped answering on it, but a saved
+	// or copied address that spells it out should still resolve to the server
+	// rather than be refused as malformed.
+	if parsed.Path == "/" || parsed.Path == retiredTunnelPath {
 		parsed.Path = ""
 	}
 	if parsed.Path != "" || parsed.RawPath != "" {

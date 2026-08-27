@@ -35,9 +35,10 @@ func testCredential(secret string) relayproto.Credential {
 	return credential
 }
 
-func testLegacyCredential(secret string) relayproto.Credential {
-	return relayproto.DeriveLegacy([]byte(secret))
-}
+// legacyCredential has the shape v0.3.0-alpha.2 clients sent: a bare base64url
+// digest with no version prefix. Nothing derives one any more, so it is written
+// out - what these tests need from it is only that shape.
+const legacyCredential relayproto.Credential = "ecXjMdtgB9bAbJ4xSNptLwta9ET3_MHCKlC72qd_3Ik"
 
 // testNames is the pair a relay configured with this secret answers on. The
 // fixed pair is gone: both are derived per server (relayproto.NamesFor).
@@ -60,7 +61,6 @@ func baseConfig(secret string) Config {
 		MaxConnections:          4,
 		MaxConnectionsPerIP:     2,
 		MaxWebSocketMessageSize: 64 * 1024,
-		AcceptLegacyNames:       true,
 		Logger:                  slog.New(slog.DiscardHandler),
 	}
 }

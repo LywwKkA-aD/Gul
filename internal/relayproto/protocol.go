@@ -17,19 +17,6 @@ import (
 )
 
 const (
-	// LegacyPath and LegacySubprotocol are the fixed names every build up to
-	// v0.4.0-alpha.2 used. They say out loud what the tunnel carries, which is
-	// the one thing it must not say: anything that terminates TLS on the way -
-	// a corporate proxy, an antivirus with HTTPS scanning, which is the normal
-	// configuration on a great many Windows machines - reads `GET /mumble` and
-	// `Sec-WebSocket-Protocol: gul-mumble-v1` in clear text and then decides
-	// what to do about an opaque tunnel it cannot inspect.
-	//
-	// They stay only while the relay accepts both, so the clients that predate
-	// the change keep working. Every use is logged.
-	LegacyPath        = "/mumble"
-	LegacySubprotocol = "gul-mumble-v1"
-
 	// MaxMessageBytes bounds one WebSocket message in either direction. The
 	// client sends one whole Mumble TCP packet per message, so the bound has
 	// to clear the largest packet murmur legitimately carries (images in
@@ -44,10 +31,9 @@ const (
 	// once per process or per password, never per request or per frame.
 	bearerIterations = 600_000
 
-	legacyDomain = "gul-relay-v1 bearer"
-	bearerSalt   = "gul-relay-v2 bearer"
-	namesDomain  = "gul-relay-v2 tunnel names"
-	v2Prefix     = "v2."
+	bearerSalt  = "gul-relay-v2 bearer"
+	namesDomain = "gul-relay-v2 tunnel names"
+	v2Prefix    = "v2."
 )
 
 // Names are the address and the subprotocol one server's tunnel answers on.
@@ -102,20 +88,13 @@ func Derive(secret []byte) Credential {
 	return Credential(v2Prefix + base64.RawURLEncoding.EncodeToString(key))
 }
 
-// DeriveLegacy computes the v1 credential of v0.3.0-alpha.2 clients: a
-// single HMAC-SHA256 of a fixed domain string, which is cheap enough to
-// brute-force offline from a leaked header. It exists only so the relay
-// can keep accepting alpha.2 clients during a deprecation window.
-func DeriveLegacy(secret []byte) Credential {
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(legacyDomain))
-	return Credential(base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
-}
-
 // Header renders the credential as an Authorization header value.
 func (c Credential) Header() string { return "Bearer " + string(c) }
 
-// Legacy reports whether the credential uses the v1 scheme.
+// Legacy reports whether the credential predates the v2 scheme: a bare
+// single-HMAC value, cheap enough to brute-force offline from a leaked header.
+// Nothing derives one any more - the relay only recognizes the shape, so it can
+// refuse it and say so in the log rather than call it malformed.
 func (c Credential) Legacy() bool { return !strings.HasPrefix(string(c), v2Prefix) }
 
 // Matches compares two credentials in constant time (over SHA-256 digests,
