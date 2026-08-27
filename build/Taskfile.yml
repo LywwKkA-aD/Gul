@@ -196,7 +196,17 @@ tasks:
       - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
 
   generate:icons:
-    summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).
+    summary: >-
+      Generates Windows `.ico` and Mac `.icns` from `appicon.png`, which
+      `go run ./cmd/gul-icons` writes from the mark in `internal/tray` - edit
+      the mark, not these files. The Icon Composer step (`-iconcomposerinput`)
+      would also produce `darwin/Assets.car`, but it needs macOS 26 AND a full
+      Xcode 26 for `actool`; with only the Command Line Tools it fails back
+      silently, so there is deliberately no `Assets.car` in the tree. An empty
+      one is safer than a stale one: macOS prefers the catalogue over the
+      `.icns` when `CFBundleIconName` is set, so a leftover catalogue quietly
+      ships whatever icon it was built with. If it is ever regenerated, put
+      `CFBundleIconName` back into both `darwin/Info*.plist`.
     run: once
     dir: build
     sources:

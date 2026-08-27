@@ -46,6 +46,11 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# Developer tools built into the repo root by a bare `go build ./cmd/...`.
+/gul-icons
+/gul-relay
+/gul-dsp
+
 # Debug / temp
 *.log
 *.pprof

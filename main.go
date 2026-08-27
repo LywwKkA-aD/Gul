@@ -416,17 +416,21 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 	})
 }
 
-// setTrayIcon paints the tray. macOS wants a template image and tints it for
-// the menu bar itself; the other platforms paint what they are given, so they
-// get a second glyph for dark panels.
+// setTrayIcon paints the tray.
+//
+// The icon carries the application's colour rather than being a silhouette the
+// system tints, so the panel it lands on is ours to handle. Windows and Linux
+// hold two images and pick by panel. macOS holds one - its dark-mode setter
+// calls the same setter as the plain one - so it gets the single ink chosen to
+// clear both menu bars.
 func setTrayIcon(systemTray *application.SystemTray, icon core.TrayIcon) {
 	muted := icon == core.TrayIconMicMuted
 	if runtime.GOOS == "darwin" {
-		systemTray.SetTemplateIcon(tray.Icon(muted))
+		systemTray.SetIcon(tray.Icon(tray.PanelEither, muted))
 		return
 	}
-	systemTray.SetIcon(tray.Icon(muted))
-	systemTray.SetDarkModeIcon(tray.IconLight(muted))
+	systemTray.SetIcon(tray.Icon(tray.PanelLight, muted))
+	systemTray.SetDarkModeIcon(tray.Icon(tray.PanelDark, muted))
 }
 
 // showWindow brings the window back from wherever it went: hidden by the close
