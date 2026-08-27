@@ -17,8 +17,17 @@ of the contract negotiation. The newer one frames every write and pads it to a
 fixed grid, so the record lengths stop following the encoder
 (`relayproto.Shape`); the older one is the plain byte stream. A client offers
 both, newest first, so a relay that predates the shaped contract still answers.
-Once no session negotiates the plain name any more it can be dropped, the same
-way the fixed names were.
+Every session logs which one it got, as `contract`, so the condition for
+dropping the plain name is a journal query rather than a guess:
+
+```sh
+journalctl CONTAINER_NAME=gul-wss-relay --since "7 days ago" | grep '"contract":"plain"'
+```
+
+The names themselves are never logged - they come from the password. Once that
+query has been empty for long enough that everybody has plainly had a chance to
+update, the plain name can be dropped from `tunnelSubprotocols`, the same way
+the fixed names were.
 
 The Gul client derives a domain-separated bearer credential from the server
 join password. The relay stores only that derived credential in the separate
@@ -136,7 +145,7 @@ the level (`info` by default). What an operator sees per failure class:
 
 | Event | Level | Key fields |
 | --- | --- | --- |
-| Session opened and closed | info | `source`, `duration`, `bytes_from_client`, `bytes_to_client`, `reason` |
+| Session opened and closed | info | `source`, `transport`, `contract` (`plain`, `shaped`), `duration`, `bytes_from_client`, `bytes_to_client`, `reason` |
 | Rejected credential (401) | warn | `source`, `credential` (`missing`, `malformed`, `legacy`, `v2`) |
 | Ban activated (429) | warn | `source`, `retry_after` |
 | Relay full (503) | warn | `source`, `scope` (`global`, `source` or `shutdown`) |

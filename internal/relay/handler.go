@@ -23,6 +23,15 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
+// The two tunnel contracts, as they appear in the session log. The names they
+// are negotiated under are derived from the password and never leave the
+// process; these labels are what an operator reads to see who is still on the
+// older one, which is the whole condition for retiring it.
+const (
+	contractPlain  = "plain"
+	contractShaped = "shaped"
+)
+
 const (
 	defaultAuthFailuresBeforeBan = 5
 	defaultAuthFailureWindow     = time.Minute
@@ -340,9 +349,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// bound has to be reinstated after it, not before. Without it a peer can
 	// make the relay buffer a message of any size.
 	ws.SetReadLimit(h.messageSize)
+	// The name the client asked for says which contract this session runs on,
+	// and it is the only place that says so - the derived names themselves are
+	// never logged, because they come from the password.
+	contract := contractPlain
 	if h.shaped[subprotocol] {
-		// The name the client asked for says which contract this session runs
-		// on. Shaping is symmetric: the relay pads and sends chaff in its own
+		contract = contractShaped
+		// Shaping is symmetric: the relay pads and sends chaff in its own
 		// direction too, because half a shaped conversation leaves the other
 		// half a metronome.
 		shaped := relayproto.Shape(stream)
@@ -357,7 +370,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// not when a courtesy close frame finishes timing out.
 	defer func() { go func() { _ = stream.Close() }() }()
 
-	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", func() {
+	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", contract, func() {
 		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
 	})
 }
@@ -371,7 +384,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // that is down, in whatever way its transport can say so.
 func (h *Handler) pumpSession(
 	stream net.Conn,
-	sourceIP, sourceBlock, transport string,
+	sourceIP, sourceBlock, transport, contract string,
 	onUpstreamFailure func(),
 ) {
 	dialer := h.dialer
@@ -394,7 +407,7 @@ func (h *Handler) pumpSession(
 	}
 
 	opened := time.Now()
-	openAttrs := []any{"source", sourceIP, "transport", transport}
+	openAttrs := []any{"source", sourceIP, "transport", transport, "contract", contract}
 	if localAddress != nil {
 		openAttrs = append(openAttrs, "upstream_source", localAddress.String())
 	}

@@ -191,7 +191,7 @@ func (s *QUICServer) serveConn(conn *quic.Conn) {
 	}
 	defer s.handler.unregisterStream(tunnel)
 
-	s.handler.pumpSession(tunnel, sourceIP, sourceBlock, "quic", nil)
+	s.handler.pumpSession(tunnel, sourceIP, sourceBlock, "quic", contractShaped, nil)
 }
 
 // quicStreamConn makes one bidirectional stream a net.Conn, which is all the

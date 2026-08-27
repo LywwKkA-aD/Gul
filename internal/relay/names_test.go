@@ -3,6 +3,7 @@ package relay
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -125,5 +126,38 @@ func TestTheClientChoosesTheContract(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
 	if got := conn.Subprotocol(); got != names.Shaped {
 		t.Fatalf("negotiated %q, want the shaped contract %q", got, names.Shaped)
+	}
+}
+
+// The session log has to say which contract a session runs on, or the one
+// condition for retiring the older name - that nobody negotiates it any more -
+// cannot be checked at all. The names themselves must never appear: they are
+// derived from the password.
+func TestTheSessionLogNamesTheContract(t *testing.T) {
+	t.Parallel()
+	names := relayproto.NamesFor(testCredential(defaultTestSecret))
+	for label, subprotocol := range map[string]string{
+		contractPlain:  names.Subprotocol,
+		contractShaped: names.Shaped,
+	} {
+		t.Run(label, func(t *testing.T) {
+			logger, records := newRecordingLogger()
+			cfg := baseConfig(defaultTestSecret)
+			cfg.Upstream = echoServer(t)
+			cfg.Logger = logger
+			server := httptest.NewServer(mustHandler(t, cfg))
+			t.Cleanup(server.Close)
+
+			if got := dialNames(t, server, defaultTestSecret, names.Path, subprotocol); got != http.StatusSwitchingProtocols {
+				t.Fatalf("status = %d, want 101", got)
+			}
+			attrs := recordAttrs(records.await(t, "relay session opened"))
+			if attrs["contract"] != label {
+				t.Fatalf("logged contract = %q, want %q", attrs["contract"], label)
+			}
+			if rendered := records.rendered(); strings.Contains(rendered, subprotocol) {
+				t.Fatalf("the log carried the derived name itself: %s", rendered)
+			}
+		})
 	}
 }
