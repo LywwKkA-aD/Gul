@@ -47,11 +47,32 @@ const (
 	// size on the wire, not merely a padded one.
 	shapedBucket = 256
 
-	// shapedMaxPayload bounds one frame. Writes arriving here are TLS records
-	// and copy buffers, neither of which reaches this, but a length field is
-	// read from the wire and everything read from the wire needs a bound.
+	// shapedMaxPayload bounds a frame read from the wire. Nothing we send
+	// reaches it any more - shapedCellPayload is the sending bound - but a
+	// length field arriving from outside still needs one.
 	shapedMaxPayload = 1 << 15
+
+	// shapedCellPayload is the most one frame carries, chosen so that every
+	// frame we send is exactly one cell.
+	//
+	// Rounding up to the grid was not enough, and the gap was measured rather
+	// than reasoned about. A voice record is 34 to 99 bytes and disappears
+	// into a cell, which is what the grid was designed for and what it does.
+	// The inner TLS handshake is not voice: its records are 1300 to 1500
+	// bytes, and rounding turned them into frames of 1536 and 1280 - the only
+	// two sizes in an entire session that were not 256. An observer needed no
+	// cleverness at all, just "the first frame is bigger than the rest".
+	//
+	// Splitting instead of rounding costs nothing: 1500 bytes become six cells
+	// of 256, which is the 1536 bytes the single padded frame took anyway. The
+	// session now has exactly one frame size from its first byte.
+	shapedCellPayload = shapedBucket - shapedHeaderLen
 )
+
+// ShapedCellBytes is the size of every frame this contract puts on the wire.
+// Exported so a test can measure the wire against it rather than against a
+// number written down twice.
+const ShapedCellBytes = shapedBucket
 
 // ShapedConn is a net.Conn whose writes leave as fixed-size frames, and which
 // keeps talking while nothing is being said.
@@ -83,15 +104,16 @@ func Shape(conn net.Conn) *ShapedConn {
 	}
 }
 
-// Write sends p as one or more frames. Nothing is ever held back waiting for
-// more: the rule on both roads is that shaping may add, never delay.
+// Write sends p as one or more frames, every one of them exactly one cell.
+// Nothing is ever held back waiting for more: the rule on both roads is that
+// shaping may add, never delay.
 func (c *ShapedConn) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	written := 0
 	for {
-		chunk := min(len(p), shapedMaxPayload)
+		chunk := min(len(p), shapedCellPayload)
 		c.mu.Lock()
 		err := c.writeFrame(shapedKindData, p[:chunk])
 		c.mu.Unlock()

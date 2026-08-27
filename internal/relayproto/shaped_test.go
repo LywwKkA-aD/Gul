@@ -82,6 +82,69 @@ func TestEveryVoiceSizedWriteLeavesAtOneSize(t *testing.T) {
 	}
 }
 
+// The gap the grid left open, and the one that was actually being used.
+//
+// Rounding up to the cell hides a voice frame, which is 34 to 99 bytes, and
+// that is what the shaping was written and tested for. It hides nothing about
+// a record larger than a cell: an inner TLS handshake of 1300 to 1500 bytes
+// came out as frames of 1536 and 1280, and those were the only two sizes in a
+// whole session that were not 256. Measured on a live client, that is exactly
+// where two users' connections stopped carrying anything - 2816 bytes, the two
+// oversized frames, and then nothing ever again.
+//
+// One size means one size. Every frame is a cell, whatever was handed in.
+func TestNoWriteEverLeavesLargerThanACell(t *testing.T) {
+	t.Parallel()
+	wire := &recorder{}
+	shaped := Shape(wire)
+
+	for _, n := range []int{
+		1, 60, 99, // voice, which always fitted
+		250, 251, 252, // the cell payload and either side of it
+		1300, 1500, // the inner TLS handshake records
+		4096, 1 << 15, // copy buffers, and the old sending bound
+	} {
+		if _, err := shaped.Write(make([]byte, n)); err != nil {
+			t.Fatalf("write %d: %v", n, err)
+		}
+	}
+
+	sizes := wire.observed()
+	if len(sizes) == 0 {
+		t.Fatal("nothing reached the wire")
+	}
+	for i, size := range sizes {
+		if size != shapedBucket {
+			t.Fatalf("frame %d left at %d bytes, want exactly one %d byte cell: "+
+				"a size that stands out is the whole signature", i, size, shapedBucket)
+		}
+	}
+}
+
+// Splitting instead of rounding has to stay free. A record larger than a cell
+// was already padded up to a multiple of the grid, so cutting it into cells
+// puts the same bytes on the wire - and shaping that costs bandwidth is
+// shaping somebody will want turned off.
+func TestSplittingIntoCellsCostsNoBytes(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{1300, 1500, 4096} {
+		wire := &recorder{}
+		if _, err := Shape(wire).Write(make([]byte, n)); err != nil {
+			t.Fatalf("write %d: %v", n, err)
+		}
+		onWire := 0
+		for _, size := range wire.observed() {
+			onWire += size
+		}
+		body := shapedHeaderLen + n
+		rounded := body + (shapedBucket-body%shapedBucket)%shapedBucket
+		if onWire > rounded {
+			t.Fatalf("%d bytes took %d on the wire, more than the %d one padded frame took",
+				n, onWire, rounded)
+		}
+	}
+}
+
 // Chaff has to be the same size as speech, or filling the silences would
 // simply replace one legible pattern with another.
 func TestChaffIsIndistinguishableFromSpeechBySize(t *testing.T) {
