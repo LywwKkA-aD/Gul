@@ -82,7 +82,6 @@ func TestNoAdmissionSurvivesTheBanItRacedWith(t *testing.T) {
 
 	var mu sync.Mutex
 	banned := false
-	admittedAfterBan := 0
 
 	var wg sync.WaitGroup
 	for worker := range 8 {
@@ -94,15 +93,11 @@ func TestNoAdmissionSurvivesTheBanItRacedWith(t *testing.T) {
 				credential = wrong
 			}
 			for range 32 {
-				decision := h.admit(source, credential)
-				mu.Lock()
-				switch {
-				case decision.verdict == admitBanned:
+				if decision := h.admit(source, credential); decision.verdict == admitBanned {
+					mu.Lock()
 					banned = true
-				case decision.verdict == admitted && banned:
-					admittedAfterBan++
+					mu.Unlock()
 				}
-				mu.Unlock()
 			}
 		}()
 	}
@@ -111,7 +106,13 @@ func TestNoAdmissionSurvivesTheBanItRacedWith(t *testing.T) {
 	if !banned {
 		t.Fatal("no ban was reached; the window was never opened")
 	}
-	if admittedAfterBan != 0 {
-		t.Fatalf("%d admissions after the source was banned, want none", admittedAfterBan)
+
+	// Counting admissions that landed after the flag flipped would be the
+	// wrong assertion, and it was: an admit that began before the ban may
+	// finish after it, so the count is legal and the test was flaky. What is
+	// actually promised is a state, not an ordering - once the workers have
+	// stopped, a credential that would otherwise pass is still refused.
+	if got := h.admit(source, good); got.verdict != admitBanned {
+		t.Fatalf("verdict after the storm = %v, want the ban to still hold", got.verdict)
 	}
 }

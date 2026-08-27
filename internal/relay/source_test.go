@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 func TestSourceKeyFoldsAddressesToTheBlockOneSubscriberControls(t *testing.T) {
@@ -174,6 +176,8 @@ func TestHandlerMapsOneIPv6PrefixToOneUpstreamPseudonym(t *testing.T) {
 			t.Fatalf("dial %d: %v", session, err)
 		}
 		t.Cleanup(func() { _ = conn.CloseNow() })
+		sayHello(t, relayproto.Shape(relayproto.AsMessageConn(
+			websocket.NetConn(t.Context(), conn, websocket.MessageBinary))))
 		select {
 		case key := <-resolved:
 			keys = append(keys, key)

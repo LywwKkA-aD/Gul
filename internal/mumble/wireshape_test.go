@@ -2,11 +2,13 @@ package mumble
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
 	"math/big"
 	"net"
@@ -55,7 +57,7 @@ func TestTheWireCarriesOneSizeFromTheFirstByte(t *testing.T) {
 			return
 		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{relayTestNames().Shaped, relayTestNames().Subprotocol},
+			Subprotocols: []string{relayTestNames().Tunnel},
 		})
 		if err != nil {
 			return
@@ -66,17 +68,11 @@ func TestTheWireCarriesOneSizeFromTheFirstByte(t *testing.T) {
 		// The relay's own view: it reads whole messages, so their sizes are
 		// what its byte counter reports and what the journal shows.
 		observed := relayproto.AsMessageConn(&observedConn{Conn: stream, reads: messages})
-		inner := tls.Server(relayproto.Shape(observed),
-			&tls.Config{
-				MinVersion:   tls.VersionTLS12,
-				Certificates: []tls.Certificate{innerCertificate},
-				ClientAuth:   tls.RequestClientCert,
-			})
-		defer func() { _ = inner.Close() }()
-		if err := inner.HandshakeContext(r.Context()); err != nil {
+		shaped := relayproto.Shape(observed)
+		if err := serveTestTunnel(shaped, innerCertificate.Certificate[0]); err != nil {
 			return
 		}
-		_, _ = io.Copy(io.Discard, inner)
+		_, _ = io.Copy(io.Discard, shaped)
 	}))
 	relayServer.TLS = &tls.Config{
 		MinVersion:   tls.VersionTLS12,
@@ -103,9 +99,8 @@ func TestTheWireCarriesOneSizeFromTheFirstByte(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	identity := clientIdentity(t)
-	conn, err := dialWSSMumbleTLS(t.Context(), ep, relayTestCredential(),
-		NewTOFUStore(t.TempDir(), testLogger(t)), &identity, &http.Client{Transport: transport})
+	conn, err := dialWSSTunnel(t.Context(), ep, relayTestCredential(),
+		NewTOFUStore(t.TempDir(), testLogger(t)), &http.Client{Transport: transport})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -208,27 +203,56 @@ func distinct(sizes []int) []int {
 	return out
 }
 
-// clientIdentity is the production identity: RSA-2048, which is what cert.go
-// generates and therefore what the inner handshake actually carries. An ECDSA
-// stand-in would make the handshake small enough to hide the whole problem.
-func clientIdentity(t *testing.T) tls.Certificate {
+// serveTestTunnel is the relay's half of the exchange, for tests that need a
+// tunnel to exist rather than to test the relay.
+func serveTestTunnel(stream net.Conn, leaf []byte) error {
+	if _, err := relayproto.ReadTunnelHello(stream); err != nil {
+		return err
+	}
+	if err := relayproto.WriteTunnelAccept(stream, relayproto.TunnelAccept{
+		Version:     relayproto.TunnelVersion,
+		Status:      relayproto.TunnelAccepted,
+		Fingerprint: leaf,
+	}); err != nil {
+		return err
+	}
+	return relayproto.WriteTunnelReady(stream)
+}
+
+// testServerCertificate issues a self-signed leaf and the pool that trusts it.
+func testServerCertificate(t *testing.T, host string, serial int64) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("key: %v", err)
+		t.Fatalf("generate key: %v", err)
 	}
 	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(23),
-		Subject:      pkix.Name{CommonName: certCommonName},
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: host},
+		DNSNames:     []string{host},
 		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.AddDate(1, 0, 0),
+		NotAfter:     now.Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		t.Fatalf("certificate: %v", err)
+		t.Fatalf("create certificate: %v", err)
 	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("parse certificate pair: %v", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certPEM) {
+		t.Fatal("append test root")
+	}
+	return certificate, roots
 }

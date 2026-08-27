@@ -29,18 +29,19 @@ func TestHandlerRelaysBinaryStream(t *testing.T) {
 		&websocket.DialOptions{
 			HTTPHeader:   bearerHeader(secret),
 			Host:         testHost,
-			Subprotocols: []string{names.Shaped},
+			Subprotocols: []string{names.Tunnel},
 		},
 	)
 	if err != nil {
 		t.Fatalf("dial relay: %v (response: %#v)", err, response)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if got := conn.Subprotocol(); got != names.Shaped {
-		t.Fatalf("subprotocol = %q, want %q", got, names.Shaped)
+	if got := conn.Subprotocol(); got != names.Tunnel {
+		t.Fatalf("subprotocol = %q, want %q", got, names.Tunnel)
 	}
 
 	stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(context.Background(), conn, websocket.MessageBinary)))
+	completeTunnel(t, stream)
 	t.Cleanup(func() { _ = stream.Close() })
 	want := []byte{0x16, 0x03, 0x03, 0x00, 0x05, 0xde, 0xad, 0xbe, 0xef}
 	if _, err := stream.Write(want); err != nil {
@@ -344,9 +345,12 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			// WebSocket layer accepts, which is decided before the framing
 			// above it ever sees a byte. The relayed one goes through the
 			// framing, because that is what a client actually sends.
+			var session *relayproto.ShapedConn
 			if tc.relayed {
-				out := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(t.Context(), conn, websocket.MessageBinary)))
-				if _, err := out.Write(tc.payload); err != nil {
+				session = relayproto.Shape(relayproto.AsMessageConn(
+					websocket.NetConn(t.Context(), conn, websocket.MessageBinary)))
+				completeTunnel(t, session)
+				if _, err := session.Write(tc.payload); err != nil {
 					t.Fatalf("write test message: %v", err)
 				}
 			} else if err := conn.Write(t.Context(), tc.kind, tc.payload); err != nil {
@@ -371,11 +375,11 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 				}
 			}
 			// The upstream may split its answer across reads, so the echo is
-			// consumed as a stream rather than as one message.
-			stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(ctx, conn, websocket.MessageBinary)))
-
+			// consumed as a stream rather than as one message - on the same
+			// session the payload went out on, because the handshake happens
+			// once per connection and a second one would be read as data.
 			echoed := make([]byte, len(tc.payload))
-			if _, err := io.ReadFull(stream, echoed); err != nil {
+			if _, err := io.ReadFull(session, echoed); err != nil {
 				t.Fatalf("message at the limit was not relayed: %v", err)
 			}
 			if !bytes.Equal(echoed, tc.payload) {

@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -137,6 +136,8 @@ func TestQUICRelayCarriesTheStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial quic tunnel: %v", err)
 	}
+
+	completeTunnel(t, stream)
 
 	want := []byte{0x16, 0x03, 0x03, 0x00, 0x05, 0xde, 0xad, 0xbe, 0xef}
 	if _, err := stream.Write(want); err != nil {
@@ -285,22 +286,3 @@ func TestQUICServerCloseReleasesThePort(t *testing.T) {
 // while relayproto.Shape has only ever been applied on the WebSocket road. The
 // two roads cover sizes by different means and to different degrees, and this
 // line is what the difference is read from - journals were read through it
-// while two users' sessions were dying.
-func TestTheQUICRoadDoesNotClaimTheCellGrid(t *testing.T) {
-	t.Parallel()
-	if contractPadded == contractShaped {
-		t.Fatal("the two roads report the same shape; the label says nothing")
-	}
-	// Shape is what contractShaped means. If it ever starts being applied on
-	// the QUIC road, this test is the reminder to change the label back.
-	source, err := os.ReadFile("quic.go")
-	if err != nil {
-		t.Fatalf("read quic.go: %v", err)
-	}
-	if bytes.Contains(source, []byte("relayproto.Shape(")) {
-		t.Fatal("the QUIC road now shapes; the contract label must say so")
-	}
-	if !bytes.Contains(source, []byte("contractPadded")) {
-		t.Fatal("the QUIC road no longer reports the padded contract")
-	}
-}

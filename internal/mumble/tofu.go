@@ -174,6 +174,25 @@ func (s *TOFUStore) TLSConfig(host string) *tls.Config {
 	}
 }
 
+// VerifyFingerprint pins a server certificate the client did not fetch itself.
+//
+// It exists because the tunnel contract took the fetching away: the relay
+// opens Mumble TLS to the server now, and reports the leaf it found in the
+// accept frame. The value pinned is the same one this store has always held -
+// SHA-256 over the leaf's DER - so existing pins keep matching and nobody sees
+// a fingerprint prompt because of the change.
+//
+// What changed is the standing of the claim, and it must not be blurred: when
+// the client dialled the server itself, a mismatch meant the server's key had
+// changed. Now it means the relay says the server's key has changed. It still
+// catches that; it is no longer evidence against a relay that lies.
+func (s *TOFUStore) VerifyFingerprint(host, fingerprint string) error {
+	if fingerprint == "" {
+		return fmt.Errorf("the relay named no certificate for %s", host)
+	}
+	return s.verify(host, fingerprint)
+}
+
 func (s *TOFUStore) verify(host, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

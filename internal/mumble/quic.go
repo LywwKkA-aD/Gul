@@ -166,16 +166,14 @@ func (s *quicStream) Close() error {
 	return errors.Join(err, s.transport.Close(), s.socket.Close())
 }
 
-// dialQUICMumbleTLS opens the tunnel over QUIC and completes the Mumble TLS
-// handshake inside it, exactly as the WebSocket path does. The inner handshake
-// is what the certificate pin applies to, and it is the same handshake on
-// either road - the road cannot see into it.
-func dialQUICMumbleTLS(
+// dialQUICTunnel opens the QUIC road and runs the tunnel contract on it, the
+// same contract the WebSocket road runs. There is no second TLS session here
+// either; see dialWSSTunnel for what that buys and what it costs.
+func dialQUICTunnel(
 	ctx context.Context,
 	ep endpoint,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
-	certificate *tls.Certificate,
 	outerRoots *tls.Config,
 ) (net.Conn, error) {
 	if ep.kind != endpointRelay {
@@ -188,17 +186,9 @@ func dialQUICMumbleTLS(
 	if err != nil {
 		return nil, err
 	}
-	tlsConfig := tofu.TLSConfig(ep.host)
-	// tls.Client infers no hostname from a net.Conn, so the inner handshake is
-	// told which name to send and to pin.
-	tlsConfig.ServerName = ep.host
-	if certificate != nil {
-		tlsConfig.Certificates = []tls.Certificate{*certificate}
-	}
-	inner := tls.Client(stream, tlsConfig)
-	if err := inner.HandshakeContext(ctx); err != nil {
+	if err := openTunnel(ctx, stream, ep.host, tofu); err != nil {
 		_ = stream.Close()
-		return nil, fmt.Errorf("inner Mumble TLS handshake failed: %w", err)
+		return nil, err
 	}
-	return inner, nil
+	return stream, nil
 }

@@ -1,6 +1,17 @@
-// Package relay implements the authenticated, fixed-target WebSocket relay
-// used by Gul. It carries an opaque Mumble TLS byte stream and never parses
-// Mumble credentials, messages, or audio.
+// Package relay implements the authenticated, fixed-target relay used by Gul.
+//
+// It used to carry an opaque Mumble TLS byte stream and never see inside it.
+// That is no longer true and the sentence that said so has been removed rather
+// than softened: since the tunnel contract, the relay terminates the client's
+// tunnel and opens Mumble TLS to the server itself, so the Mumble stream
+// crosses it in the clear - the server password in the Authenticate packet
+// included. Why that trade was made, and what it does not buy anybody, is in
+// tunnel.go and in docs/DECISIONS.md.
+//
+// It still parses none of it. Nothing here reads a Mumble packet, and nothing
+// here may start: a relay that understands the protocol it carries is a parser
+// of user data with an attack surface of its own, and one careless log line
+// away from putting a password in the journal.
 package relay
 
 import (
@@ -55,15 +66,12 @@ const (
 // are covered by the Salamander obfuscator's random padding instead, which is
 // a different and weaker thing. The label said otherwise, and journals were
 // read through it while diagnosing two users whose sessions were dying.
-const (
-	// contractShaped is the cell grid: one size on the wire from the first byte.
-	contractShaped = "shaped"
-	// contractPadded is per-datagram random padding, no grid (salamander.go).
-	contractPadded = "padded"
-	// contractTunnel is the contract with no nested TLS: the relay terminates
-	// and speaks Mumble TLS to the server itself (tunnel.go).
-	contractTunnel = "tunnel"
-)
+// contractTunnel is the one contract left: no nested TLS, the relay terminates
+// and speaks Mumble TLS to the server itself (tunnel.go). The label stays a
+// named constant with one value, because the last two retirements were each
+// decided by reading exactly this field in the journal and the next one will
+// be too.
+const contractTunnel = "tunnel"
 
 const (
 	defaultAuthFailuresBeforeBan = 5
@@ -342,7 +350,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.cover.NotFound(w, r)
 		return
 	}
-	subprotocol, contract, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
+	subprotocol, _, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))
 	if !ok {
 		// Reaching here means the path was right, so the credential was too:
 		// this is a request that knows where the tunnel is and still did not ask
@@ -394,42 +402,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// not when a courtesy close frame finishes timing out.
 	defer func() { go func() { _ = stream.Close() }() }()
 
-	if contract == contractTunnel {
-		// The tunnel says for itself which side is at fault, in a frame the
-		// client reads, so it needs no out-of-band way to report a dead
-		// upstream (tunnel.go).
-		h.serveTunnel(stream, sourceIP, sourceBlock, "websocket")
-		return
-	}
-
-	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", contractShaped, func() {
-		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
-	})
-}
-
-// pumpSession is the half of a session that does not depend on how the client
-// arrived: dial Murmur, move bytes, account for them. Both transports end
-// here, so a WebSocket session and a QUIC one are the same session with a
-// different front door.
-//
-// onUpstreamFailure tells the client that Murmur, not the relay, is the thing
-// that is down, in whatever way its transport can say so.
-func (h *Handler) pumpSession(
-	stream net.Conn,
-	sourceIP, sourceBlock, transport, contract string,
-	onUpstreamFailure func(),
-) {
-	upstream, localAddress, err := h.dialUpstream(sourceBlock)
-	if err != nil {
-		h.logger.Error("relay upstream dial failed",
-			"source", sourceIP, "transport", transport, "upstream", h.upstream, "error", err)
-		if onUpstreamFailure != nil {
-			onUpstreamFailure()
-		}
-		return
-	}
-	defer func() { _ = upstream.Close() }()
-	h.pump(stream, upstream, sourceIP, localAddress, transport, contract)
+	// The tunnel says for itself which side is at fault, in a frame the client
+	// reads, so it needs no out-of-band way to report a dead upstream
+	// (tunnel.go).
+	h.serveTunnel(stream, sourceIP, sourceBlock, "websocket")
 }
 
 // dialUpstream opens the connection to the server behind the relay, bound to
@@ -661,25 +637,23 @@ func tunnelPaths(credentials []relayproto.Credential) map[string]bool {
 	return paths
 }
 
-// tunnelSubprotocols maps every name this relay answers on to the contract it
-// stands for, one pair per configured credential.
+// tunnelSubprotocols is the one name this relay answers on, per credential.
 //
-// The plain byte stream that predates both was retired on 2026-08-27, once the
-// journal could show who was still on it. A client that offers only the older
-// name now gets what any unknown address gets - the cover site's 404 - because
-// a refusal of its own would say this host used to answer there.
+// One, not three. The plain byte stream went on 2026-08-27 and the shaped
+// contract - which carried a client's own TLS session through untouched - goes
+// with this change, because the nested handshake it carried is the thing being
+// removed. Keeping it as insurance against a rollback would cost the exact
+// property the change buys: a WebSocket handshake offering three derived hex
+// names is a shape ordinary browsing does not have, and it would be offered on
+// every connection to hedge against an image nobody has deployed.
 //
-// Two names are answered because two contracts exist: the shaped one, which
-// carries a client's own TLS session to Murmur untouched, and the tunnel,
-// which the relay terminates. The client offers the newer first and the
-// WebSocket handshake picks it, exactly as it picked the shaped one over the
-// plain one - no flag on the server, and the journal shows which is in use.
+// A client that knows an older name gets what any unknown address gets - the
+// cover site's 404 - because a refusal of its own would say this host used to
+// answer there.
 func tunnelSubprotocols(credentials []relayproto.Credential) map[string]string {
-	names := make(map[string]string, 2*len(credentials))
+	names := make(map[string]string, len(credentials))
 	for _, credential := range credentials {
-		derived := relayproto.NamesFor(credential)
-		names[derived.Shaped] = contractShaped
-		names[derived.Tunnel] = contractTunnel
+		names[relayproto.NamesFor(credential).Tunnel] = contractTunnel
 	}
 	return names
 }

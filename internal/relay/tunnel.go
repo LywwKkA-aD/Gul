@@ -51,8 +51,8 @@ const (
 // checks; without one, the relay is repeating what it was told. The client
 // cannot tell those apart from the outside, so the operator's documentation
 // has to.
-func (h *Handler) upstreamTLS(conn net.Conn) (*tls.Conn, []byte, error) {
-	var leaf []byte
+func (h *Handler) upstreamTLS(conn net.Conn) (*tls.Conn, string, error) {
+	var fingerprint string
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		ServerName: h.upstreamName,
@@ -62,22 +62,22 @@ func (h *Handler) upstreamTLS(conn net.Conn) (*tls.Conn, []byte, error) {
 			if len(raw) == 0 {
 				return errors.New("relay upstream presented no certificate")
 			}
-			leaf = raw[0]
+			sum := sha256.Sum256(raw[0])
+			fingerprint = hex.EncodeToString(sum[:])
 			if h.upstreamFingerprint == "" {
 				return nil
 			}
-			sum := sha256.Sum256(leaf)
-			if got := hex.EncodeToString(sum[:]); got != h.upstreamFingerprint {
-				return fmt.Errorf("relay upstream fingerprint %s does not match the pin", got)
+			if fingerprint != h.upstreamFingerprint {
+				return fmt.Errorf("relay upstream fingerprint %s does not match the pin", fingerprint)
 			}
 			return nil
 		},
 	}
 	inner := tls.Client(conn, config)
 	if err := inner.HandshakeContext(h.ctx); err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
-	return inner, leaf, nil
+	return inner, fingerprint, nil
 }
 
 // serveTunnel runs the tunnel contract on an admitted stream and carries the
@@ -125,7 +125,7 @@ func (h *Handler) serveTunnel(stream net.Conn, sourceIP, sourceBlock, transport 
 	}
 	defer func() { _ = upstream.Close() }()
 
-	inner, leaf, err := h.upstreamTLS(upstream)
+	inner, fingerprint, err := h.upstreamTLS(upstream)
 	if err != nil {
 		h.logger.Error("relay upstream TLS failed",
 			"source", sourceIP, "transport", transport, "error", err)
@@ -140,7 +140,7 @@ func (h *Handler) serveTunnel(stream net.Conn, sourceIP, sourceBlock, transport 
 	if err := relayproto.WriteTunnelAccept(stream, relayproto.TunnelAccept{
 		Version:     relayproto.TunnelVersion,
 		Status:      relayproto.TunnelAccepted,
-		Certificate: leaf,
+		Fingerprint: []byte(fingerprint),
 	}); err != nil {
 		return
 	}

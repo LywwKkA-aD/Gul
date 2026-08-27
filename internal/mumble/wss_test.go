@@ -61,7 +61,7 @@ func TestDialWSSAuthenticatesAndCarriesBinaryStream(t *testing.T) {
 		if !authorizeRelayRequest(w, r) {
 			return
 		}
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{relayTestNames().Subprotocol}})
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{relayTestNames().Tunnel}})
 		if err != nil {
 			return
 		}
@@ -269,15 +269,18 @@ func TestDialWSSRequiresNegotiatedSubprotocol(t *testing.T) {
 // websocket.NetConn, which disables the read limit on its way in: a message
 // within the shared bound has to pass, anything above it has to fail.
 func TestDialWSSAppliesTheSharedMessageLimit(t *testing.T) {
+	// The sizes that used to be here - one message at the limit, one the size
+	// of a chat image - were about a contract where one message carried one
+	// Mumble packet. Under the cell grid a message is always one cell, however
+	// large the packet, so those cases now test the grid rather than the
+	// bound. What remains is the property the bound exists for: websocket.
+	// NetConn disables the library's own read limit, and a relay that sends
+	// more than the shared maximum must be refused rather than believed.
 	cases := []struct {
 		name      string
 		size      int
 		wantError bool
 	}{
-		// Above the 64 KiB the client used to allow: murmur's default
-		// imagemessagelength alone is 128 KiB.
-		{name: "image sized message", size: 128 << 10},
-		{name: "at the limit", size: relayproto.MaxMessageBytes},
 		// The library reads one byte past the limit to see the fin frame, so
 		// the first size that must fail is two above it.
 		{name: "over the limit", size: relayproto.MaxMessageBytes + 2, wantError: true},
@@ -287,7 +290,7 @@ func TestDialWSSAppliesTheSharedMessageLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-					Subprotocols: []string{relayTestNames().Subprotocol},
+					Subprotocols: []string{relayTestNames().Tunnel},
 				})
 				if err != nil {
 					return
@@ -328,18 +331,26 @@ func TestPacketConnOverWSSSendsOneMessagePerPacket(t *testing.T) {
 	messages := make(chan []byte, 8)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{relayTestNames().Subprotocol},
+			Subprotocols: []string{relayTestNames().Tunnel},
 		})
 		if err != nil {
 			return
 		}
 		defer func() { _ = conn.CloseNow() }()
+		// The relay side of the grid: the cells are un-shaped here, so what
+		// this test reads is the packet the client meant to send rather than
+		// the padding around it. The property under test is the one below the
+		// grid - one Mumble packet, one write - and it is the reason
+		// packetConn exists at all.
+		shaped := relayproto.Shape(relayproto.AsMessageConn(
+			websocket.NetConn(r.Context(), conn, websocket.MessageBinary)))
 		for {
-			_, data, err := conn.Read(r.Context())
+			packet := make([]byte, 512)
+			n, err := shaped.Read(packet)
 			if err != nil {
 				return
 			}
-			messages <- data
+			messages <- packet[:n]
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -423,7 +434,7 @@ func TestDialWSSTakesTheShapedContractAndPadsToIt(t *testing.T) {
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// Newest first, the way the deployed relay answers.
-			Subprotocols: []string{relayTestNames().Shaped, relayTestNames().Subprotocol},
+			Subprotocols: []string{relayTestNames().Tunnel},
 		})
 		if err != nil {
 			return

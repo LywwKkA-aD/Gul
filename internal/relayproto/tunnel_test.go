@@ -13,6 +13,7 @@ import (
 func TestTunnelFramesRoundTrip(t *testing.T) {
 	t.Parallel()
 	certificate := bytes.Repeat([]byte{0x30, 0x82, 0x01, 0x0a}, 300) // DER-shaped, 1200 bytes
+	fingerprint := bytes.Repeat([]byte{0xab}, 64)                    // hex of SHA-256
 
 	for name, tc := range map[string]struct {
 		hello  TunnelHello
@@ -20,11 +21,11 @@ func TestTunnelFramesRoundTrip(t *testing.T) {
 	}{
 		"anonymous, accepted": {
 			hello:  TunnelHello{Version: TunnelVersion},
-			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Certificate: certificate},
+			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Fingerprint: fingerprint},
 		},
 		"identified, accepted": {
 			hello:  TunnelHello{Version: TunnelVersion, Certificate: certificate},
-			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Certificate: certificate},
+			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Fingerprint: fingerprint},
 		},
 		"the server behind the relay is down": {
 			hello:  TunnelHello{Version: TunnelVersion},
@@ -54,7 +55,7 @@ func TestTunnelFramesRoundTrip(t *testing.T) {
 				t.Fatalf("read accept: %v", err)
 			}
 			if gotAccept.Status != tc.accept.Status ||
-				!bytes.Equal(gotAccept.Certificate, tc.accept.Certificate) {
+				!bytes.Equal(gotAccept.Fingerprint, tc.accept.Fingerprint) {
 				t.Fatalf("accept = %+v, want %+v", gotAccept, tc.accept)
 			}
 
@@ -143,7 +144,7 @@ func TestATruncatedTunnelFrameFails(t *testing.T) {
 	if err := WriteTunnelAccept(&whole, TunnelAccept{
 		Version:     TunnelVersion,
 		Status:      TunnelAccepted,
-		Certificate: bytes.Repeat([]byte{9}, 64),
+		Fingerprint: bytes.Repeat([]byte{9}, 64),
 	}); err != nil {
 		t.Fatalf("write accept: %v", err)
 	}

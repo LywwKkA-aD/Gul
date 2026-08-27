@@ -53,7 +53,7 @@ func testPath() string { return testNames(defaultTestSecret).Path }
 // The shaped contract is the only one the relay answers on, so it is what a
 // test client asks for - and a test that pumps bytes has to frame them the
 // same way (relayproto.Shape), or the relay reads a header that is not there.
-func testSubprotocol() string { return testNames(defaultTestSecret).Shaped }
+func testSubprotocol() string { return testNames(defaultTestSecret).Tunnel }
 
 const defaultTestSecret = "server secret"
 
@@ -78,33 +78,15 @@ func mustHandler(t *testing.T, cfg Config) *Handler {
 	return h
 }
 
+// echoServer stands in for Murmur. It speaks TLS, because the relay does now:
+// with the tunnel contract there is no client TLS session to forward, so the
+// relay opens its own to the server behind it.
 func echoServer(t *testing.T) string {
 	t.Helper()
-	return upstreamServer(t, func(conn net.Conn) {
+	address, _ := tlsUpstream(t, func(conn net.Conn) {
 		_, _ = io.Copy(conn, conn)
 	})
-}
-
-func upstreamServer(t *testing.T, serve func(net.Conn)) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-				serve(conn)
-			}()
-		}
-	}()
-	return listener.Addr().String()
+	return address
 }
 
 func bearerHeader(token string) http.Header {

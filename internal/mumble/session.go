@@ -160,35 +160,27 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		gc.AttachAudio(hooks.audio)
 	}
 
-	var client *gumble.Client
-	if ep.kind == endpointRelay {
-		// Two budgets, because the two phases fail differently. Opening the
-		// connection is bounded by the clock; the sync that follows is bounded
-		// by silence (syncSilence).
-		dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
-		conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.Certificate)
-		// The road is open or it is not; neither dial keeps this context past
-		// its own handshake (wss.go, quic.go), so it is released here rather
-		// than being left to bound the sync as well.
-		cancelDial()
-		if dialErr != nil {
-			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
-		}
-		// One Mumble packet per WebSocket message (see newPacketConn); the
-		// wrapper belongs on the connection gumble writes packets into.
-		packets := newPacketConn(conn)
-		s.packets = packets
-		syncCtx, cancelSync := syncingContext(packets)
-		defer cancelSync()
-		client, err = gumble.DialWithConn(syncCtx, packets, gc)
-	} else {
-		tlsConfig := tofu.TLSConfig(ep.host)
-		if cfg.Certificate != nil {
-			tlsConfig.Certificates = []tls.Certificate{*cfg.Certificate}
-		}
-		dialer := &net.Dialer{Timeout: dialTimeout}
-		client, err = gumble.DialWithDialer(dialer, ep.address, gc, tlsConfig)
+	// Two budgets, because the two phases fail differently. Opening the
+	// connection is bounded by the clock; the sync that follows is bounded by
+	// silence (syncSilence).
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
+	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu)
+	// The road is open or it is not; neither dial keeps this context past its
+	// own handshake (wss.go, quic.go), so it is released here rather than
+	// being left to bound the sync as well.
+	cancelDial()
+	if dialErr != nil {
+		return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 	}
+	// One Mumble packet per message (see newPacketConn); the wrapper belongs
+	// on the connection gumble writes packets into, which is above the shaper
+	// - chaff is dropped below it, and a packetConn that saw chaff would
+	// never report silence again (packetconn_test.go).
+	packets := newPacketConn(conn)
+	s.packets = packets
+	syncCtx, cancelSync := syncingContext(packets)
+	defer cancelSync()
+	client, err := gumble.DialWithConn(syncCtx, packets, gc)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", ep.address, err)
 	}
@@ -243,7 +235,6 @@ func dialRelay(
 	transport Transport,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
-	certificate *tls.Certificate,
 ) (net.Conn, error) {
 	road, ok := relayRoads[transport]
 	if !ok {
@@ -254,7 +245,7 @@ func dialRelay(
 		// record its success under the wrong name and write that to disk.
 		return nil, fmt.Errorf("mumble: no road named %q", transport)
 	}
-	return road(ctx, ep, credential, tofu, certificate)
+	return road(ctx, ep, credential, tofu)
 }
 
 // relayRoad opens one road to the relay and returns the connection gumble will
@@ -265,7 +256,6 @@ type relayRoad func(
 	endpoint,
 	relayproto.Credential,
 	*TOFUStore,
-	*tls.Certificate,
 ) (net.Conn, error)
 
 // relayRoads is every road that exists, by the name the chooser and the
@@ -273,12 +263,12 @@ type relayRoad func(
 // relayTransports, which decides the order they are tried in.
 var relayRoads = map[Transport]relayRoad{
 	TransportWSS: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, certificate *tls.Certificate) (net.Conn, error) {
-		return dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+		tofu *TOFUStore) (net.Conn, error) {
+		return dialWSSTunnel(ctx, ep, credential, tofu, nil)
 	},
 	TransportQUIC: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, certificate *tls.Certificate) (net.Conn, error) {
-		return dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+		tofu *TOFUStore) (net.Conn, error) {
+		return dialQUICTunnel(ctx, ep, credential, tofu, nil)
 	},
 }
 

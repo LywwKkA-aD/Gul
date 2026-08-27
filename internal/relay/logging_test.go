@@ -32,6 +32,7 @@ func TestHandlerLogsSessionLifecycle(t *testing.T) {
 	// Framed, the way a client sends: the counters below are of the bytes that
 	// reached Murmur, which is the payload and not the padding around it.
 	stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(t.Context(), conn, websocket.MessageBinary)))
+	completeTunnel(t, stream)
 	if _, err := stream.Write([]byte{1, 2, 3, 4}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -107,6 +108,8 @@ func TestHandlerLogsUpstreamDialFailure(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.CloseNow() })
+	sayHello(t, relayproto.Shape(relayproto.AsMessageConn(
+		websocket.NetConn(t.Context(), conn, websocket.MessageBinary))))
 
 	attrs := recordAttrs(records.await(t, "relay upstream dial failed"))
 	if attrs["error"] == "" {

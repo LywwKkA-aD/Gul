@@ -104,12 +104,20 @@ type TunnelHello struct {
 type TunnelAccept struct {
 	Version byte
 	Status  TunnelStatus
-	// Certificate is the leaf the server behind the relay presented, in DER,
-	// so the client can pin it exactly as it pinned it when the inner TLS was
-	// its own. It is an attestation and not a proof: the relay checked it, and
-	// the client is taking the relay's word. That difference has to reach the
-	// user's documentation, not just this comment.
-	Certificate []byte
+	// Fingerprint is SHA-256 over the DER of the leaf the server behind the
+	// relay presented - the same value this client has always pinned, so
+	// existing pins keep matching and nobody sees a prompt because of the
+	// change.
+	//
+	// The digest rather than the certificate, because the digest is all TOFU
+	// ever compares. Sending the DER would put roughly nine hundred bytes into
+	// the first thing the relay says, and the first flight of a session is the
+	// part an on-path classifier reads most closely.
+	//
+	// It is an attestation and not a proof: the relay looked, and the client
+	// is taking its word. That difference has to reach the operator's
+	// documentation, not only this comment.
+	Fingerprint []byte
 }
 
 // WriteTunnelHello sends the opening frame as one write.
@@ -134,10 +142,10 @@ func ReadTunnelHello(r io.Reader) (TunnelHello, error) {
 
 // WriteTunnelAccept sends the answer as one write.
 func WriteTunnelAccept(w io.Writer, accept TunnelAccept) error {
-	payload := make([]byte, 2+len(accept.Certificate))
+	payload := make([]byte, 2+len(accept.Fingerprint))
 	payload[0] = accept.Version
 	payload[1] = byte(accept.Status)
-	copy(payload[2:], accept.Certificate)
+	copy(payload[2:], accept.Fingerprint)
 	return writeTunnelFrame(w, tunnelKindAccept, payload)
 }
 
@@ -153,7 +161,7 @@ func ReadTunnelAccept(r io.Reader) (TunnelAccept, error) {
 	return TunnelAccept{
 		Version:     payload[0],
 		Status:      TunnelStatus(payload[1]),
-		Certificate: payload[2:],
+		Fingerprint: payload[2:],
 	}, nil
 }
 

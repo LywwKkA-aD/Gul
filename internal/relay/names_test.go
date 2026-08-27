@@ -58,6 +58,7 @@ func TestRetiredNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 		"the old path":              {retiredPath, names.Subprotocol},
 		"the old subprotocol":       {names.Path, retiredSubprotocol},
 		"the retired plain stream":  {names.Path, names.Subprotocol},
+		"the retired shaped stream": {names.Path, relayproto.NamesFor(testCredential(defaultTestSecret)).Shaped},
 		"an address nobody serves":  {"/does-not-exist", names.Subprotocol},
 		"the pair of another relay": {relayproto.NamesFor(testCredential("elsewhere")).Path, names.Subprotocol},
 	}
@@ -71,7 +72,7 @@ func TestRetiredNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 
 	// The current pair still works, so the refusals above are about the names
 	// and not about a relay that stopped accepting anything.
-	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Tunnel); got != http.StatusSwitchingProtocols {
 		t.Fatalf("current pair status = %d, want 101", got)
 	}
 }
@@ -105,7 +106,7 @@ func TestOnlyTheShapedContractIsAnswered(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	names := relayproto.NamesFor(testCredential(defaultTestSecret))
-	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Tunnel); got != http.StatusSwitchingProtocols {
 		t.Fatalf("the shaped contract got %d, want 101", got)
 	}
 	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Subprotocol); got != http.StatusNotFound {
@@ -118,14 +119,14 @@ func TestOnlyTheShapedContractIsAnswered(t *testing.T) {
 		&websocket.DialOptions{
 			HTTPHeader:   bearerHeader(defaultTestSecret),
 			Host:         testHost,
-			Subprotocols: []string{names.Shaped, names.Subprotocol},
+			Subprotocols: []string{names.Tunnel, names.Subprotocol},
 		})
 	if err != nil {
 		t.Fatalf("dial with both offered: %v (status %v)", err, response)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if got := conn.Subprotocol(); got != names.Shaped {
-		t.Fatalf("negotiated %q, want the shaped contract %q", got, names.Shaped)
+	if got := conn.Subprotocol(); got != names.Tunnel {
+		t.Fatalf("negotiated %q, want the shaped contract %q", got, names.Tunnel)
 	}
 }
 
@@ -142,14 +143,13 @@ func TestTheSessionLogNamesTheContract(t *testing.T) {
 	server := httptest.NewServer(mustHandler(t, cfg))
 	t.Cleanup(server.Close)
 
-	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
-		t.Fatalf("status = %d, want 101", got)
-	}
+	completeTunnel(t, dialTunnelRoad(t, server, defaultTestSecret))
+
 	attrs := recordAttrs(records.await(t, "relay session opened"))
-	if attrs["contract"] != contractShaped {
-		t.Fatalf("logged contract = %q, want %q", attrs["contract"], contractShaped)
+	if attrs["contract"] != contractTunnel {
+		t.Fatalf("logged contract = %q, want %q", attrs["contract"], contractTunnel)
 	}
-	if rendered := records.rendered(); strings.Contains(rendered, names.Shaped) {
+	if rendered := records.rendered(); strings.Contains(rendered, names.Tunnel) {
 		t.Fatalf("the log carried the derived name itself: %s", rendered)
 	}
 }
@@ -203,7 +203,7 @@ func TestEveryRefusalSaysWhy(t *testing.T) {
 			request.Host = testHost
 			request.RemoteAddr = "192.0.2.10:12345"
 			request.Header = bearerHeader(defaultTestSecret)
-			request.Header.Set("Sec-WebSocket-Protocol", names.Shaped)
+			request.Header.Set("Sec-WebSocket-Protocol", names.Tunnel)
 			tc.prepare(request)
 
 			response := httptest.NewRecorder()
@@ -216,7 +216,7 @@ func TestEveryRefusalSaysWhy(t *testing.T) {
 				t.Fatalf("logged reason = %q, want %q", attrs["reason"], tc.want)
 			}
 			// The names come from the password. A journal is not a place for them.
-			if rendered := records.rendered(); strings.Contains(rendered, names.Shaped) ||
+			if rendered := records.rendered(); strings.Contains(rendered, names.Tunnel) ||
 				strings.Contains(rendered, names.Path) {
 				t.Fatalf("the log carried a derived name: %s", rendered)
 			}

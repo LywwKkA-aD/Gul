@@ -44,6 +44,50 @@ func tlsUpstream(t *testing.T, serve func(net.Conn)) (string, []byte) {
 	return listener.Addr().String(), certificate.Certificate[0]
 }
 
+// sayHello opens the exchange without waiting for the answer, for a test that
+// cares about what the relay does next rather than about what it says back.
+// Nothing happens on the relay before the hello arrives: the upstream is
+// dialled after it, on purpose, so the answer can name which side is at fault.
+func sayHello(t *testing.T, stream io.Writer) {
+	t.Helper()
+	if err := relayproto.WriteTunnelHello(stream, relayproto.TunnelHello{
+		Version: relayproto.TunnelVersion,
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+}
+
+// completeTunnel runs the exchange and returns the session, so a test that
+// cares about what the session carries does not repeat the handshake.
+func completeTunnel(t *testing.T, tunnel deadlineStream) {
+	t.Helper()
+	if err := relayproto.WriteTunnelHello(tunnel, relayproto.TunnelHello{
+		Version: relayproto.TunnelVersion,
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+	accept, err := relayproto.ReadTunnelAccept(tunnel)
+	if err != nil {
+		t.Fatalf("read accept: %v", err)
+	}
+	if accept.Status != relayproto.TunnelAccepted {
+		t.Fatalf("status = %v, want accepted", accept.Status)
+	}
+	if err := relayproto.ReadTunnelReady(tunnel); err != nil {
+		t.Fatalf("read ready: %v", err)
+	}
+	_ = tunnel.SetReadDeadline(time.Time{})
+}
+
+// deadlineStream is what the exchange needs of a connection, which is less
+// than net.Conn: a QUIC stream has no addresses to report.
+type deadlineStream interface {
+	io.Reader
+	io.Writer
+	SetReadDeadline(time.Time) error
+}
+
 // dialTunnelRoad opens the tunnel contract the way a client will: the derived
 // tunnel name, the cell grid under it, and the exchange on top.
 func dialTunnelRoad(t *testing.T, server *httptest.Server, secret string) *relayproto.ShapedConn {
@@ -54,7 +98,7 @@ func dialTunnelRoad(t *testing.T, server *httptest.Server, secret string) *relay
 		&websocket.DialOptions{
 			HTTPHeader:   bearerHeader(secret),
 			Host:         testHost,
-			Subprotocols: []string{names.Tunnel, names.Shaped},
+			Subprotocols: []string{names.Tunnel},
 		})
 	if err != nil {
 		t.Fatalf("dial tunnel: %v (%v)", err, response)
@@ -98,11 +142,11 @@ func TestTheTunnelContractCarriesASessionAndNamesTheServer(t *testing.T) {
 	if accept.Status != relayproto.TunnelAccepted {
 		t.Fatalf("status = %v, want accepted", accept.Status)
 	}
-	// The attestation: this is the certificate the client would have pinned
-	// itself when the inner TLS was its own.
-	if !bytes.Equal(accept.Certificate, leaf) {
-		t.Fatalf("the relay named a certificate that is not the server's:\n got %x\nwant %x",
-			sha256.Sum256(accept.Certificate), sha256.Sum256(leaf))
+	// The attestation: this is the value the client would have computed itself
+	// when the inner TLS was its own, so an existing pin keeps matching.
+	wantFingerprint := sha256.Sum256(leaf)
+	if got := string(accept.Fingerprint); got != hex.EncodeToString(wantFingerprint[:]) {
+		t.Fatalf("the relay named %q, want the server's own %x", got, wantFingerprint)
 	}
 	if err := relayproto.ReadTunnelReady(tunnel); err != nil {
 		t.Fatalf("read ready: %v", err)

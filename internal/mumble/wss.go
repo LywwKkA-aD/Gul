@@ -2,7 +2,6 @@ package mumble
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -30,6 +29,10 @@ var (
 	// accepted, the relay simply has no free slot. Use errors.As with
 	// *RelayFullError to recover how long it asked us to wait.
 	ErrRelayFull = errors.New("WSS relay has no free capacity")
+	// ErrServerUnavailable is the relay reporting that the server behind it is
+	// not answering. It is not a fact about the road, so the reconnect loop
+	// must not spend the user's other roads looking for a server that is off.
+	ErrServerUnavailable = errors.New("сервер не отвечает")
 )
 
 // maxRelayRetryAfter caps what a relay can make the client wait. A hostile or
@@ -123,10 +126,12 @@ func dialWSS(
 	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
 		HTTPClient: client,
 		HTTPHeader: header,
-		// Newest first. The relay picks the first name it knows, so a relay
-		// that predates the shaped contract falls back to the plain stream
-		// without either side asking a question.
-		Subprotocols:    []string{names.Shaped, names.Subprotocol},
+		// One name. Offering the older ones as insurance against a rollback
+		// would cost the property this contract exists for: three derived hex
+		// names in a WebSocket handshake is a shape ordinary browsing does not
+		// have, and it would be offered on every connection to hedge against
+		// an image nobody has deployed.
+		Subprotocols:    []string{names.Tunnel},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
@@ -148,7 +153,7 @@ func dialWSS(
 		return nil, fmt.Errorf("WSS relay handshake failed: %w", err)
 	}
 	negotiated := ws.Subprotocol()
-	if negotiated != names.Shaped && negotiated != names.Subprotocol {
+	if negotiated != names.Tunnel {
 		_ = ws.CloseNow()
 		return nil, errors.New("WSS relay did not negotiate the required protocol")
 	}
@@ -162,21 +167,16 @@ func dialWSS(
 	// exhaust memory.
 	ws.SetReadLimit(relayproto.MaxMessageBytes)
 
-	stopChaff := func() {}
-	if negotiated == names.Shaped {
-		// Every write leaves as a fixed-size frame and the tunnel keeps
-		// talking through the silences (relayproto.Shape). The chaff outlives
-		// the dial context on purpose, exactly as the stream does: cancelling
-		// setup must not stop a live session from being shaped.
-		// websocket.NetConn promises one message per Write, which is the
-		// guarantee the shaping rests on (relayproto.AsMessageConn).
-		shaped := relayproto.Shape(relayproto.AsMessageConn(stream))
-		var chaffCtx context.Context
-		chaffCtx, stopChaff = context.WithCancel(context.Background())
-		go shaped.SendChaff(chaffCtx)
-		stream = shaped
-	}
-	return &relayStream{Conn: stream, ws: ws, stopChaff: stopChaff}, nil
+	// Every write leaves as a fixed-size frame and the tunnel keeps talking
+	// through the silences (relayproto.Shape). The chaff outlives the dial
+	// context on purpose, exactly as the stream does: cancelling setup must
+	// not stop a live session from being shaped. websocket.NetConn promises
+	// one message per Write, which is the guarantee the shaping rests on
+	// (relayproto.AsMessageConn).
+	shaped := relayproto.Shape(relayproto.AsMessageConn(stream))
+	chaffCtx, stopChaff := context.WithCancel(context.Background())
+	go shaped.SendChaff(chaffCtx)
+	return &relayStream{Conn: shaped, ws: ws, stopChaff: stopChaff}, nil
 }
 
 // relayOrigin is the Origin a browser loading a page from this relay would
@@ -218,41 +218,78 @@ func clampRetryAfter(d time.Duration) time.Duration {
 	}
 }
 
-// dialWSSMumbleTLS establishes the outer CA-verified WSS connection, then
-// performs the ordinary Mumble TLS handshake inside that opaque stream. The
-// inner certificate keeps the same TOFU identity as a direct connection.
-func dialWSSMumbleTLS(
+// dialWSSTunnel opens the WebSocket road and runs the tunnel contract on it.
+//
+// There is no second TLS session here any more. It is the change the whole
+// milestone turns on: measured on this wire, in the first 25 packets of the
+// flow and inside the tunnel, the client's opening burst was 2002 bytes in
+// seven packets with the nested handshake and is 286 in one without it, across
+// the 300-byte line the published rule uses to tell ordinary connections from
+// proxied ones. Padding could not close that; removing the handshake did.
+//
+// What the relay answers with is pinned exactly as the server's own
+// certificate used to be, with one difference that has to be said out loud:
+// the relay is now the one reporting it. The pin still catches the server's
+// key changing. It is no longer proof against a relay that lies.
+func dialWSSTunnel(
 	ctx context.Context,
 	ep endpoint,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
-	certificate *tls.Certificate,
 	baseClient *http.Client,
 ) (net.Conn, error) {
 	if ep.kind != endpointRelay {
-		return nil, errors.New("WSS endpoint is required")
+		return nil, errors.New("relay endpoint is required")
 	}
 	if tofu == nil {
 		return nil, errors.New("TOFU store is required")
 	}
-
 	stream, err := dialWSS(ctx, ep.address, credential, baseClient)
 	if err != nil {
 		return nil, err
 	}
-	tlsConfig := tofu.TLSConfig(ep.host)
-	// tls.Client does not infer a hostname from a net.Conn. Set it explicitly
-	// so the inner Mumble handshake still sends the public hostname as SNI.
-	tlsConfig.ServerName = ep.host
-	if certificate != nil {
-		tlsConfig.Certificates = []tls.Certificate{*certificate}
-	}
-	inner := tls.Client(stream, tlsConfig)
-	if err := inner.HandshakeContext(ctx); err != nil {
+	if err := openTunnel(ctx, stream, ep.host, tofu); err != nil {
 		stream.closeNow()
-		return nil, fmt.Errorf("inner Mumble TLS handshake failed: %w", err)
+		return nil, err
 	}
-	return inner, nil
+	return stream, nil
+}
+
+// openTunnel runs the exchange and settles what the client is allowed to
+// believe about the far end.
+func openTunnel(ctx context.Context, stream net.Conn, host string, tofu *TOFUStore) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = stream.SetDeadline(deadline)
+		defer func() { _ = stream.SetDeadline(time.Time{}) }()
+	}
+	// No certificate: an identity the relay cannot watch anybody prove
+	// possession of is a claim, and a claim it honoured would let it be any
+	// user it liked. The exchange that proves possession is the next step.
+	if err := relayproto.WriteTunnelHello(stream, relayproto.TunnelHello{
+		Version: relayproto.TunnelVersion,
+	}); err != nil {
+		return fmt.Errorf("tunnel hello: %w", err)
+	}
+	accept, err := relayproto.ReadTunnelAccept(stream)
+	if err != nil {
+		return fmt.Errorf("tunnel accept: %w", err)
+	}
+	switch accept.Status {
+	case relayproto.TunnelAccepted:
+	case relayproto.TunnelUpstreamDown:
+		// Not a fact about the road. Saying so keeps the client from searching
+		// through every other road it has for a server that is simply off.
+		return ErrServerUnavailable
+	default:
+		return fmt.Errorf("%w: relay answered %s", relayproto.ErrTunnelProtocol, accept.Status)
+	}
+	if err := tofu.VerifyFingerprint(host, string(accept.Fingerprint)); err != nil {
+		return err
+	}
+	if err := relayproto.ReadTunnelReady(stream); err != nil {
+		return fmt.Errorf("tunnel ready: %w", err)
+	}
+	return nil
 }
 
 func noRedirectHTTPClient(base *http.Client) *http.Client {

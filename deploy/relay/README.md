@@ -31,9 +31,23 @@ The names themselves are never logged - they come from the password.
 The Gul client derives a domain-separated bearer credential from the server
 join password. The relay stores only that derived credential in the separate
 `GUL_RELAY_BEARER` Podman secret; the raw Mumble password is never mounted into
-the production relay. It accepts binary frames only and carries the inner Mumble
-TLS stream without inspecting it. The destination is compiled into the binary;
-request data cannot select another target.
+the production relay.
+
+**It does, however, see that password go past.** Since the tunnel contract the
+relay terminates the client's tunnel and opens Mumble TLS to Murmur itself, so
+the Mumble stream crosses it in the clear - including the join password in the
+Authenticate packet, private messages, and voice. It parses none of it and must
+never start; the point stands that a compromised relay now reads a
+conversation, where before it could only interrupt one. That was traded
+knowingly for a measured reason (`docs/DECISIONS.md`): a nested TLS handshake
+is what an on-path classifier reads, and padding cannot remove it.
+
+What it still cannot do is **be** somebody. Sessions are anonymous: a client
+identity the relay watched nobody prove possession of is refused rather than
+presented to Murmur.
+
+The destination is set by `--upstream`; request data cannot select another
+target.
 
 Production runs as the same rootless Podman user as Murmur and joins only
 Murmur's existing pasta network namespace. Murmur's owner Quadlet publishes

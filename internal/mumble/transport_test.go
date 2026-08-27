@@ -378,7 +378,7 @@ func TestARoadOutsideTheTableFailsByName(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	_, err = dialRelay(t.Context(), ep, Transport("carrier pigeon"), "v2.test", nil, nil)
+	_, err = dialRelay(t.Context(), ep, Transport("carrier pigeon"), "v2.test", nil)
 
 	if err == nil {
 		t.Fatal("an unbuilt road dialled something; it must fail instead")
