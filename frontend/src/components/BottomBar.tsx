@@ -58,11 +58,16 @@ export function BottomBar() {
   // The current state is read at click time rather than taken from the render
   // that drew the button, so a second click lands on the result of the first
   // instead of on the state both clicks started from.
+  // Core does the flip. A button that reads the state and sends its opposite
+  // decides on a value the tray or another click may already have replaced,
+  // and Wails hands two calls from this window to different workers with no
+  // order between them - so two quick clicks could collapse into one change,
+  // or land inverted (internal/core/selfaudio.go).
   const toggleMic = () => {
-    AudioService.SetMute(!useGulStore.getState().muted).catch(console.error);
+    AudioService.ToggleMute().catch(console.error);
   };
   const toggleDeafen = () => {
-    AudioService.SetDeafen(!useGulStore.getState().deafened).catch(console.error);
+    AudioService.ToggleDeafen().catch(console.error);
   };
 
   return (

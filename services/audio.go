@@ -40,6 +40,19 @@ func (s *AudioService) SetDeafen(deafened bool) {
 	s.app.SetDeafen(deafened)
 }
 
+// ToggleMute flips the microphone. It exists so a button never has to read the
+// state and then set its opposite: two calls from the same window reach
+// different workers with no order between them, and the flip decided outside
+// the transition is the one that collapses two clicks into one.
+func (s *AudioService) ToggleMute() {
+	s.app.ToggleMute()
+}
+
+// ToggleDeafen flips the monitor, for the same reason.
+func (s *AudioService) ToggleDeafen() {
+	s.app.ToggleDeafen()
+}
+
 // SetUserVolume sets a per-user gain (1.0 = unity) keyed by the stable
 // certificate hash.
 func (s *AudioService) SetUserVolume(hash string, volume float64) {

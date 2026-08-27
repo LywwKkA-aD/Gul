@@ -200,3 +200,69 @@ func treeWithSelf(muted, deafened bool) domain.ChannelNode {
 		}},
 	}
 }
+
+// Toggling has to decide from inside the transition, or two clicks arriving
+// together decide from the same stale value and become one change.
+//
+// This is not hypothetical timing: the window, the tray and the services layer
+// all reach the state from different goroutines, and Wails hands two calls from
+// one window to different workers with no order between them. A caller that
+// reads and then sets has a window between the two; a caller that flips under
+// the lock has none.
+func TestTogglingIsDecidedUnderTheLock(t *testing.T) {
+	t.Parallel()
+	app, _, _ := newTestApp(t)
+	app.SetVoice(&fakeVoice{})
+
+	// Counting the changes, not the final state: with lost updates the parity
+	// is merely random, so a test on the end state passes half the time and
+	// proves nothing either way. N flips must produce exactly N changes, and
+	// the engine sees one call per change.
+	voice := &fakeVoice{}
+	app.SetVoice(voice)
+
+	const flips = 400
+	var wg sync.WaitGroup
+	for range flips {
+		wg.Add(1)
+		go func() { defer wg.Done(); app.ToggleMute() }()
+	}
+	wg.Wait()
+
+	got := voice.snapshot()
+	if len(got.mutes) != flips {
+		t.Fatalf("%d flips produced %d changes: %d of them read a value another had already replaced",
+			flips, len(got.mutes), flips-len(got.mutes))
+	}
+	// And they alternate, because each one flipped what the previous left.
+	for i, muted := range got.mutes {
+		if want := i%2 == 0; muted != want {
+			t.Fatalf("change %d set muted=%v, want %v: the flips did not alternate", i, muted, want)
+		}
+	}
+}
+
+// Toggling deafen carries the microphone with it, and lifting it gives both
+// back - the same rule SetDeafen follows, because it is the same transition.
+func TestTogglingDeafenCarriesTheMicrophone(t *testing.T) {
+	t.Parallel()
+	app, _, _ := newTestApp(t)
+	app.SetVoice(&fakeVoice{})
+
+	app.ToggleDeafen()
+	if got := app.SelfAudio(); !got.Deafened || !got.Muted {
+		t.Fatalf("state = %+v, want deafened to take the microphone with it", got)
+	}
+	app.ToggleDeafen()
+	if got := app.SelfAudio(); got.Deafened || got.Muted {
+		t.Fatalf("state = %+v, want both given back", got)
+	}
+
+	// Unmuting while deafened lifts the deafen, so the next mute toggle starts
+	// from a state the server would accept.
+	app.ToggleDeafen()
+	app.ToggleMute()
+	if got := app.SelfAudio(); got.Muted || got.Deafened {
+		t.Fatalf("state = %+v, want unmuting to have lifted the deafen", got)
+	}
+}

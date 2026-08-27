@@ -382,9 +382,9 @@ func setupTray(app *application.App, coreApp *core.App, win *application.Webview
 	// thread, so reading it back would be a three-way race. Core decides and
 	// reports through the observer, which is what re-syncs the checkbox.
 	mute := menu.AddCheckbox(trayMuteLabel, false)
-	mute.OnClick(func(*application.Context) { coreApp.SetMute(!coreApp.SelfAudio().Muted) })
+	mute.OnClick(func(*application.Context) { coreApp.ToggleMute() })
 	deafen := menu.AddCheckbox(trayDeafenLabel, false)
-	deafen.OnClick(func(*application.Context) { coreApp.SetDeafen(!coreApp.SelfAudio().Deafened) })
+	deafen.OnClick(func(*application.Context) { coreApp.ToggleDeafen() })
 	menu.AddSeparator()
 	menu.Add(trayQuitLabel).OnClick(func(*application.Context) { app.Quit() })
 	systemTray.SetMenu(menu)

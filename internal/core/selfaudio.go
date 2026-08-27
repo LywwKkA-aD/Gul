@@ -187,6 +187,39 @@ func (a *App) SetMute(muted bool) {
 	)
 }
 
+// ToggleMute and ToggleDeafen flip the state from inside the transition.
+//
+// A button that reads the state and then sets its opposite decides on a value
+// something else may already have replaced. Three places reach this from three
+// goroutines - the window, the tray, and whatever comes next - and Wails hands
+// two calls from the same window to different workers with no order between
+// them, so two quick clicks could read the same value and collapse into one, or
+// arrive inverted and land on the wrong one. The flip belongs where the state
+// is already held still: whatever it is when the lock is taken is what gets
+// flipped, so two clicks are always two changes and their order cannot matter
+// to where they end up.
+func (a *App) ToggleMute() {
+	a.applySelfAudio(
+		selfAudioOptions{cue: true, toServer: true},
+		func(cur domain.SelfAudioState) domain.SelfAudioState {
+			muted := !cur.Muted
+			return domain.SelfAudioState{Muted: muted, Deafened: cur.Deafened && muted}
+		},
+	)
+}
+
+// ToggleDeafen flips the monitor, taking the microphone with it exactly as
+// SetDeafen does.
+func (a *App) ToggleDeafen() {
+	a.applySelfAudio(
+		selfAudioOptions{toServer: true},
+		func(cur domain.SelfAudioState) domain.SelfAudioState {
+			deafened := !cur.Deafened
+			return domain.SelfAudioState{Muted: deafened, Deafened: deafened}
+		},
+	)
+}
+
 // SetDeafen silences all remote streams locally and takes the microphone with
 // it: deafen means "I am not in this conversation", and the server enforces
 // the same rule, so a client that pretended otherwise would transmit room
