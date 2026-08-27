@@ -306,36 +306,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Murmur autoban bucket.
 	sourceIP := remoteIP(r.RemoteAddr)
 	sourceBlock := sourceKey(sourceIP)
-	if retryAfter, banned := h.authFailures.banRemaining(sourceBlock); banned {
-		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", retryAfter)
-		writeRateLimited(h.cover, w, r, retryAfter)
+	switch decision := h.admit(sourceBlock, r.Header.Get("Authorization")); decision.verdict {
+	case admitBanned:
+		h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", decision.retryAfter)
+		writeRateLimited(h.cover, w, r, decision.retryAfter)
 		return
-	}
-	result := h.authorize(r.Header.Get("Authorization"))
-	if !result.authorized {
-		ban := h.authFailures.recordFailure(sourceBlock)
+	case admitRejected:
 		// The credential itself is never logged: only whether it was absent,
 		// malformed, or a well-formed credential of either generation.
-		h.logger.Warn("relay authorization rejected", "source", sourceIP, "credential", result.class)
-		if ban.limited {
-			if ban.activated {
-				h.logger.Warn("relay authorization ban activated", "source", sourceIP, "retry_after", ban.retryAfter)
+		h.logger.Warn("relay authorization rejected", "source", sourceIP, "credential", decision.class)
+		if decision.limited {
+			if decision.activated {
+				h.logger.Warn("relay authorization ban activated", "source", sourceIP, "retry_after", decision.retryAfter)
 			} else {
-				h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", ban.retryAfter)
+				h.logger.Debug("relay request rate limited", "source", sourceIP, "retry_after", decision.retryAfter)
 			}
-			writeRateLimited(h.cover, w, r, ban.retryAfter)
+			writeRateLimited(h.cover, w, r, decision.retryAfter)
 			return
 		}
 		// No WWW-Authenticate: it announced the software by name to anyone who
 		// asked for the path, and it told a prober the path exists at all.
 		h.cover.NotFound(w, r)
-		return
-	}
-	if retryAfter, banned := h.authFailures.clearIfAllowed(sourceBlock); banned {
-		// A concurrent failed request may have activated the ban while this
-		// request was validating its credential. Recheck under the limiter lock
-		// before accepting it.
-		writeRateLimited(h.cover, w, r, retryAfter)
 		return
 	}
 	subprotocol, ok := h.matchSubprotocol(r.Header.Values("Sec-WebSocket-Protocol"))

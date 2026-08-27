@@ -136,6 +136,9 @@ func (s *QUICServer) serveConn(conn *quic.Conn) {
 
 	sourceIP := remoteIP(conn.RemoteAddr().String())
 	sourceBlock := sourceKey(sourceIP)
+	// The ban is checked before a stream is even accepted, so a banned source
+	// cannot spend the relay's time on a handshake. The rest of the sequence
+	// needs the credential and runs below (admit.go).
 	if retryAfter, banned := s.handler.authFailures.banRemaining(sourceBlock); banned {
 		s.logger.Debug("relay quic connection rate limited",
 			"source", sourceIP, "retry_after", retryAfter)
@@ -158,15 +161,15 @@ func (s *QUICServer) serveConn(conn *quic.Conn) {
 	}
 	_ = stream.SetReadDeadline(time.Time{})
 
-	result := s.handler.authorize(credential.Header())
-	if !result.authorized {
-		s.handler.authFailures.recordFailure(sourceBlock)
+	switch decision := s.handler.admit(sourceBlock, credential.Header()); decision.verdict {
+	case admitRejected:
 		// The credential itself is never logged, only what class it was.
 		s.logger.Warn("relay quic authorization rejected",
-			"source", sourceIP, "credential", result.class)
+			"source", sourceIP, "credential", decision.class)
 		return
-	}
-	if _, banned := s.handler.authFailures.clearIfAllowed(sourceBlock); banned {
+	case admitBanned:
+		s.logger.Debug("relay quic connection rate limited",
+			"source", sourceIP, "retry_after", decision.retryAfter)
 		return
 	}
 
