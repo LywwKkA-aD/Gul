@@ -93,11 +93,38 @@ type ShapedConn struct {
 	out []byte
 }
 
-// Shape wraps a stream whose every Write becomes exactly one message. That is
-// what websocket.NetConn does, and the guarantee is load-bearing: a frame split
-// across two messages would be padded to the grid and still arrive as two
-// different lengths.
-func Shape(conn net.Conn) *ShapedConn {
+// MessageConn is a stream whose every Write leaves as exactly one message.
+//
+// The marker method is never called. It exists so that the guarantee Shape
+// depends on has to be stated by whoever knows it holds, instead of being
+// assumed - handing Shape a stream without message boundaries compiles fine
+// otherwise, the frames still parse (the header carries its own lengths), and
+// the only thing that quietly stops happening is the privacy.
+type MessageConn interface {
+	net.Conn
+	// MessageBoundaries asserts that one Write is one message.
+	MessageBoundaries()
+}
+
+// AsMessageConn attests that a connection delivers one message per Write.
+//
+// Exactly one kind of connection in this project qualifies: the one
+// websocket.NetConn returns, whose documentation promises it. A QUIC stream
+// does not - quic-go repacketises, and cells of 256 bytes have no say in what
+// a datagram ends up carrying, which is why the QUIC road covers sizes with
+// the obfuscator instead and reports a different contract for it.
+//
+// Grep for this name to find every place the claim is made.
+func AsMessageConn(conn net.Conn) MessageConn { return messageConn{conn} }
+
+type messageConn struct{ net.Conn }
+
+func (messageConn) MessageBoundaries() {}
+
+// Shape wraps a stream whose every Write becomes exactly one message. The
+// guarantee is load-bearing: a frame split across two messages would be padded
+// to the grid and still arrive as two different lengths.
+func Shape(conn MessageConn) *ShapedConn {
 	return &ShapedConn{
 		Conn:   conn,
 		reader: bufio.NewReaderSize(conn, 8*shapedBucket),

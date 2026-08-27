@@ -57,7 +57,7 @@ func (r *recorder) SetWriteDeadline(time.Time) error { return nil }
 func TestEveryVoiceSizedWriteLeavesAtOneSize(t *testing.T) {
 	t.Parallel()
 	wire := &recorder{}
-	shaped := Shape(wire)
+	shaped := Shape(AsMessageConn(wire))
 
 	// The Opus spread, plus what the inner Mumble framing and the inner TLS
 	// record add on top of it.
@@ -96,7 +96,7 @@ func TestEveryVoiceSizedWriteLeavesAtOneSize(t *testing.T) {
 func TestNoWriteEverLeavesLargerThanACell(t *testing.T) {
 	t.Parallel()
 	wire := &recorder{}
-	shaped := Shape(wire)
+	shaped := Shape(AsMessageConn(wire))
 
 	for _, n := range []int{
 		1, 60, 99, // voice, which always fitted
@@ -129,7 +129,7 @@ func TestSplittingIntoCellsCostsNoBytes(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{1300, 1500, 4096} {
 		wire := &recorder{}
-		if _, err := Shape(wire).Write(make([]byte, n)); err != nil {
+		if _, err := Shape(AsMessageConn(wire)).Write(make([]byte, n)); err != nil {
 			t.Fatalf("write %d: %v", n, err)
 		}
 		onWire := 0
@@ -150,7 +150,7 @@ func TestSplittingIntoCellsCostsNoBytes(t *testing.T) {
 func TestChaffIsIndistinguishableFromSpeechBySize(t *testing.T) {
 	t.Parallel()
 	wire := &recorder{}
-	shaped := Shape(wire)
+	shaped := Shape(AsMessageConn(wire))
 
 	if _, err := shaped.Write(make([]byte, 80)); err != nil {
 		t.Fatalf("write: %v", err)
@@ -182,7 +182,7 @@ func TestChaffIsIndistinguishableFromSpeechBySize(t *testing.T) {
 func TestShapedRoundTrip(t *testing.T) {
 	t.Parallel()
 	left, right := net.Pipe()
-	a, b := Shape(left), Shape(right)
+	a, b := Shape(AsMessageConn(left)), Shape(AsMessageConn(right))
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
 
 	payloads := [][]byte{
@@ -216,7 +216,7 @@ func TestShapedRoundTrip(t *testing.T) {
 func TestChaffNeverReachesTheReader(t *testing.T) {
 	t.Parallel()
 	left, right := net.Pipe()
-	a, b := Shape(left), Shape(right)
+	a, b := Shape(AsMessageConn(left)), Shape(AsMessageConn(right))
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -251,7 +251,7 @@ func TestShapedRefusesUnknownFrames(t *testing.T) {
 			t.Cleanup(func() { _ = left.Close(); _ = right.Close() })
 			go func() { _, _ = left.Write(header) }()
 
-			_, err := Shape(right).Read(make([]byte, 16))
+			_, err := Shape(AsMessageConn(right)).Read(make([]byte, 16))
 			if err == nil {
 				t.Fatal("the frame was accepted")
 			}

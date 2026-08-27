@@ -48,7 +48,11 @@ type credentials struct {
 	// keyed by its own string - has to use the caller's spelling, or the two
 	// sides key the same server differently and the memory silently never
 	// applies. address stays the normalized one: it is what the user is shown.
-	key      string
+	key string
+	// kind is what parseEndpoint made of the address. The chooser needs it to
+	// know which roads exist, and taking it from here rather than re-reading
+	// the string keeps one answer to that question.
+	kind     endpointKind
 	username string
 	password string
 	// bearer is the derived WSS relay credential. PBKDF2 makes derivation cost
@@ -217,6 +221,7 @@ func (m *Manager) Connect(address, username, password string) {
 	go m.run(credentials{
 		address:  addr,
 		key:      address,
+		kind:     ep.kind,
 		username: username,
 		password: password,
 	}, stop, done)
@@ -354,7 +359,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 	reconnecting := false
 	// roadsLeft bounds one immediate search across the roads, so a server that
 	// is simply down cannot become a loop of instant retries.
-	roadsLeft := len(m.transports.roads(c.key)) - 1
+	roadsLeft := len(m.transports.roads(c.kind)) - 1
 	// Moving to the next road continues the same attempt rather than starting
 	// a new one, so it must not announce itself again.
 	searching := false
@@ -369,7 +374,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		// whichever road it stopped on even after another one recovers: a link
 		// that loses both roads and gets one back would never reconnect.
 		if !searching {
-			roadsLeft = len(m.transports.roads(c.key)) - 1
+			roadsLeft = len(m.transports.roads(c.kind)) - 1
 		}
 		if !reconnecting && !searching {
 			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
@@ -377,7 +382,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		searching = false
 
 		dropped := make(chan *gumble.DisconnectEvent, 1)
-		transport := m.transports.next(c.key)
+		transport := m.transports.next(c.kind, c.key)
 		session, err := m.dialOnce(c, transport, dropped)
 		if err != nil {
 			var mismatch *MismatchError
@@ -677,7 +682,11 @@ func (m *Manager) publishConnected(session *Session, server string) {
 // PreferTransport seeds the road to try first for one server. Anything the
 // chooser does not recognise is ignored, which simply leaves the search alone.
 func (m *Manager) PreferTransport(address, transport string) {
-	m.transports.prefer(address, Transport(transport))
+	ep, err := parseEndpoint(address)
+	if err != nil {
+		return
+	}
+	m.transports.prefer(ep.kind, address, Transport(transport))
 }
 
 // restoreChannel moves self back to the channel that was joined before the
@@ -1015,7 +1024,7 @@ func relayBearer(c credentials, derive func([]byte) relayproto.Credential) relay
 		return ""
 	}
 	ep, err := parseEndpoint(c.address)
-	if err != nil || ep.kind != endpointWSS {
+	if err != nil || ep.kind != endpointRelay {
 		return ""
 	}
 	return derive([]byte(c.password))

@@ -178,7 +178,7 @@ func dialQUICMumbleTLS(
 	certificate *tls.Certificate,
 	outerRoots *tls.Config,
 ) (net.Conn, error) {
-	if ep.kind != endpointWSS {
+	if ep.kind != endpointRelay {
 		return nil, errors.New("relay endpoint is required")
 	}
 	if tofu == nil {

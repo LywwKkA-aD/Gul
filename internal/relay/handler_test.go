@@ -40,7 +40,7 @@ func TestHandlerRelaysBinaryStream(t *testing.T) {
 		t.Fatalf("subprotocol = %q, want %q", got, names.Shaped)
 	}
 
-	stream := relayproto.Shape(websocket.NetConn(context.Background(), conn, websocket.MessageBinary))
+	stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(context.Background(), conn, websocket.MessageBinary)))
 	t.Cleanup(func() { _ = stream.Close() })
 	want := []byte{0x16, 0x03, 0x03, 0x00, 0x05, 0xde, 0xad, 0xbe, 0xef}
 	if _, err := stream.Write(want); err != nil {
@@ -345,7 +345,7 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			// above it ever sees a byte. The relayed one goes through the
 			// framing, because that is what a client actually sends.
 			if tc.relayed {
-				out := relayproto.Shape(websocket.NetConn(t.Context(), conn, websocket.MessageBinary))
+				out := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(t.Context(), conn, websocket.MessageBinary)))
 				if _, err := out.Write(tc.payload); err != nil {
 					t.Fatalf("write test message: %v", err)
 				}
@@ -372,7 +372,8 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			}
 			// The upstream may split its answer across reads, so the echo is
 			// consumed as a stream rather than as one message.
-			stream := relayproto.Shape(websocket.NetConn(ctx, conn, websocket.MessageBinary))
+			stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(ctx, conn, websocket.MessageBinary)))
+
 			echoed := make([]byte, len(tc.payload))
 			if _, err := io.ReadFull(stream, echoed); err != nil {
 				t.Fatalf("message at the limit was not relayed: %v", err)

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -44,9 +43,22 @@ type Server struct {
 	Transport string `json:"transport,omitempty"`
 }
 
-// KnownTransports are the roads a stored value may name. Anything else in the
-// file is somebody else's idea, or a typo, and is dropped rather than tried.
-var KnownTransports = []string{"wss", "quic", "direct"}
+// transportNameBytes bounds what may be stored as a road name.
+//
+// This package used to hold the list of road names itself and drop anything
+// outside it. That made two independent lists of the roads, one here and one
+// in internal/mumble, and a road added to only one of them failed in silence:
+// RememberTransport would decline to store it, and sanitizeServers would erase
+// it on the next load. No log line, no error - the symptom was a client that
+// searched for its road again on every launch.
+//
+// The list belongs where the roads are built. This package is a leaf and
+// cannot import that one, and it does not need to: transportChooser.prefer
+// already ignores a road it does not recognise, documented and tested, so a
+// stale value in the file costs the hint and nothing else. All that is needed
+// here is that the file stays a file - a bounded, plausible token rather than
+// a megabyte of somebody's paste.
+const transportNameBytes = 16
 
 // RememberServer records a server the user has just connected to, and returns
 // the new list. The caller passes the current time; nothing here reads a
@@ -65,7 +77,7 @@ var KnownTransports = []string{"wss", "quic", "direct"}
 // only about a server the user actually connects to.
 func RememberTransport(list []Server, address, transport string) []Server {
 	address = strings.TrimSpace(address)
-	if address == "" || !knownTransport(transport) {
+	if address == "" || !storableTransport(transport) {
 		return sanitizeServers(list)
 	}
 	out := make([]Server, len(list))
@@ -90,8 +102,18 @@ func TransportFor(list []Server, address string) string {
 	return ""
 }
 
-func knownTransport(transport string) bool {
-	return slices.Contains(KnownTransports, transport)
+// storableTransport reports whether a value is shaped like a road name at all.
+// What the name means is decided by whoever builds the roads.
+func storableTransport(transport string) bool {
+	if transport == "" || len(transport) > transportNameBytes {
+		return false
+	}
+	for _, r := range transport {
+		if (r < 'a' || r > 'z') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func RememberServer(list []Server, address, username string, at time.Time) []Server {
@@ -162,7 +184,7 @@ func sanitizeServers(list []Server) []Server {
 			// still perfectly good to connect with.
 			s.LastUsed = 0
 		}
-		if !knownTransport(s.Transport) {
+		if s.Transport != "" && !storableTransport(s.Transport) {
 			// A road nobody has heard of costs the hint, not the entry: the
 			// client simply searches for one, which is what it does anyway
 			// when nothing is remembered.

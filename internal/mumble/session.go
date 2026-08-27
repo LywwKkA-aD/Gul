@@ -161,7 +161,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	}
 
 	var client *gumble.Client
-	if ep.kind == endpointWSS {
+	if ep.kind == endpointRelay {
 		// Two budgets, because the two phases fail differently. Opening the
 		// connection is bounded by the clock; the sync that follows is bounded
 		// by silence (syncSilence).
@@ -245,10 +245,41 @@ func dialRelay(
 	tofu *TOFUStore,
 	certificate *tls.Certificate,
 ) (net.Conn, error) {
-	if transport == TransportQUIC {
-		return dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	road, ok := relayRoads[transport]
+	if !ok {
+		// A road named but not built. This was an else branch until now, so
+		// anything that was not QUIC quietly became WebSocket: a road added to
+		// relayTransports without being added here would not have failed, it
+		// would have lied - the session would run, and the chooser would
+		// record its success under the wrong name and write that to disk.
+		return nil, fmt.Errorf("mumble: no road named %q", transport)
 	}
-	return dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	return road(ctx, ep, credential, tofu, certificate)
+}
+
+// relayRoad opens one road to the relay and returns the connection gumble will
+// speak Mumble over. Each road's own dial takes one more argument than this -
+// a seam its tests reach in with - and the entries below supply it.
+type relayRoad func(
+	context.Context,
+	endpoint,
+	relayproto.Credential,
+	*TOFUStore,
+	*tls.Certificate,
+) (net.Conn, error)
+
+// relayRoads is every road that exists, by the name the chooser and the
+// settings file use for it. Adding a road is one entry here and one in
+// relayTransports, which decides the order they are tried in.
+var relayRoads = map[Transport]relayRoad{
+	TransportWSS: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
+		tofu *TOFUStore, certificate *tls.Certificate) (net.Conn, error) {
+		return dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	},
+	TransportQUIC: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
+		tofu *TOFUStore, certificate *tls.Certificate) (net.Conn, error) {
+		return dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
+	},
 }
 
 // isTerminalRelayError reports whether a failure is about who is calling

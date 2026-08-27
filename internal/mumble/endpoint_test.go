@@ -33,7 +33,7 @@ func TestParseEndpointWSS(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			if ep.kind != endpointWSS || ep.address != tc.address || ep.host != tc.host {
+			if ep.kind != endpointRelay || ep.address != tc.address || ep.host != tc.host {
 				t.Fatalf("endpoint = %#v, want address=%q host=%q", ep, tc.address, tc.host)
 			}
 		})

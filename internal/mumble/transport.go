@@ -2,7 +2,6 @@ package mumble
 
 import (
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -63,11 +62,19 @@ func newTransportChooser() *transportChooser {
 	return &transportChooser{order: relayTransports, known: make(map[string]Transport)}
 }
 
-// roads reports the roads that exist for an address. A direct Mumble server
-// has exactly one - its own TLS on its own port - and nothing to choose
+// roads reports the roads that exist for a kind of endpoint. A direct Mumble
+// server has exactly one - its own TLS on its own port - and nothing to choose
 // between; the relay is where the choice lives.
-func (c *transportChooser) roads(address string) []Transport {
-	if !strings.HasPrefix(strings.ToLower(address), "wss://") {
+//
+// It takes the parsed kind rather than the address because it used to decide
+// by string prefix, on the caller's spelling, which parseEndpoint had already
+// normalised past. For " wss://host" - a leading space, which a person pasting
+// an address produces without noticing - the prefix test said direct while the
+// parser said relay. That disagreement was invisible only because dialRelay
+// treated everything that was not QUIC as WebSocket and dialed the right road
+// anyway. One place decides what an address is now, and it is the parser.
+func (c *transportChooser) roads(kind endpointKind) []Transport {
+	if kind != endpointRelay {
 		return []Transport{TransportDirect}
 	}
 	return c.order
@@ -75,8 +82,8 @@ func (c *transportChooser) roads(address string) []Transport {
 
 // next reports the road to try now. A server that has proved a road keeps it
 // until that road fails.
-func (c *transportChooser) next(address string) Transport {
-	roads := c.roads(address)
+func (c *transportChooser) next(kind endpointKind, address string) Transport {
+	roads := c.roads(kind)
 	if len(roads) == 1 {
 		return roads[0]
 	}
@@ -107,8 +114,8 @@ func (c *transportChooser) succeeded(address string, transport Transport) bool {
 //
 // Unknown roads are ignored rather than refused - a settings file is editable,
 // and a road nobody has heard of should cost the hint and nothing else.
-func (c *transportChooser) prefer(address string, transport Transport) {
-	if !slices.Contains(c.roads(address), transport) {
+func (c *transportChooser) prefer(kind endpointKind, address string, transport Transport) {
+	if !slices.Contains(c.roads(kind), transport) {
 		return
 	}
 	c.mu.Lock()

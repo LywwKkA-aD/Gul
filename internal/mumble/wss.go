@@ -168,7 +168,9 @@ func dialWSS(
 		// talking through the silences (relayproto.Shape). The chaff outlives
 		// the dial context on purpose, exactly as the stream does: cancelling
 		// setup must not stop a live session from being shaped.
-		shaped := relayproto.Shape(stream)
+		// websocket.NetConn promises one message per Write, which is the
+		// guarantee the shaping rests on (relayproto.AsMessageConn).
+		shaped := relayproto.Shape(relayproto.AsMessageConn(stream))
 		var chaffCtx context.Context
 		chaffCtx, stopChaff = context.WithCancel(context.Background())
 		go shaped.SendChaff(chaffCtx)
@@ -227,7 +229,7 @@ func dialWSSMumbleTLS(
 	certificate *tls.Certificate,
 	baseClient *http.Client,
 ) (net.Conn, error) {
-	if ep.kind != endpointWSS {
+	if ep.kind != endpointRelay {
 		return nil, errors.New("WSS endpoint is required")
 	}
 	if tofu == nil {

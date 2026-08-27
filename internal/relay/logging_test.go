@@ -31,7 +31,7 @@ func TestHandlerLogsSessionLifecycle(t *testing.T) {
 	}
 	// Framed, the way a client sends: the counters below are of the bytes that
 	// reached Murmur, which is the payload and not the padding around it.
-	stream := relayproto.Shape(websocket.NetConn(t.Context(), conn, websocket.MessageBinary))
+	stream := relayproto.Shape(relayproto.AsMessageConn(websocket.NetConn(t.Context(), conn, websocket.MessageBinary)))
 	if _, err := stream.Write([]byte{1, 2, 3, 4}); err != nil {
 		t.Fatalf("write: %v", err)
 	}

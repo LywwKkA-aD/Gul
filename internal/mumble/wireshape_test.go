@@ -65,7 +65,8 @@ func TestTheWireCarriesOneSizeFromTheFirstByte(t *testing.T) {
 		defer func() { _ = stream.Close() }()
 		// The relay's own view: it reads whole messages, so their sizes are
 		// what its byte counter reports and what the journal shows.
-		inner := tls.Server(relayproto.Shape(&observedConn{Conn: stream, reads: messages}),
+		observed := relayproto.AsMessageConn(&observedConn{Conn: stream, reads: messages})
+		inner := tls.Server(relayproto.Shape(observed),
 			&tls.Config{
 				MinVersion:   tls.VersionTLS12,
 				Certificates: []tls.Certificate{innerCertificate},

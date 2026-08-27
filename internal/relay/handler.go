@@ -368,7 +368,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Every session that gets this far is shaped: it is the only contract left.
 	// Shaping is symmetric - the relay pads and sends chaff in its own direction
 	// too, because half a shaped conversation leaves the other half a metronome.
-	shaped := relayproto.Shape(stream)
+	// websocket.NetConn promises one message per Write, which is the guarantee
+	// the shaping rests on (relayproto.AsMessageConn).
+	shaped := relayproto.Shape(relayproto.AsMessageConn(stream))
 	chaffCtx, stopChaff := context.WithCancel(h.ctx)
 	defer stopChaff()
 	go shaped.SendChaff(chaffCtx)

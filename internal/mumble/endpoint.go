@@ -16,7 +16,13 @@ type endpointKind uint8
 
 const (
 	endpointDirect endpointKind = iota
-	endpointWSS
+	// endpointRelay is any road that goes through the relay, not the
+	// WebSocket one in particular. It was called endpointRelay while WebSocket
+	// was the only such road, and the name outlived the fact: QUIC has been
+	// an endpointRelay endpoint since it existed. The address is still spelled
+	// wss://, and that spelling must not change - config.Server.Address is
+	// the key a saved password is filed under in the OS keychain.
+	endpointRelay
 )
 
 // retiredTunnelPath is the fixed path relays answered on up to v0.4.0-alpha.2,
@@ -100,7 +106,7 @@ func parseWSSEndpoint(value string) (endpoint, error) {
 		parsed.Host = host
 	}
 	parsed.Scheme = "wss"
-	return endpoint{kind: endpointWSS, address: parsed.String(), host: host}, nil
+	return endpoint{kind: endpointRelay, address: parsed.String(), host: host}, nil
 }
 
 // canonicalHost makes the TLS SNI name and TOFU key stable for equivalent

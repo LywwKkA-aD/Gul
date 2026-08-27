@@ -2,6 +2,8 @@ package mumble
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,10 +20,10 @@ const testRelayAddress = "wss://murmur.example.test"
 func TestChooserOffersOneRoadForADirectServer(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
-	if roads := c.roads("murmur.example.test:64738"); len(roads) != 1 || roads[0] != TransportDirect {
+	if roads := c.roads(kindOf(t, "murmur.example.test:64738")); len(roads) != 1 || roads[0] != TransportDirect {
 		t.Fatalf("roads = %v, want just the direct one", roads)
 	}
-	if got := c.next("murmur.example.test:64738"); got != TransportDirect {
+	if got := c.next(kindOf(t, "murmur.example.test:64738"), "murmur.example.test:64738"); got != TransportDirect {
 		t.Fatalf("next = %q, want %q", got, TransportDirect)
 	}
 }
@@ -31,7 +33,7 @@ func TestChooserOffersOneRoadForADirectServer(t *testing.T) {
 func TestChooserStartsWithTheWebSocketRoad(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
-	if got := c.next(testRelayAddress); got != TransportWSS {
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got != TransportWSS {
 		t.Fatalf("first road = %q, want %q", got, TransportWSS)
 	}
 }
@@ -42,14 +44,14 @@ func TestChooserKeepsAProvenRoad(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
 	c.failed(testRelayAddress) // the first road did not work
-	second := c.next(testRelayAddress)
+	second := c.next(kindOf(t, testRelayAddress), testRelayAddress)
 	if second == TransportWSS {
 		t.Fatalf("still on %q after it failed", second)
 	}
 	c.succeeded(testRelayAddress, second)
 
 	for i := range 5 {
-		if got := c.next(testRelayAddress); got != second {
+		if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got != second {
 			t.Fatalf("attempt %d took %q, want the proven %q", i, got, second)
 		}
 	}
@@ -61,12 +63,12 @@ func TestChooserForgetsARoadThatStopsWorking(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
 	c.succeeded(testRelayAddress, TransportQUIC)
-	if got := c.next(testRelayAddress); got != TransportQUIC {
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got != TransportQUIC {
 		t.Fatalf("next = %q, want the remembered %q", got, TransportQUIC)
 	}
 
 	c.failed(testRelayAddress)
-	if got := c.next(testRelayAddress); got == TransportQUIC {
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got == TransportQUIC {
 		t.Fatal("the road that just failed was offered again")
 	}
 }
@@ -77,7 +79,7 @@ func TestChooserRemembersPerServer(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
 	c.succeeded("wss://one.example.test", TransportQUIC)
-	if got := c.next("wss://two.example.test"); got != TransportWSS {
+	if got := c.next(kindOf(t, "wss://two.example.test"), "wss://two.example.test"); got != TransportWSS {
 		t.Fatalf("second server took %q, want the default %q", got, TransportWSS)
 	}
 }
@@ -173,14 +175,14 @@ func TestManagerDoesNotSearchTheRoadsWhenTheServerAnswered(t *testing.T) {
 func TestChooserTakesTheRememberedRoadFirst(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
-	c.prefer(testRelayAddress, TransportQUIC)
-	if got := c.next(testRelayAddress); got != TransportQUIC {
+	c.prefer(kindOf(t, testRelayAddress), testRelayAddress, TransportQUIC)
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got != TransportQUIC {
 		t.Fatalf("first road = %q, want the remembered %q", got, TransportQUIC)
 	}
 	// Still only a hint: it has to prove itself, and failing sends the search
 	// on as usual.
 	c.failed(testRelayAddress)
-	if got := c.next(testRelayAddress); got == TransportQUIC {
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got == TransportQUIC {
 		t.Fatal("the hint survived the road failing")
 	}
 }
@@ -190,13 +192,13 @@ func TestChooserTakesTheRememberedRoadFirst(t *testing.T) {
 func TestChooserIgnoresARoadItDoesNotKnow(t *testing.T) {
 	t.Parallel()
 	c := newTransportChooser()
-	c.prefer(testRelayAddress, Transport("carrier pigeon"))
-	if got := c.next(testRelayAddress); got != TransportWSS {
+	c.prefer(kindOf(t, testRelayAddress), testRelayAddress, Transport("carrier pigeon"))
+	if got := c.next(kindOf(t, testRelayAddress), testRelayAddress); got != TransportWSS {
 		t.Fatalf("road = %q, want the ordinary first one", got)
 	}
 	// And a road that exists but not for this address is equally ignored.
-	c.prefer("murmur.example.test:64738", TransportQUIC)
-	if got := c.next("murmur.example.test:64738"); got != TransportDirect {
+	c.prefer(kindOf(t, "murmur.example.test:64738"), "murmur.example.test:64738", TransportQUIC)
+	if got := c.next(kindOf(t, "murmur.example.test:64738"), "murmur.example.test:64738"); got != TransportDirect {
 		t.Fatalf("direct server took %q", got)
 	}
 }
@@ -345,5 +347,83 @@ func TestChooserReportsAProvenRoadOnlyWhenItIsNews(t *testing.T) {
 	}
 	if !c.succeeded(testRelayAddress, TransportQUIC) {
 		t.Fatal("a different road was not news")
+	}
+}
+
+// kindOf runs the address through the parser first, which is what the manager
+// does before it asks the chooser anything. Passing a raw string straight to
+// the chooser is what the bug looked like: for " wss://host" the prefix test
+// said direct while the parser said relay, and only dialRelay's silent
+// fallback to WebSocket kept it working.
+func kindOf(t *testing.T, address string) endpointKind {
+	t.Helper()
+	ep, err := parseEndpoint(address)
+	if err != nil {
+		t.Fatalf("parse %q: %v", address, err)
+	}
+	return ep.kind
+}
+
+// A road named but not built has to fail by name.
+//
+// dialRelay was an else branch: anything that was not QUIC became WebSocket.
+// A road added to relayTransports and forgotten here would not have failed -
+// it would have lied. The session would run, the round-trip gate would pass,
+// and the chooser would record the success under the name of a road that had
+// never been dialled, then write that name to the settings file.
+func TestARoadOutsideTheTableFailsByName(t *testing.T) {
+	t.Parallel()
+	ep, err := parseEndpoint(testRelayAddress)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	_, err = dialRelay(t.Context(), ep, Transport("carrier pigeon"), "v2.test", nil, nil)
+
+	if err == nil {
+		t.Fatal("an unbuilt road dialled something; it must fail instead")
+	}
+	if !strings.Contains(err.Error(), "carrier pigeon") {
+		t.Fatalf("error = %v, want it to name the road", err)
+	}
+}
+
+// Every road the chooser will hand out has to exist in the table, and nothing
+// in the table should be unreachable. This is what makes "a road is one entry
+// in one table" true rather than intended.
+func TestEveryRoadTheChooserOffersIsBuilt(t *testing.T) {
+	t.Parallel()
+	for _, transport := range relayTransports {
+		if _, ok := relayRoads[transport]; !ok {
+			t.Errorf("the chooser offers %q and nothing dials it", transport)
+		}
+	}
+	for transport := range relayRoads {
+		if !slices.Contains(relayTransports, transport) {
+			t.Errorf("%q is built and never offered", transport)
+		}
+	}
+}
+
+// The spelling a person actually pastes.
+//
+// parseEndpoint trims the address; the chooser used to test the untrimmed
+// string for a "wss://" prefix and answer direct. Both halves were wrong in
+// opposite directions and cancelled out, because dialRelay dialled WebSocket
+// for everything that was not QUIC. Removing that fallback without fixing this
+// would have stopped such an address connecting at all.
+func TestAPastedAddressIsStillARelayAddress(t *testing.T) {
+	t.Parallel()
+	c := newTransportChooser()
+	for _, address := range []string{
+		testRelayAddress,
+		" " + testRelayAddress,
+		testRelayAddress + " ",
+		"WSS://murmur.example.test",
+	} {
+		roads := c.roads(kindOf(t, address))
+		if len(roads) != len(relayTransports) {
+			t.Errorf("roads for %q = %v, want the relay's %v", address, roads, relayTransports)
+		}
 	}
 }
