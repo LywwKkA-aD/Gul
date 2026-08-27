@@ -29,18 +29,18 @@ func TestHandlerRelaysBinaryStream(t *testing.T) {
 		&websocket.DialOptions{
 			HTTPHeader:   bearerHeader(secret),
 			Host:         testHost,
-			Subprotocols: []string{names.Subprotocol},
+			Subprotocols: []string{names.Shaped},
 		},
 	)
 	if err != nil {
 		t.Fatalf("dial relay: %v (response: %#v)", err, response)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-	if got := conn.Subprotocol(); got != names.Subprotocol {
-		t.Fatalf("subprotocol = %q, want %q", got, names.Subprotocol)
+	if got := conn.Subprotocol(); got != names.Shaped {
+		t.Fatalf("subprotocol = %q, want %q", got, names.Shaped)
 	}
 
-	stream := websocket.NetConn(context.Background(), conn, websocket.MessageBinary)
+	stream := relayproto.Shape(websocket.NetConn(context.Background(), conn, websocket.MessageBinary))
 	t.Cleanup(func() { _ = stream.Close() })
 	want := []byte{0x16, 0x03, 0x03, 0x00, 0x05, 0xde, 0xad, 0xbe, 0xef}
 	if _, err := stream.Write(want); err != nil {
@@ -298,12 +298,19 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 		kind    websocket.MessageType
 		payload []byte
 		relayed bool
-		// refusal is the close status the relay must answer with. The
-		// oversized case cannot be judged by "nothing came back": the library
-		// enforces the limit as the message streams (limitReader errors on the
-		// read after the budget runs out), so a prefix can reach the upstream
-		// and be echoed back before the close lands. The close is the part
-		// that is actually promised.
+		// refusal is the close status the relay must answer with, where one is
+		// promised. The oversized case cannot be judged by "nothing came back"
+		// either: the library enforces the limit as the message streams
+		// (limitReader errors on the read after the budget runs out), so a
+		// prefix can reach the upstream and be echoed back before the close
+		// lands.
+		//
+		// Zero means only that the session must end. Since the tunnel is framed
+		// (relayproto.Shape), an oversized raw message is read as a frame with
+		// a header that is not one, and which error wins - the malformed frame
+		// or the size limit - is a race between two layers. Both refuse it and
+		// both bound the memory, so promising one of them would be promising
+		// something we do not control.
 		refusal websocket.StatusCode
 	}{
 		{
@@ -316,9 +323,8 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			name:    "oversized",
 			kind:    websocket.MessageBinary,
 			payload: bytes.Repeat([]byte{0xaa}, limit+1),
-			refusal: websocket.StatusMessageTooBig,
 		},
-		{name: "at the limit", kind: websocket.MessageBinary, payload: bytes.Repeat([]byte{0xbb}, limit), relayed: true},
+		{name: "a large message", kind: websocket.MessageBinary, payload: bytes.Repeat([]byte{0xbb}, limit/2), relayed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseConfig("server secret")
@@ -334,7 +340,16 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			if err != nil {
 				t.Fatalf("dial: %v", err)
 			}
-			if err := conn.Write(t.Context(), tc.kind, tc.payload); err != nil {
+			// The refused cases are written raw: they are about what the
+			// WebSocket layer accepts, which is decided before the framing
+			// above it ever sees a byte. The relayed one goes through the
+			// framing, because that is what a client actually sends.
+			if tc.relayed {
+				out := relayproto.Shape(websocket.NetConn(t.Context(), conn, websocket.MessageBinary))
+				if _, err := out.Write(tc.payload); err != nil {
+					t.Fatalf("write test message: %v", err)
+				}
+			} else if err := conn.Write(t.Context(), tc.kind, tc.payload); err != nil {
 				t.Fatalf("write test message: %v", err)
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -345,6 +360,9 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 					if err == nil {
 						continue // an echoed prefix; the close is still owed
 					}
+					if tc.refusal == 0 {
+						return // the session ended, which is all that is promised
+					}
 					if got := websocket.CloseStatus(err); got != tc.refusal {
 						t.Fatalf("connection ended with close status %v (%v), want %v",
 							got, err, tc.refusal)
@@ -354,7 +372,7 @@ func TestHandlerRejectsTextAndOversizedMessages(t *testing.T) {
 			}
 			// The upstream may split its answer across reads, so the echo is
 			// consumed as a stream rather than as one message.
-			stream := websocket.NetConn(ctx, conn, websocket.MessageBinary)
+			stream := relayproto.Shape(websocket.NetConn(ctx, conn, websocket.MessageBinary))
 			echoed := make([]byte, len(tc.payload))
 			if _, err := io.ReadFull(stream, echoed); err != nil {
 				t.Fatalf("message at the limit was not relayed: %v", err)

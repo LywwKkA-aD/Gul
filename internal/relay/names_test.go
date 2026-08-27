@@ -57,6 +57,7 @@ func TestRetiredNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 		"the old pair":              {retiredPath, retiredSubprotocol},
 		"the old path":              {retiredPath, names.Subprotocol},
 		"the old subprotocol":       {names.Path, retiredSubprotocol},
+		"the retired plain stream":  {names.Path, names.Subprotocol},
 		"an address nobody serves":  {"/does-not-exist", names.Subprotocol},
 		"the pair of another relay": {relayproto.NamesFor(testCredential("elsewhere")).Path, names.Subprotocol},
 	}
@@ -70,7 +71,7 @@ func TestRetiredNamesAreRefusedLikeAnyUnknownAddress(t *testing.T) {
 
 	// The current pair still works, so the refusals above are about the names
 	// and not about a relay that stopped accepting anything.
-	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Subprotocol); got != http.StatusSwitchingProtocols {
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
 		t.Fatalf("current pair status = %d, want 101", got)
 	}
 }
@@ -89,10 +90,14 @@ func TestTunnelPathsFollowTheCredentials(t *testing.T) {
 	}
 }
 
-// The relay answers on both contracts and lets the client choose. This is the
-// whole compatibility mechanism for the shaped stream: no version byte inside
-// the tunnel, no flag on the server, just the name the client asked for.
-func TestTheClientChoosesTheContract(t *testing.T) {
+// One contract left, and a client that knows only the older one gets nothing.
+//
+// The plain byte stream was retired on 2026-08-27. A current client offers both
+// names, newest first, so it is unaffected; a client that predates the shaped
+// contract offers only the old name and is answered exactly as an address
+// nobody serves - a refusal of its own would say this host used to answer
+// there, which is the leak the derived names removed in the first place.
+func TestOnlyTheShapedContractIsAnswered(t *testing.T) {
 	t.Parallel()
 	cfg := baseConfig(defaultTestSecret)
 	cfg.Upstream = echoServer(t)
@@ -100,19 +105,14 @@ func TestTheClientChoosesTheContract(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	names := relayproto.NamesFor(testCredential(defaultTestSecret))
-	for name, want := range map[string]string{
-		"a client that offers only the plain stream":  names.Subprotocol,
-		"a client that offers only the shaped stream": names.Shaped,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := dialNames(t, server, defaultTestSecret, names.Path, want); got != http.StatusSwitchingProtocols {
-				t.Fatalf("status = %d, want 101", got)
-			}
-		})
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
+		t.Fatalf("the shaped contract got %d, want 101", got)
+	}
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Subprotocol); got != http.StatusNotFound {
+		t.Fatalf("the retired plain contract got %d, want the 404 any unknown address gets", got)
 	}
 
-	// Offered together, the client's order decides, and a current client puts
-	// the shaped one first.
+	// A current client offers both, and still lands on the shaped one.
 	conn, response, err := websocket.Dial(t.Context(),
 		"ws"+server.URL[len("http"):]+names.Path,
 		&websocket.DialOptions{
@@ -129,35 +129,27 @@ func TestTheClientChoosesTheContract(t *testing.T) {
 	}
 }
 
-// The session log has to say which contract a session runs on, or the one
-// condition for retiring the older name - that nobody negotiates it any more -
-// cannot be checked at all. The names themselves must never appear: they are
-// derived from the password.
+// The session log names the contract. It is what the retirement of the plain
+// stream was decided on, and what the next such decision will be read from.
+// The names themselves must never appear: they are derived from the password.
 func TestTheSessionLogNamesTheContract(t *testing.T) {
 	t.Parallel()
 	names := relayproto.NamesFor(testCredential(defaultTestSecret))
-	for label, subprotocol := range map[string]string{
-		contractPlain:  names.Subprotocol,
-		contractShaped: names.Shaped,
-	} {
-		t.Run(label, func(t *testing.T) {
-			logger, records := newRecordingLogger()
-			cfg := baseConfig(defaultTestSecret)
-			cfg.Upstream = echoServer(t)
-			cfg.Logger = logger
-			server := httptest.NewServer(mustHandler(t, cfg))
-			t.Cleanup(server.Close)
+	logger, records := newRecordingLogger()
+	cfg := baseConfig(defaultTestSecret)
+	cfg.Upstream = echoServer(t)
+	cfg.Logger = logger
+	server := httptest.NewServer(mustHandler(t, cfg))
+	t.Cleanup(server.Close)
 
-			if got := dialNames(t, server, defaultTestSecret, names.Path, subprotocol); got != http.StatusSwitchingProtocols {
-				t.Fatalf("status = %d, want 101", got)
-			}
-			attrs := recordAttrs(records.await(t, "relay session opened"))
-			if attrs["contract"] != label {
-				t.Fatalf("logged contract = %q, want %q", attrs["contract"], label)
-			}
-			if rendered := records.rendered(); strings.Contains(rendered, subprotocol) {
-				t.Fatalf("the log carried the derived name itself: %s", rendered)
-			}
-		})
+	if got := dialNames(t, server, defaultTestSecret, names.Path, names.Shaped); got != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", got)
+	}
+	attrs := recordAttrs(records.await(t, "relay session opened"))
+	if attrs["contract"] != contractShaped {
+		t.Fatalf("logged contract = %q, want %q", attrs["contract"], contractShaped)
+	}
+	if rendered := records.rendered(); strings.Contains(rendered, names.Shaped) {
+		t.Fatalf("the log carried the derived name itself: %s", rendered)
 	}
 }

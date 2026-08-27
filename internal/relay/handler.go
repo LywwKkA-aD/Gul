@@ -23,14 +23,13 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
-// The two tunnel contracts, as they appear in the session log. The names they
-// are negotiated under are derived from the password and never leave the
-// process; these labels are what an operator reads to see who is still on the
-// older one, which is the whole condition for retiring it.
-const (
-	contractPlain  = "plain"
-	contractShaped = "shaped"
-)
+// contractShaped is what the session log calls the one tunnel contract left.
+// The name it is negotiated under is derived from the password and never
+// leaves the process; the label is what an operator reads. It stays a named
+// constant rather than a literal now that there is one value, because the
+// retirement was decided by reading exactly this line, and the next one will
+// be too.
+const contractShaped = "shaped"
 
 const (
 	defaultAuthFailuresBeforeBan = 5
@@ -107,10 +106,6 @@ type Handler struct {
 	// request must never spend a key derivation.
 	paths        map[string]bool
 	subprotocols map[string]bool
-	// shaped is the subset of subprotocols whose sessions are framed and
-	// padded (relayproto.Shape). Which one the client asked for is the whole
-	// negotiation - there is no version byte inside the tunnel.
-	shaped       map[string]bool
 	drainTimeout time.Duration
 	global       chan struct{}
 	perSourceMax int
@@ -210,7 +205,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		obfuscator:   relayproto.NewObfuscator(primary),
 		paths:        tunnelPaths(credentials),
 		subprotocols: tunnelSubprotocols(credentials),
-		shaped:       shapedSubprotocols(credentials),
 		drainTimeout: cfg.ShutdownDrainTimeout,
 		global:       make(chan struct{}, cfg.MaxConnections),
 		perSourceMax: cfg.MaxConnectionsPerIP,
@@ -349,28 +343,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// bound has to be reinstated after it, not before. Without it a peer can
 	// make the relay buffer a message of any size.
 	ws.SetReadLimit(h.messageSize)
-	// The name the client asked for says which contract this session runs on,
-	// and it is the only place that says so - the derived names themselves are
-	// never logged, because they come from the password.
-	contract := contractPlain
-	if h.shaped[subprotocol] {
-		contract = contractShaped
-		// Shaping is symmetric: the relay pads and sends chaff in its own
-		// direction too, because half a shaped conversation leaves the other
-		// half a metronome.
-		shaped := relayproto.Shape(stream)
-		chaffCtx, stopChaff := context.WithCancel(h.ctx)
-		defer stopChaff()
-		go shaped.SendChaff(chaffCtx)
-		stream = shaped
-	}
+	// Every session that gets this far is shaped: it is the only contract left.
+	// Shaping is symmetric - the relay pads and sends chaff in its own direction
+	// too, because half a shaped conversation leaves the other half a metronome.
+	shaped := relayproto.Shape(stream)
+	chaffCtx, stopChaff := context.WithCancel(h.ctx)
+	defer stopChaff()
+	go shaped.SendChaff(chaffCtx)
+	stream = shaped
 	// Closing a WebSocket runs a close handshake that a vanished peer never
 	// answers, and the library bounds that wait at seconds. Keep it off the
 	// session goroutine: the capacity slot is released when the bytes stop,
 	// not when a courtesy close frame finishes timing out.
 	defer func() { go func() { _ = stream.Close() }() }()
 
-	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", contract, func() {
+	h.pumpSession(stream, sourceIP, sourceBlock, "websocket", contractShaped, func() {
 		go func() { _ = ws.Close(websocket.StatusInternalError, "Murmur is unavailable") }()
 	})
 }
@@ -607,20 +594,13 @@ func tunnelPaths(credentials []relayproto.Credential) map[string]bool {
 	return paths
 }
 
-// tunnelSubprotocols answers on both contracts: the shaped one and the plain
-// byte stream that predates it. A client offers both and the newest wins, so
-// the plain name can be dropped once no session negotiates it any more.
+// tunnelSubprotocols answers on the shaped contract and nothing else.
+//
+// The plain byte stream that predates it was retired on 2026-08-27, once the
+// journal could show who was still on it. A client that offers only the older
+// name now gets what any unknown address gets - the cover site's 404 - because
+// a refusal of its own would say this host used to answer there.
 func tunnelSubprotocols(credentials []relayproto.Credential) map[string]bool {
-	names := make(map[string]bool, 2*len(credentials))
-	for _, credential := range credentials {
-		derived := relayproto.NamesFor(credential)
-		names[derived.Subprotocol] = true
-		names[derived.Shaped] = true
-	}
-	return names
-}
-
-func shapedSubprotocols(credentials []relayproto.Credential) map[string]bool {
 	names := make(map[string]bool, len(credentials))
 	for _, credential := range credentials {
 		names[relayproto.NamesFor(credential).Shaped] = true

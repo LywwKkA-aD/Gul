@@ -48,8 +48,12 @@ func testNames(secret string) relayproto.Names {
 
 // testPath and testSubprotocol are the names for the secret nearly every test
 // uses.
-func testPath() string        { return testNames(defaultTestSecret).Path }
-func testSubprotocol() string { return testNames(defaultTestSecret).Subprotocol }
+func testPath() string { return testNames(defaultTestSecret).Path }
+
+// The shaped contract is the only one the relay answers on, so it is what a
+// test client asks for - and a test that pumps bytes has to frame them the
+// same way (relayproto.Shape), or the relay reads a header that is not there.
+func testSubprotocol() string { return testNames(defaultTestSecret).Shaped }
 
 const defaultTestSecret = "server secret"
 

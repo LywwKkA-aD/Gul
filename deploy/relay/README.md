@@ -12,22 +12,21 @@ somebody who already knows the server password can work out where the tunnel
 is. Everything else on the host - including the names any other server uses -
 gets the cover site's 404.
 
-There are two subprotocol names, and which one a client asks for is the whole
-of the contract negotiation. The newer one frames every write and pads it to a
-fixed grid, so the record lengths stop following the encoder
-(`relayproto.Shape`); the older one is the plain byte stream. A client offers
-both, newest first, so a relay that predates the shaped contract still answers.
-Every session logs which one it got, as `contract`, so the condition for
-dropping the plain name is a journal query rather than a guess:
+The subprotocol name is derived along with the path, and there is one: the
+shaped contract, which frames every write and pads it to a fixed grid so the
+record lengths stop following the encoder (`relayproto.Shape`). The plain byte
+stream that preceded it was retired on 2026-08-27. A client that offers only
+the older name gets what any unknown address gets - the cover site's 404 -
+because a refusal of its own would say this host used to answer there.
+
+A current client still offers both names, newest first, so a relay rolled back
+to an older image keeps working. Every session logs which contract it got:
 
 ```sh
-journalctl CONTAINER_NAME=gul-wss-relay --since "7 days ago" | grep '"contract":"plain"'
+journalctl CONTAINER_NAME=gul-wss-relay --since "7 days ago" | grep '"contract":'
 ```
 
-The names themselves are never logged - they come from the password. Once that
-query has been empty for long enough that everybody has plainly had a chance to
-update, the plain name can be dropped from `tunnelSubprotocols`, the same way
-the fixed names were.
+The names themselves are never logged - they come from the password.
 
 The Gul client derives a domain-separated bearer credential from the server
 join password. The relay stores only that derived credential in the separate

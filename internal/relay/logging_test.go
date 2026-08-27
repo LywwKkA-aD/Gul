@@ -1,12 +1,15 @@
 package relay
 
 import (
+	"io"
 	"net"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 func TestHandlerLogsSessionLifecycle(t *testing.T) {
@@ -26,10 +29,14 @@ func TestHandlerLogsSessionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if err := conn.Write(t.Context(), websocket.MessageBinary, []byte{1, 2, 3, 4}); err != nil {
+	// Framed, the way a client sends: the counters below are of the bytes that
+	// reached Murmur, which is the payload and not the padding around it.
+	stream := relayproto.Shape(websocket.NetConn(t.Context(), conn, websocket.MessageBinary))
+	if _, err := stream.Write([]byte{1, 2, 3, 4}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, _, err := conn.Read(t.Context()); err != nil {
+	echo := make([]byte, 4)
+	if _, err := io.ReadFull(stream, echo); err != nil {
 		t.Fatalf("read echo: %v", err)
 	}
 	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
