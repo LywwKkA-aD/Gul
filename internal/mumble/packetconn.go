@@ -1,6 +1,7 @@
 package mumble
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -160,15 +161,40 @@ func (c *packetConn) writeWithDeadline(p []byte) (int, error) {
 		return c.Conn.Write(p)
 	}
 	n, err := c.Conn.Write(p)
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
+	if !timedOut(err) {
 		return n, err
 	}
+	c.note(err)
 	if last := c.lastRead.Load(); last != 0 && time.Since(time.Unix(0, last)) < uplinkReadWindow {
 		c.stalled.Store(true)
 		err = ErrUplinkStalled
 	}
 	_ = c.Close()
 	return n, err
+}
+
+// timedOut reports whether a write hit its deadline, whichever transport is
+// underneath.
+//
+// Asking only for os.ErrDeadlineExceeded was a real bug and a quiet one: that
+// is what a raw socket returns, and the direct connection is the one road this
+// never had to work on. A WebSocket returns context.DeadlineExceeded instead
+// (coder/websocket netconn.go), and errors.Is does not bridge the two - so on
+// the relay roads, which are the roads this whole diagnosis was written for,
+// the stall was never recognised, the connection was never closed for it, and
+// the user was told "connection lost" while their microphone went nowhere.
+//
+// Every transport is asked in its own words, and net.Error covers the ones that
+// answer in neither.
+func timedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *packetConn) Write(p []byte) (int, error) {

@@ -2,8 +2,10 @@ package mumble
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -407,3 +409,43 @@ func TestSyncingContextEndsOnSilenceNotOnSlowness(t *testing.T) {
 		}
 	})
 }
+
+// The stalled-uplink diagnosis has to recognise a deadline whatever transport
+// reports it, and it did not.
+//
+// It asked only for os.ErrDeadlineExceeded, which is what a raw socket returns
+// - the direct connection, the one road this was never needed on. A WebSocket
+// returns context.DeadlineExceeded instead, errors.Is does not bridge the two,
+// and so on both relay roads the stall went unrecognised: the connection stayed
+// open, nothing was diagnosed, and the user read "connection lost" while
+// nothing of theirs was reaching the server. A user hit exactly this today.
+func TestADeadlineIsRecognisedWhateverTransportReportsIt(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"a raw socket":  fmt.Errorf("write tcp: %w", os.ErrDeadlineExceeded),
+		"a websocket":   fmt.Errorf("failed to write: %w", context.DeadlineExceeded),
+		"a net.Error":   timeoutError{},
+		"wrapped twice": fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", context.DeadlineExceeded)),
+	} {
+		if !timedOut(err) {
+			t.Errorf("%s: a write deadline was not recognised: %v", name, err)
+		}
+	}
+	for name, err := range map[string]error{
+		"no error at all":   nil,
+		"an ordinary fault": errors.New("connection reset by peer"),
+		"a cancelled write": context.Canceled,
+	} {
+		if timedOut(err) {
+			t.Errorf("%s: taken for a write deadline: %v", name, err)
+		}
+	}
+}
+
+// timeoutError is a transport that answers in neither sentinel, the way
+// quic-go and others may.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
