@@ -33,6 +33,10 @@ type DialConfig struct {
 	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
 	// every reconnect reuses it; an empty value here is derived on the spot.
 	RelayCredential relayproto.Credential
+	// Transport is the road to try (transport.go). Empty means the WebSocket
+	// one, which is what every deployed relay speaks. Ignored for a direct
+	// Mumble address, which has only one road.
+	Transport Transport
 }
 
 // sessionHooks receive gumble events for one session. Every hook runs on a
@@ -124,7 +128,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	if ep.kind == endpointWSS {
 		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		defer cancel()
-		conn, dialErr := dialRelay(ctx, ep, relayCredential(cfg), tofu, cfg.Certificate, log)
+		conn, dialErr := dialRelay(ctx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.Certificate)
 		if dialErr != nil {
 			return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 		}
@@ -148,43 +152,25 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	return s, nil
 }
 
-// dialRelay reaches the relay by whichever road works.
+// dialRelay takes the road it is given.
 //
-// WebSocket over TCP first, because it is the one every deployed relay speaks
-// and the one that has carried every session so far; QUIC over UDP when that
-// fails to establish. A network that drops one does not necessarily drop the
-// other, and the user should not have to know which.
-//
-// This is failure-to-connect fallback, not yet a choice: a road that connects
-// and then carries nothing still has to be found by the round-trip gate in the
-// manager, and picking between roads on that evidence is the next step.
+// Which road that is comes from the Manager, which rotates through them on the
+// evidence that matters - whether packets of ours come back - rather than
+// falling back here on a failure to connect. A road that connects and then
+// carries nothing is the failure this whole milestone exists for, and it is
+// invisible from inside a dial (transport.go).
 func dialRelay(
 	ctx context.Context,
 	ep endpoint,
+	transport Transport,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
 	certificate *tls.Certificate,
-	log *slog.Logger,
 ) (net.Conn, error) {
-	conn, wssErr := dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
-	if wssErr == nil {
-		return conn, nil
+	if transport == TransportQUIC {
+		return dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
 	}
-	if isTerminalRelayError(wssErr) {
-		// A refused credential or a rate limit says nothing about the road, so
-		// trying the other one would only spend the user's time twice.
-		return nil, wssErr
-	}
-	log.Info("relay unreachable over websocket, trying quic",
-		"error", RedactServer(wssErr.Error(), ep.address))
-	conn, quicErr := dialQUICMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
-	if quicErr == nil {
-		log.Info("relay reached over quic")
-		return conn, nil
-	}
-	// The WebSocket failure is the one the user needs: it is the road that is
-	// supposed to work, and the QUIC attempt was the long shot.
-	return nil, wssErr
+	return dialWSSMumbleTLS(ctx, ep, credential, tofu, certificate, nil)
 }
 
 // isTerminalRelayError reports whether a failure is about who is calling

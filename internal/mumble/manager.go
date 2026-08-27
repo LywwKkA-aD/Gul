@@ -96,6 +96,9 @@ type Manager struct {
 	selfAudioWake   chan struct{}
 	selfAudioDone   chan struct{}
 	selfAudioBudget *sendBudget
+	// transports picks the road to the relay and remembers what worked
+	// (transport.go).
+	transports *transportChooser
 
 	mu         sync.Mutex
 	status     domain.ConnectionStatus
@@ -144,6 +147,7 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		selfAudioDone:   make(chan struct{}),
 		selfAudioBudget: newSendBudget(selfAudioBurst, selfAudioInterval),
 		roundTripGrace:  roundTripGrace,
+		transports:      newTransportChooser(),
 	}
 	m.roundTripFn = func(client *gumble.Client) bool {
 		_, _, ok := client.TCPPing()
@@ -326,17 +330,25 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 	c.bearer = relayBearer(c, m.deriveFn)
 	attempt := 0
 	reconnecting := false
+	// roadsLeft bounds one immediate search across the roads, so a server that
+	// is simply down cannot become a loop of instant retries.
+	roadsLeft := len(m.transports.roads(c.address)) - 1
+	// Moving to the next road continues the same attempt rather than starting
+	// a new one, so it must not announce itself again.
+	searching := false
 
 	for {
 		if isStopped(stop) {
 			return
 		}
-		if !reconnecting {
+		if !reconnecting && !searching {
 			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
 		}
+		searching = false
 
 		dropped := make(chan *gumble.DisconnectEvent, 1)
-		session, err := m.dialOnce(c, dropped)
+		transport := m.transports.next(c.address)
+		session, err := m.dialOnce(c, transport, dropped)
 		if err != nil {
 			var mismatch *MismatchError
 			if errors.As(err, &mismatch) {
@@ -373,6 +385,18 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 				continue
 			}
 
+			// A road that would not open is a fact about the road, not about
+			// the user. Try the next one straight away - no backoff, nothing
+			// said yet: on a first connect this is the difference between
+			// "cannot reach the server" and simply arriving by the other road.
+			if roadsLeft > 0 && isRoadFailure(err) {
+				roadsLeft--
+				searching = true
+				m.transports.failed(c.address)
+				m.log.Info("road did not open, trying another", "transport", string(transport))
+				continue
+			}
+
 			if !reconnecting || isTerminalDialError(err) {
 				m.emitStatus(domain.ConnectionStatus{
 					State: domain.StateDisconnected, Server: c.address, Error: err.Error(),
@@ -388,10 +412,11 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		}
 
 		attempt = 0
+		roadsLeft = len(m.transports.roads(c.address)) - 1
 		m.setSession(session)
 		m.publishConnected(session, c.address)
 
-		event, stopped, silent := m.waitSession(session.client, dropped, stop)
+		event, stopped, silent := m.waitSession(session.client, c.address, transport, dropped, stop)
 		m.clearSession()
 		if stopped {
 			_ = session.Disconnect()
@@ -402,8 +427,12 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		switch {
 		case silent:
 			// Nothing of ours ever came back. The session looks perfect from
-			// the inside, so it has to be taken down here.
+			// the inside, so it has to be taken down here - and the road it
+			// took is the one to stop using.
 			_ = session.Disconnect()
+			m.transports.failed(c.address)
+			m.log.Info("giving up on this road, trying another",
+				"transport", string(transport))
 			reason, terminal = reasonNoRoundTrip, false
 		case session.stalledUplink():
 			reason = reasonUplinkStalled
@@ -431,6 +460,8 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 // proved our packets reach the server (roundTripGrace).
 func (m *Manager) waitSession(
 	client *gumble.Client,
+	address string,
+	transport Transport,
 	dropped <-chan *gumble.DisconnectEvent,
 	stop <-chan struct{},
 ) (event *gumble.DisconnectEvent, stopped, silent bool) {
@@ -460,6 +491,9 @@ func (m *Manager) waitSession(
 			if m.roundTripFn != nil && !m.roundTripFn(client) {
 				return nil, false, true
 			}
+			// Packets of ours go there and come back on this road. That is the
+			// only thing worth remembering about it (transport.go).
+			m.transports.succeeded(address, transport)
 		case <-ticker.C:
 			sample(client)
 		}
@@ -493,7 +527,11 @@ func (m *Manager) sampleLatency(client *gumble.Client) {
 	m.cb.OnLatency(domain.ConnectionLatency{PingMS: pingMS})
 }
 
-func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent) (*Session, error) {
+func (m *Manager) dialOnce(
+	c credentials,
+	transport Transport,
+	dropped chan<- *gumble.DisconnectEvent,
+) (*Session, error) {
 	hooks := sessionHooks{
 		connect: func(e *gumble.ConnectEvent) {
 			// Fires from handleServerSync, i.e. state is fully synced here and
@@ -525,6 +563,7 @@ func (m *Manager) dialOnce(c credentials, dropped chan<- *gumble.DisconnectEvent
 		Password:        c.password,
 		Certificate:     &cert,
 		RelayCredential: c.bearer,
+		Transport:       transport,
 	}, hooks)
 }
 
@@ -836,6 +875,19 @@ func joinReason(prefix, detail string) string {
 		return prefix
 	}
 	return prefix + ": " + detail
+}
+
+// isRoadFailure reports whether a failed dial says anything about the road it
+// took. It does only when nothing answered: a server that rejected us, a relay
+// that refused the credential or asked us to come back later, all answered,
+// and taking a different road to the same answer would only spend the user's
+// time twice.
+func isRoadFailure(err error) bool {
+	var reject *gumble.RejectError
+	if errors.As(err, &reject) {
+		return false
+	}
+	return !isTerminalDialError(err) && !isTerminalRelayError(err)
 }
 
 // isTerminalDialError reports whether retrying can only fail the same way.

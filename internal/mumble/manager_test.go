@@ -182,7 +182,10 @@ func TestManagerRejectsUnsafeRelayURLBeforeDial(t *testing.T) {
 func TestManagerPreservesNormalizedRelayURL(t *testing.T) {
 	sink := newStatusSink()
 	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-	configs := make(chan DialConfig, 1)
+	// Room for every road: a dial that fails for a network reason is retried
+	// on the next one straight away (transport.go), so a first connect to a
+	// server that is down is more than one attempt.
+	configs := make(chan DialConfig, len(relayTransports)+1)
 	m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
 		configs <- cfg
 		return nil, errors.New("stop")
@@ -728,8 +731,12 @@ func TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal(t *testing.T) 
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	if got := attempts.Load(); got != 2 {
-		t.Fatalf("dial attempts = %d, want 2: the user is back at the form", got)
+	// Three: the rate-limited one, then the refused one, then the other road.
+	// A dial that fails with nothing on the other end says something about the
+	// road and nothing about the user, so the search happens before the user
+	// is sent back to the form (transport.go).
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("dial attempts = %d, want 3: the roads are searched first", got)
 	}
 }
 
