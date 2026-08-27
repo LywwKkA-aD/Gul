@@ -208,3 +208,17 @@ func voiceFramesThrough(t *testing.T, from, to *liveClient) int {
 		}
 	}
 }
+
+// NOT covered here, deliberately: the tree that crosses our own write.
+//
+// It was tried. Against the stand the round trip is a fraction of a
+// millisecond, so the first tree after the gesture already carries the echo and
+// no tree ever falls inside the window. The test passed every time and proved
+// nothing - which is worse than no test, because it reads as evidence. What
+// opens that window is real latency, which is exactly what the users who
+// reported the bug have and a loopback socket does not.
+//
+// The behaviour is pinned where it can be pinned honestly:
+// TestSelfAudioIsNotSettledUntilTheRoomEchoesItBack in selfaudio_test.go, and
+// TestAGestureSurvivesATreeThatCrossedItOnTheWire in internal/core - both
+// checked by mutation.
