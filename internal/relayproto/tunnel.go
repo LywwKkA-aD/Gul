@@ -70,6 +70,11 @@ const (
 	// TunnelVersionUnsupported means the two ends do not speak the same
 	// contract. Another road will not help either.
 	TunnelVersionUnsupported TunnelStatus = 2
+	// TunnelIdentityRefused means the relay could not use the identity it was
+	// offered. The session is not opened anonymously instead: a user who
+	// expects to be somebody and is quietly made nobody loses whatever that
+	// name had, and finds out from the server rather than from us.
+	TunnelIdentityRefused TunnelStatus = 3
 )
 
 func (s TunnelStatus) String() string {
@@ -80,6 +85,8 @@ func (s TunnelStatus) String() string {
 		return "upstream down"
 	case TunnelVersionUnsupported:
 		return "version unsupported"
+	case TunnelIdentityRefused:
+		return "identity refused"
 	}
 	return fmt.Sprintf("status %d", byte(s))
 }
@@ -90,14 +97,36 @@ func (s TunnelStatus) String() string {
 // user however it failed.
 var ErrTunnelProtocol = errors.New("tunnel handshake failed")
 
+// Identity kinds. A kind byte rather than a bare secret, because the day a
+// second scheme exists the first must still be readable.
+const (
+	// IdentityEd25519Seed is 32 bytes the relay derives a certificate from
+	// (internal/identity). It is scoped to one server: what it buys the holder
+	// is this user's name here and nowhere else.
+	IdentityEd25519Seed byte = 0x01
+)
+
 // TunnelHello is the client's opening frame.
 type TunnelHello struct {
 	Version byte
-	// Certificate is the client's identity in DER, or empty for an anonymous
-	// session. Empty is what this build sends: proving possession of the key
-	// belongs to the step that follows, and a certificate presented without
-	// that proof would be a claim anybody could copy.
-	Certificate []byte
+	// Identity is a kind byte and the secret for it, or empty for an anonymous
+	// session.
+	//
+	// A secret rather than a certificate, and a scoped one. The obvious shape
+	// - the client sends its certificate and signs on request - is a signing
+	// oracle: the relay picks the digest, the client cannot see what it
+	// covers, and on TLS 1.3 the signer is handed a hash that names no
+	// destination at all. What travels here is worth exactly one server.
+	Identity []byte
+}
+
+// IdentitySecret returns the secret and its kind, or false when the session is
+// anonymous.
+func (h TunnelHello) IdentitySecret() (kind byte, secret []byte, ok bool) {
+	if len(h.Identity) < 2 {
+		return 0, nil, false
+	}
+	return h.Identity[0], h.Identity[1:], true
 }
 
 // TunnelAccept is the relay's answer.
@@ -122,9 +151,9 @@ type TunnelAccept struct {
 
 // WriteTunnelHello sends the opening frame as one write.
 func WriteTunnelHello(w io.Writer, hello TunnelHello) error {
-	payload := make([]byte, 1+len(hello.Certificate))
+	payload := make([]byte, 1+len(hello.Identity))
 	payload[0] = hello.Version
-	copy(payload[1:], hello.Certificate)
+	copy(payload[1:], hello.Identity)
 	return writeTunnelFrame(w, tunnelKindHello, payload)
 }
 
@@ -137,7 +166,7 @@ func ReadTunnelHello(r io.Reader) (TunnelHello, error) {
 	if len(payload) < 1 {
 		return TunnelHello{}, fmt.Errorf("%w: hello carries no version", ErrTunnelProtocol)
 	}
-	return TunnelHello{Version: payload[0], Certificate: payload[1:]}, nil
+	return TunnelHello{Version: payload[0], Identity: payload[1:]}, nil
 }
 
 // WriteTunnelAccept sends the answer as one write.

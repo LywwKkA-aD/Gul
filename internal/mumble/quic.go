@@ -174,6 +174,7 @@ func dialQUICTunnel(
 	ep endpoint,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
+	seed []byte,
 	outerRoots *tls.Config,
 ) (net.Conn, error) {
 	if ep.kind != endpointRelay {
@@ -186,7 +187,7 @@ func dialQUICTunnel(
 	if err != nil {
 		return nil, err
 	}
-	if err := openTunnel(ctx, stream, ep.host, tofu); err != nil {
+	if err := openTunnel(ctx, stream, ep.host, tofu, seed); err != nil {
 		_ = stream.Close()
 		return nil, err
 	}

@@ -24,7 +24,7 @@ func TestTunnelFramesRoundTrip(t *testing.T) {
 			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Fingerprint: fingerprint},
 		},
 		"identified, accepted": {
-			hello:  TunnelHello{Version: TunnelVersion, Certificate: certificate},
+			hello:  TunnelHello{Version: TunnelVersion, Identity: certificate},
 			accept: TunnelAccept{Version: TunnelVersion, Status: TunnelAccepted, Fingerprint: fingerprint},
 		},
 		"the server behind the relay is down": {
@@ -43,7 +43,7 @@ func TestTunnelFramesRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read hello: %v", err)
 			}
-			if gotHello.Version != tc.hello.Version || !bytes.Equal(gotHello.Certificate, tc.hello.Certificate) {
+			if gotHello.Version != tc.hello.Version || !bytes.Equal(gotHello.Identity, tc.hello.Identity) {
 				t.Fatalf("hello = %+v, want %+v", gotHello, tc.hello)
 			}
 
@@ -77,8 +77,8 @@ func TestATunnelFrameIsOneWrite(t *testing.T) {
 	wire := &writeCounter{}
 
 	if err := WriteTunnelHello(wire, TunnelHello{
-		Version:     TunnelVersion,
-		Certificate: bytes.Repeat([]byte{7}, 1200),
+		Version:  TunnelVersion,
+		Identity: bytes.Repeat([]byte{7}, 1200),
 	}); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}

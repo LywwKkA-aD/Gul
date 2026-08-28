@@ -2,18 +2,20 @@ package relay
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"io"
 	"net"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -234,37 +236,135 @@ func TestTheTunnelRefusesAnUpstreamThatDoesNotMatchThePin(t *testing.T) {
 	}
 }
 
-// An identity nobody has proved is not an identity. Until the exchange that
-// proves possession exists, a certificate in the hello has to be ignored -
-// honouring it would let the relay, or anyone who copied the bytes, be that
-// user in front of Murmur.
-func TestTheTunnelIgnoresAnUnprovenIdentity(t *testing.T) {
+// The identity the client derived is the identity Murmur is shown.
+//
+// This is what makes the user's name a fact the client can check rather than
+// something the relay reports: the client works the fingerprint out before it
+// connects, from a secret that never leaves the machine, and the relay rebuilds
+// the same certificate from the seed it was handed. If the two ever disagree,
+// a user is one person to their own client and another to the server, and
+// nothing says so.
+func TestTheTunnelPresentsTheIdentityTheClientDerived(t *testing.T) {
 	t.Parallel()
-	upstream, _ := tlsUpstream(t, func(conn net.Conn) { _, _ = io.Copy(conn, conn) })
+	seen := make(chan []byte, 1)
+	upstream, _ := tlsUpstreamWithClientAuth(t, seen)
 
-	logger, records := newRecordingLogger()
 	cfg := baseConfig(defaultTestSecret)
 	cfg.Upstream = upstream
 	cfg.UpstreamName = "murmur.example.test"
-	cfg.Logger = logger
 	server := httptest.NewServer(mustHandler(t, cfg))
 	t.Cleanup(server.Close)
 
+	master := bytes.Repeat([]byte{0x5a}, identity.SeedBytes)
+	hostSeed, err := identity.HostSeed(master, "murmur.example.test")
+	if err != nil {
+		t.Fatalf("host seed: %v", err)
+	}
+	want, err := identity.FromHostSeed(hostSeed)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
 	tunnel := dialTunnelRoad(t, server, defaultTestSecret)
 	if err := relayproto.WriteTunnelHello(tunnel, relayproto.TunnelHello{
-		Version:     relayproto.TunnelVersion,
-		Certificate: bytes.Repeat([]byte{0x30, 0x82}, 200),
+		Version:  relayproto.TunnelVersion,
+		Identity: append([]byte{relayproto.IdentityEd25519Seed}, hostSeed...),
 	}); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
-
 	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := relayproto.ReadTunnelAccept(tunnel); err != nil {
+	accept, err := relayproto.ReadTunnelAccept(tunnel)
+	if err != nil {
 		t.Fatalf("read accept: %v", err)
 	}
-	// The session opens - anonymously - and the journal says the claim was
-	// seen and dropped, so nobody later mistakes silence for support.
-	if rendered := records.rendered(); !strings.Contains(rendered, "unproven identity") {
-		t.Fatalf("an identity claim passed without a word in the journal:\n%s", rendered)
+	if accept.Status != relayproto.TunnelAccepted {
+		t.Fatalf("status = %v, want accepted", accept.Status)
 	}
+
+	select {
+	case der := <-seen:
+		sum := sha1.Sum(der)
+		if got := hex.EncodeToString(sum[:]); got != want.Fingerprint {
+			t.Fatalf("the server was shown %s, the client expects to be %s", got, want.Fingerprint)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server was shown no client certificate at all; the session is anonymous")
+	}
+}
+
+// A secret the relay cannot use is refused, not quietly dropped.
+//
+// Opening the session anonymously instead would be the worse failure: a user
+// who expects to be somebody would be made nobody without being told, lose
+// whatever that name had on the server, and find out from the server rather
+// than from us.
+func TestAnIdentityTheRelayCannotUseIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, offered := range map[string][]byte{
+		"a kind nobody knows": append([]byte{0x7f}, bytes.Repeat([]byte{1}, identity.SeedBytes)...),
+		"a seed of the wrong size": append([]byte{relayproto.IdentityEd25519Seed},
+			bytes.Repeat([]byte{1}, identity.SeedBytes-3)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			upstream, _ := tlsUpstream(t, func(conn net.Conn) { _, _ = io.Copy(conn, conn) })
+			cfg := baseConfig(defaultTestSecret)
+			cfg.Upstream = upstream
+			cfg.UpstreamName = "murmur.example.test"
+			server := httptest.NewServer(mustHandler(t, cfg))
+			t.Cleanup(server.Close)
+
+			tunnel := dialTunnelRoad(t, server, defaultTestSecret)
+			if err := relayproto.WriteTunnelHello(tunnel, relayproto.TunnelHello{
+				Version:  relayproto.TunnelVersion,
+				Identity: offered,
+			}); err != nil {
+				t.Fatalf("write hello: %v", err)
+			}
+			_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+			accept, err := relayproto.ReadTunnelAccept(tunnel)
+			if err != nil {
+				t.Fatalf("read accept: %v", err)
+			}
+			if accept.Status != relayproto.TunnelIdentityRefused {
+				t.Fatalf("status = %v, want the identity refused rather than dropped", accept.Status)
+			}
+		})
+	}
+}
+
+// tlsUpstreamWithClientAuth stands in for Murmur and reports the client
+// certificate it was shown, which is the only way to check what the relay
+// actually presented rather than what it said it would.
+func tlsUpstreamWithClientAuth(t *testing.T, seen chan<- []byte) (string, []byte) {
+	t.Helper()
+	certificate, _ := quicTestCertificate(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.RequestClientCert,
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if len(raw) > 0 {
+				select {
+				case seen <- raw[0]:
+				default:
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(conn, conn) }()
+		}
+	}()
+	return listener.Addr().String(), certificate.Certificate[0]
 }

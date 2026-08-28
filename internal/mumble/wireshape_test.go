@@ -100,7 +100,7 @@ func TestTheWireCarriesOneSizeFromTheFirstByte(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	conn, err := dialWSSTunnel(t.Context(), ep, relayTestCredential(),
-		NewTOFUStore(t.TempDir(), testLogger(t)), &http.Client{Transport: transport})
+		NewTOFUStore(t.TempDir(), testLogger(t)), nil, &http.Client{Transport: transport})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

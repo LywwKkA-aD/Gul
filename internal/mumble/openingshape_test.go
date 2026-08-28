@@ -347,7 +347,7 @@ func TestTheOpeningShapeStaysUnderTheThreshold(t *testing.T) {
 		},
 		func(t *testing.T, ep endpoint, client *http.Client) (net.Conn, error) {
 			return dialWSSTunnel(t.Context(), ep, relayTestCredential(),
-				NewTOFUStore(t.TempDir(), testLogger(t)), client)
+				NewTOFUStore(t.TempDir(), testLogger(t)), nil, client)
 		},
 		func(t *testing.T, conn net.Conn) {
 			packets := newPacketConn(conn)

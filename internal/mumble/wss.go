@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -33,6 +34,11 @@ var (
 	// not answering. It is not a fact about the road, so the reconnect loop
 	// must not spend the user's other roads looking for a server that is off.
 	ErrServerUnavailable = errors.New("сервер не отвечает")
+	// ErrIdentityRefused is the relay declining to carry this user's identity.
+	// The session is not opened without one: being quietly made anonymous
+	// costs whatever the name had, and the user would hear about it from the
+	// server rather than from us.
+	ErrIdentityRefused = errors.New("сервер не принял вашу личность")
 )
 
 // maxRelayRetryAfter caps what a relay can make the client wait. A hostile or
@@ -236,6 +242,7 @@ func dialWSSTunnel(
 	ep endpoint,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
+	seed []byte,
 	baseClient *http.Client,
 ) (net.Conn, error) {
 	if ep.kind != endpointRelay {
@@ -248,7 +255,7 @@ func dialWSSTunnel(
 	if err != nil {
 		return nil, err
 	}
-	if err := openTunnel(ctx, stream, ep.host, tofu); err != nil {
+	if err := openTunnel(ctx, stream, ep.host, tofu, seed); err != nil {
 		stream.closeNow()
 		return nil, err
 	}
@@ -257,17 +264,26 @@ func dialWSSTunnel(
 
 // openTunnel runs the exchange and settles what the client is allowed to
 // believe about the far end.
-func openTunnel(ctx context.Context, stream net.Conn, host string, tofu *TOFUStore) error {
+func openTunnel(ctx context.Context, stream net.Conn, host string, tofu *TOFUStore, master []byte) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = stream.SetDeadline(deadline)
 		defer func() { _ = stream.SetDeadline(time.Time{}) }()
 	}
-	// No certificate: an identity the relay cannot watch anybody prove
-	// possession of is a claim, and a claim it honoured would let it be any
-	// user it liked. The exchange that proves possession is the next step.
-	if err := relayproto.WriteTunnelHello(stream, relayproto.TunnelHello{
-		Version: relayproto.TunnelVersion,
-	}); err != nil {
+	// The identity, scoped to this server here rather than by the caller.
+	//
+	// The master secret must not leave the machine, and the one way to be sure
+	// of that is that no code path exists which could send it: the scoping
+	// happens at the point the frame is built, from the host this connection
+	// is actually to.
+	hello := relayproto.TunnelHello{Version: relayproto.TunnelVersion}
+	if len(master) != 0 {
+		hostSeed, err := identity.HostSeed(master, host)
+		if err != nil {
+			return fmt.Errorf("tunnel identity: %w", err)
+		}
+		hello.Identity = append([]byte{relayproto.IdentityEd25519Seed}, hostSeed...)
+	}
+	if err := relayproto.WriteTunnelHello(stream, hello); err != nil {
 		return fmt.Errorf("tunnel hello: %w", err)
 	}
 	accept, err := relayproto.ReadTunnelAccept(stream)
@@ -276,6 +292,11 @@ func openTunnel(ctx context.Context, stream net.Conn, host string, tofu *TOFUSto
 	}
 	switch accept.Status {
 	case relayproto.TunnelAccepted:
+	case relayproto.TunnelIdentityRefused:
+		// Not opened anonymously instead: a user who expects to be somebody
+		// and is quietly made nobody loses whatever that name had, and finds
+		// out from the server rather than from us.
+		return ErrIdentityRefused
 	case relayproto.TunnelUpstreamDown:
 		// Not a fact about the road. Saying so keeps the client from searching
 		// through every other road it has for a server that is simply off.

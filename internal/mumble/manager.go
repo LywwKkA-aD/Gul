@@ -15,6 +15,7 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -81,6 +82,10 @@ type Manager struct {
 	cb   Callbacks
 	tofu *TOFUStore
 	cert tls.Certificate
+	// identitySeed is the master secret this user is known by. It never
+	// leaves the machine: the per-server seed is derived where the frame is
+	// built (identity.HostSeed).
+	identitySeed []byte
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
@@ -148,6 +153,10 @@ type Manager struct {
 // on first run) from cfgDir and returns a ready-to-use Manager.
 func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error) {
 	tofu := NewTOFUStore(cfgDir, log)
+	seed, err := identity.Load(cfgDir, log)
+	if err != nil {
+		return nil, err
+	}
 	cert, err := ClientCertificate(cfgDir, log)
 	if err != nil {
 		return nil, err
@@ -158,6 +167,7 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		cb:              cb,
 		tofu:            tofu,
 		cert:            cert,
+		identitySeed:    seed,
 		backoffFn:       defaultBackoff,
 		deriveFn:        relayproto.Derive,
 		statsInterval:   statsPollInterval,
@@ -655,6 +665,7 @@ func (m *Manager) dialOnce(
 		Username:        c.username,
 		Password:        c.password,
 		Certificate:     &cert,
+		IdentitySeed:    m.identitySeed,
 		RelayCredential: c.bearer,
 		Transport:       transport,
 	}, hooks)

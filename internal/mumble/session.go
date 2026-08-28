@@ -13,6 +13,7 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 	"github.com/LywwKkA-aD/gumble/gumbleutil"
 
+	"github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -55,6 +56,9 @@ type DialConfig struct {
 	// created, and the first build that wants it back would hand everybody a
 	// new one.
 	Certificate *tls.Certificate
+	// IdentitySeed is the master secret this user is known by
+	// (internal/identity). Empty opens an anonymous session.
+	IdentitySeed []byte
 	// RelayCredential is the bearer for the WSS relay. Deriving it costs
 	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
 	// every reconnect reuses it; an empty value here is derived on the spot.
@@ -174,7 +178,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	// connection is bounded by the clock; the sync that follows is bounded by
 	// silence (syncSilence).
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
-	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu)
+	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.IdentitySeed)
 	// The road is open or it is not; neither dial keeps this context past its
 	// own handshake (wss.go, quic.go), so it is released here rather than
 	// being left to bound the sync as well.
@@ -194,8 +198,48 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", ep.address, err)
 	}
+	if err := checkIdentity(client, ep.host, cfg.IdentitySeed, log); err != nil {
+		_ = client.Disconnect()
+		return nil, err
+	}
 	s.client = client
 	return s, nil
+}
+
+// checkIdentity compares the name the server gave us with the one we derived
+// for ourselves.
+//
+// This is what makes the identity a fact rather than a courtesy. The relay
+// speaks Murmur's TLS now, so the certificate that reaches the server is one
+// the relay presented - but the client worked out, before connecting, exactly
+// which certificate that should be and exactly what Murmur would call it
+// (internal/identity). A relay that showed the server anything else is caught
+// here, by arithmetic, and not taken on trust.
+//
+// An empty hash is a different thing and is not an accusation: a server that
+// does not ask for a client certificate reports one for everybody, and that is
+// its choice to make. It is logged, because a user who expects to be somebody
+// should be able to find out why they are not.
+func checkIdentity(client *gumble.Client, host string, master []byte, log *slog.Logger) error {
+	if len(master) == 0 || client == nil || client.Self == nil {
+		return nil
+	}
+	expected, err := identity.ForHost(master, host)
+	if err != nil {
+		return fmt.Errorf("identity: %w", err)
+	}
+	switch got := client.Self.Hash; got {
+	case expected.Fingerprint:
+	case "":
+		log.Warn("the server did not ask who we are; this session is anonymous")
+	default:
+		// The relay showed the server a certificate that is not ours. Whoever
+		// we are logged in as, it is not who this client believes it is.
+		return fmt.Errorf(
+			"the server knows this session as somebody else: it reports %s where this client is %s",
+			got, expected.Fingerprint)
+	}
+	return nil
 }
 
 // syncingContext ends when the connection has been silent for syncSilence.
@@ -245,6 +289,7 @@ func dialRelay(
 	transport Transport,
 	credential relayproto.Credential,
 	tofu *TOFUStore,
+	seed []byte,
 ) (net.Conn, error) {
 	road, ok := relayRoads[transport]
 	if !ok {
@@ -255,7 +300,7 @@ func dialRelay(
 		// record its success under the wrong name and write that to disk.
 		return nil, fmt.Errorf("mumble: no road named %q", transport)
 	}
-	return road(ctx, ep, credential, tofu)
+	return road(ctx, ep, credential, tofu, seed)
 }
 
 // relayRoad opens one road to the relay and returns the connection gumble will
@@ -266,6 +311,7 @@ type relayRoad func(
 	endpoint,
 	relayproto.Credential,
 	*TOFUStore,
+	[]byte,
 ) (net.Conn, error)
 
 // relayRoads is every road that exists, by the name the chooser and the
@@ -273,12 +319,12 @@ type relayRoad func(
 // relayTransports, which decides the order they are tried in.
 var relayRoads = map[Transport]relayRoad{
 	TransportWSS: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore) (net.Conn, error) {
-		return dialWSSTunnel(ctx, ep, credential, tofu, nil)
+		tofu *TOFUStore, seed []byte) (net.Conn, error) {
+		return dialWSSTunnel(ctx, ep, credential, tofu, seed, nil)
 	},
 	TransportQUIC: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore) (net.Conn, error) {
-		return dialQUICTunnel(ctx, ep, credential, tofu, nil)
+		tofu *TOFUStore, seed []byte) (net.Conn, error) {
+		return dialQUICTunnel(ctx, ep, credential, tofu, seed, nil)
 	},
 }
 

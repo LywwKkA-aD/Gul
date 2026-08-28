@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	identitypkg "github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
@@ -51,7 +52,7 @@ const (
 // checks; without one, the relay is repeating what it was told. The client
 // cannot tell those apart from the outside, so the operator's documentation
 // has to.
-func (h *Handler) upstreamTLS(conn net.Conn) (*tls.Conn, string, error) {
+func (h *Handler) upstreamTLS(conn net.Conn, identity *tls.Certificate) (*tls.Conn, string, error) {
 	var fingerprint string
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -72,6 +73,9 @@ func (h *Handler) upstreamTLS(conn net.Conn) (*tls.Conn, string, error) {
 			}
 			return nil
 		},
+	}
+	if identity != nil {
+		config.Certificates = []tls.Certificate{*identity}
 	}
 	inner := tls.Client(conn, config)
 	if err := inner.HandshakeContext(h.ctx); err != nil {
@@ -105,12 +109,34 @@ func (h *Handler) serveTunnel(stream net.Conn, sourceIP, sourceBlock, transport 
 		})
 		return
 	}
-	// A certificate in the hello is a claim nobody has proved. Until the
-	// exchange that proves it exists, the session is anonymous, and saying so
-	// here is cheaper than discovering later that it was quietly trusted.
-	if len(hello.Certificate) != 0 {
-		h.logger.Debug("relay tunnel ignored an unproven identity",
-			"source", sourceIP, "transport", transport)
+	// The identity, if the client offered one. The secret is scoped to this
+	// server by the client before it is sent (internal/identity), so what the
+	// relay learns here is this user's name here - and holding it, the relay
+	// could be them here without them. That is the price of having a name at
+	// all once the relay speaks Murmur's TLS, and it is bounded: the secret is
+	// worthless on any other server.
+	var identity *tls.Certificate
+	if kind, secret, offered := hello.IdentitySecret(); offered {
+		if kind != relayproto.IdentityEd25519Seed {
+			h.logger.Warn("relay tunnel identity of an unknown kind",
+				"source", sourceIP, "transport", transport, "kind", kind)
+			_ = relayproto.WriteTunnelAccept(stream, relayproto.TunnelAccept{
+				Version: relayproto.TunnelVersion,
+				Status:  relayproto.TunnelIdentityRefused,
+			})
+			return
+		}
+		derived, err := identitypkg.FromHostSeed(secret)
+		if err != nil {
+			h.logger.Warn("relay tunnel identity unusable",
+				"source", sourceIP, "transport", transport, "error", err)
+			_ = relayproto.WriteTunnelAccept(stream, relayproto.TunnelAccept{
+				Version: relayproto.TunnelVersion,
+				Status:  relayproto.TunnelIdentityRefused,
+			})
+			return
+		}
+		identity = &derived.Certificate
 	}
 
 	upstream, localAddress, err := h.dialUpstream(sourceBlock)
@@ -125,7 +151,7 @@ func (h *Handler) serveTunnel(stream net.Conn, sourceIP, sourceBlock, transport 
 	}
 	defer func() { _ = upstream.Close() }()
 
-	inner, fingerprint, err := h.upstreamTLS(upstream)
+	inner, fingerprint, err := h.upstreamTLS(upstream, identity)
 	if err != nil {
 		h.logger.Error("relay upstream TLS failed",
 			"source", sourceIP, "transport", transport, "error", err)
