@@ -1,7 +1,7 @@
 {
   "name": "gul-frontend",
   "private": true,
-  "version": "0.5.3-alpha.1",
+  "version": "0.5.3-alpha.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
