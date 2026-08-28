@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type ChangeEvent } from 'react';
 import { SpeakerHighIcon } from '@phosphor-icons/react/dist/csr/SpeakerHigh';
 import { SpeakerSimpleXIcon } from '@phosphor-icons/react/dist/csr/SpeakerSimpleX';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
+import { canAdjust } from './memberControls';
 import { useGulStore } from '../state/store';
 import { useSpeaking } from '../state/speaking';
 import { useVoiceGates } from '../state/voiceGates';
@@ -92,7 +93,7 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   // anonymous, meant hidden for everybody. Our own stream never comes back to
   // us, so the one row without controls is our own.
   const key = user.key;
-  const adjustable = !user.isSelf && key !== '';
+  const adjustable = canAdjust(user);
   const volume = useGulStore((s) => s.userVolumes[key] ?? VOLUME_UNITY);
   // Local mute is its own state next to the gain, keyed by the same key: the
   // engine keeps the gain while somebody is silenced and gives it back on
