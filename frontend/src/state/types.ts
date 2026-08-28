@@ -6,6 +6,13 @@
 export interface UserInfo {
   session: number;
   hash?: string;
+  /**
+   * What this client files the peer's audio settings under. The certificate
+   * hash when there is one, something weaker when there is not, so that two
+   * peers without certificates are two people rather than one entry
+   * (internal/mumble/peerkey.go). Never leaves the machine.
+   */
+  key: string;
   name: string;
   channelId: number;
   selfMute: boolean;

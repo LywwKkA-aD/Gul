@@ -55,9 +55,12 @@ const (
 
 // VoicePacket is one incoming raw Opus packet (passthrough mode).
 type VoicePacket struct {
-	Session  uint32 // sender session id
-	Hash     string // sender certificate hash, may be empty
-	Sequence int64  // wire frame number (10 ms units)
+	Session uint32 // sender session id
+	// Key is what this client files the sender's audio settings under: the
+	// certificate hash when there is one, something weaker when there is not
+	// (peerkey.go). Two anonymous peers must not become one entry.
+	Key      string
+	Sequence int64 // wire frame number (10 ms units)
 	Opus     []byte
 	Final    bool
 }
@@ -252,20 +255,20 @@ func newVoiceListener(out *dropBuffer[VoicePacket]) *voiceListener {
 // OnAudioStream starts one pump per talking user. It runs on the read loop and
 // does nothing but read the sender identity and spawn.
 //
-// Session and Hash are copied here, not inside the pump: this is the read loop
-// itself, the one goroutine where gumble's User fields are stable. Both values
-// are fixed for the lifetime of a stream (gumble keys streams by *User), so a
-// single read is enough and the pump never dereferences a *User.
+// Session and the peer key are computed here, not inside the pump: this is the
+// read loop itself, the one goroutine where gumble's User fields are stable.
+// Both values are fixed for the lifetime of a stream (gumble keys streams by
+// *User), so a single read is enough and the pump never dereferences a *User.
 func (l *voiceListener) OnAudioStream(e *gumble.AudioStreamEvent) {
 	if e == nil || e.C == nil {
 		return
 	}
 	var (
 		session uint32
-		hash    string
+		key     string
 	)
 	if e.User != nil {
-		session, hash = e.User.Session, e.User.Hash
+		session, key = e.User.Session, peerKey(e.User)
 	}
 
 	l.mu.Lock()
@@ -275,12 +278,12 @@ func (l *voiceListener) OnAudioStream(e *gumble.AudioStreamEvent) {
 	}
 	l.mu.Unlock()
 
-	go l.pump(e.C, session, hash, tracked)
+	go l.pump(e.C, session, key, tracked)
 }
 
 // pump moves packets from one stream into the shared buffer until gumble closes
 // the stream (it does so on the sender's disconnect) or the session ends.
-func (l *voiceListener) pump(c <-chan *gumble.AudioPacket, session uint32, hash string, tracked bool) {
+func (l *voiceListener) pump(c <-chan *gumble.AudioPacket, session uint32, key string, tracked bool) {
 	if tracked {
 		defer l.wg.Done()
 	}
@@ -298,7 +301,7 @@ func (l *voiceListener) pump(c <-chan *gumble.AudioPacket, session uint32, hash 
 			// Client, Sender and Target are live pointers into gumble state.
 			l.out.push(VoicePacket{
 				Session:  session,
-				Hash:     hash,
+				Key:      key,
 				Sequence: p.Sequence,
 				Opus:     p.OpusData,
 				Final:    p.Final,

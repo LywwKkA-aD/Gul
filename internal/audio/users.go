@@ -10,8 +10,15 @@ import "sync"
 // and 1.0 is exactly the value the listener had already decided against. They
 // are kept side by side and applied together in the mix.
 //
-// Both are keyed by the stable certificate hash (User.Hash), so they survive
-// the peer reconnecting - a new session id is the same person.
+// Both are keyed by whatever this client can call the peer (peerkey.go): the
+// certificate hash when there is one, so the setting survives the peer
+// reconnecting, and something weaker when there is not.
+//
+// The key used to be the hash and nothing else, and the comment used to say so
+// as though a hash always existed. It does not: a peer with no certificate
+// gets an empty one, every empty hash is the same string, and one entry would
+// have stood for every anonymous peer in the room at once. Turning the
+// volume of one stranger down would have turned all of them down.
 //
 // Locality: this is a decision about our own speakers. Nothing here reaches
 // the server, and the person on the other end is never told.

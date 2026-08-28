@@ -15,7 +15,7 @@ const streamIdleTimeout = 3 * time.Second
 // rxStream is the per-sender receive state, owned by the DSP goroutine.
 type rxStream struct {
 	session    uint32
-	hash       string
+	key        string
 	dec        *opus.Decoder
 	jit        *Jitter
 	pcm        []int16 // decode buffer, up to a 60 ms packet
@@ -77,7 +77,7 @@ func (r *rxPipeline) ingest(p mumble.VoicePacket) {
 		}
 		s = &rxStream{
 			session: p.Session,
-			hash:    p.Hash,
+			key:     p.Key,
 			dec:     dec,
 			jit:     NewJitter(),
 			pcm:     make([]int16, opus.MaxFrameSize),
@@ -144,7 +144,7 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, users *userAudioState, 
 		// and still reported as talking: a locally silenced person is
 		// speaking, we have simply chosen not to hear them. Only the mix
 		// skips them, and their gain is kept for the unmute (users.go).
-		treatment := users.get(s.hash)
+		treatment := users.get(s.key)
 		if treatment.muted {
 			continue
 		}
@@ -185,7 +185,7 @@ func (r *rxPipeline) setTalking(s *rxStream, talking bool) {
 	}
 	s.talking = talking
 	if cb := r.cfg.Callbacks.OnTalking; cb != nil {
-		cb(s.session, s.hash, talking)
+		cb(s.session, s.key, talking)
 	}
 }
 

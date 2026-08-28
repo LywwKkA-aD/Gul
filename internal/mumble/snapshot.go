@@ -72,6 +72,7 @@ func snapshotUsers(channelID uint32, users gumble.Users, selfSession uint32) []d
 		out = append(out, domain.UserInfo{
 			Session:   u.Session,
 			Hash:      u.Hash,
+			Key:       peerKey(u),
 			Name:      u.Name,
 			ChannelID: channelID,
 			SelfMute:  u.SelfMuted,

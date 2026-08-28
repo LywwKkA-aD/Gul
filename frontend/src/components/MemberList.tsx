@@ -85,16 +85,19 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
   const gates = useVoiceGates(user);
   const setUserVolume = useGulStore((s) => s.setUserVolume);
 
-  // The engine keys per-user gain by the certificate hash, so it survives the
-  // peer reconnecting. An anonymous peer has none - nothing to remember, no
-  // slider. Our own stream never comes back to us either.
-  const hash = user.hash ?? '';
-  const adjustable = !user.isSelf && hash !== '';
-  const volume = useGulStore((s) => s.userVolumes[hash] ?? VOLUME_UNITY);
-  // Local mute is its own state next to the gain, keyed by the same hash: the
+  // The engine keys per-user gain by whatever this client can call the peer:
+  // the certificate hash when there is one, something weaker when there is not
+  // (internal/mumble/peerkey.go). It used to be the hash alone, and the slider
+  // was hidden whenever it was empty - which, once every session went
+  // anonymous, meant hidden for everybody. Our own stream never comes back to
+  // us, so the one row without controls is our own.
+  const key = user.key;
+  const adjustable = !user.isSelf && key !== '';
+  const volume = useGulStore((s) => s.userVolumes[key] ?? VOLUME_UNITY);
+  // Local mute is its own state next to the gain, keyed by the same key: the
   // engine keeps the gain while somebody is silenced and gives it back on
   // unmute (internal/audio/users.go). Nothing about this reaches the server.
-  const mutedHere = useGulStore((s) => s.mutedUsers[hash] === true);
+  const mutedHere = useGulStore((s) => s.mutedUsers[key] === true);
   const setUserMuted = useGulStore((s) => s.setUserMuted);
 
   // Clicking the row pins the slider open; otherwise it follows the hover.
@@ -102,14 +105,14 @@ function MemberRow({ user, index }: { user: UserInfo; index: number }) {
 
   const onVolume = (e: ChangeEvent<HTMLInputElement>) => {
     const next = Number(e.target.value);
-    setUserVolume(hash, next);
-    AudioService.SetUserVolume(hash, next).catch(console.error);
+    setUserVolume(key, next);
+    AudioService.SetUserVolume(key, next).catch(console.error);
   };
 
   const toggleMute = () => {
     const next = !mutedHere;
-    setUserMuted(hash, next);
-    AudioService.SetUserMute(hash, next).catch(console.error);
+    setUserMuted(key, next);
+    AudioService.SetUserMute(key, next).catch(console.error);
   };
 
   const rowClass = cx(

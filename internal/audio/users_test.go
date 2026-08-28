@@ -103,7 +103,7 @@ func newRxRig(t *testing.T) *rxRig {
 	}
 	s := &rxStream{
 		session:    7,
-		hash:       rxRigHash,
+		key:        rxRigHash,
 		dec:        dec,
 		jit:        NewJitter(),
 		pcm:        make([]int16, opus.MaxFrameSize),
@@ -237,7 +237,7 @@ func TestRxTickDoesNotAllocate(t *testing.T) {
 	}
 	second := &rxStream{
 		session:    8,
-		hash:       "second",
+		key:        "second",
 		dec:        dec,
 		jit:        NewJitter(),
 		pcm:        make([]int16, opus.MaxFrameSize),
@@ -294,7 +294,7 @@ func TestEngineUserMuteSilencesOnePeer(t *testing.T) {
 			return nil
 		}
 		select {
-		case packets <- mumble.VoicePacket{Session: 9, Hash: hash, Sequence: seq.Add(1) - 1, Opus: opus}:
+		case packets <- mumble.VoicePacket{Session: 9, Key: hash, Sequence: seq.Add(1) - 1, Opus: opus}:
 		default:
 		}
 		return nil

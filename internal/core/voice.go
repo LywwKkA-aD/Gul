@@ -53,8 +53,8 @@ type VoiceEngine interface {
 	Stop()
 	SetMute(muted bool)
 	SetDeafen(deafened bool)
-	SetUserVolume(hash string, volume float32)
-	SetUserMute(hash string, muted bool)
+	SetUserVolume(key string, volume float32)
+	SetUserMute(key string, muted bool)
 	SetGateMode(mode GateMode)
 	SetVADTuning(open, close float32, hangoverMs int)
 	SetPTT(held bool)
@@ -103,16 +103,16 @@ func (a *App) stopVoice() {
 	}
 }
 
-// SetUserVolume sets the per-user gain by the stable certificate hash, so
+// SetUserVolume sets the per-user gain by the peer key (mumble/peerkey.go), so
 // it survives the peer reconnecting.
-func (a *App) SetUserVolume(hash string, volume float32) {
+func (a *App) SetUserVolume(key string, volume float32) {
 	if v := a.voiceEngine(); v != nil {
-		v.SetUserVolume(hash, volume)
+		v.SetUserVolume(key, volume)
 	}
 }
 
 // SetUserMute silences one participant locally, or lets them back in, keyed
-// by the same certificate hash as the gain.
+// by the same peer key as the gain.
 //
 // It is not the gain set to zero: the engine keeps the gain the user chose and
 // gives it back on unmute (internal/audio/users.go). It is not the Mumble mute
@@ -125,9 +125,9 @@ func (a *App) SetUserVolume(hash string, volume float32) {
 // reason after a restart, while the volume the user set beside it came back at
 // unity. If one of them ever earns a home in the settings document, they take
 // it together, keyed per server.
-func (a *App) SetUserMute(hash string, muted bool) {
+func (a *App) SetUserMute(key string, muted bool) {
 	if v := a.voiceEngine(); v != nil {
-		v.SetUserMute(hash, muted)
+		v.SetUserMute(key, muted)
 	}
 }
 

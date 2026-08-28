@@ -25,7 +25,7 @@ type FrameSink interface {
 // (hand off to a channel or an atomic, never block).
 type Callbacks struct {
 	// OnTalking reports a remote stream starting or stopping.
-	OnTalking func(session uint32, hash string, talking bool)
+	OnTalking func(session uint32, key string, talking bool)
 	// OnSelfTalking reports our own transmission starting or stopping. Our
 	// voice never comes back from the server, so this is the only source of
 	// the local speaking indication.
@@ -75,7 +75,7 @@ type engineState struct {
 	deafened atomic.Bool
 	ptt      atomic.Bool
 	// users is the per-peer treatment: gain and local mute, keyed by the
-	// stable certificate hash (users.go).
+	// peer key (users.go, mumble/peerkey.go).
 	users userAudioState
 
 	// cue is the pending UI sound, encoded as Cue+1 so that 0 means empty.
@@ -211,19 +211,19 @@ func (e *Engine) SetMute(muted bool) { e.state.muted.Store(muted) }
 func (e *Engine) SetDeafen(deafened bool) { e.state.deafened.Store(deafened) }
 
 // SetUserVolume sets a per-user gain (1.0 = unity) keyed by the stable
-// certificate hash; survives the peer reconnecting.
+// peer key; survives the peer reconnecting when the key is a certificate hash.
 //
 // It does not un-silence anybody: a listener who muted this peer and then
 // moved their slider has changed what they will hear on unmute, not asked to
 // hear them now.
-func (e *Engine) SetUserVolume(hash string, volume float32) {
+func (e *Engine) SetUserVolume(key string, volume float32) {
 	if volume < 0 {
 		volume = 0
 	}
 	if volume > 4 {
 		volume = 4
 	}
-	e.state.users.setVolume(hash, volume)
+	e.state.users.setVolume(key, volume)
 }
 
 // SetUserMute silences one peer locally, or lets them back in, keyed by the
@@ -232,8 +232,8 @@ func (e *Engine) SetUserVolume(hash string, volume float32) {
 // This is not "volume zero": the gain the listener chose is kept untouched
 // and is exactly what they hear again on unmute. It is also not the Mumble
 // mute on the wire - nothing is sent, and the person is never told.
-func (e *Engine) SetUserMute(hash string, muted bool) {
-	e.state.users.setMuted(hash, muted)
+func (e *Engine) SetUserMute(key string, muted bool) {
+	e.state.users.setMuted(key, muted)
 }
 
 // SetPTT reports whether the push-to-talk key is currently held. Only

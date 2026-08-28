@@ -76,7 +76,7 @@ func TestEngineLoopback(t *testing.T) {
 		}
 		p := mumble.VoicePacket{
 			Session:  7,
-			Hash:     "peer-hash",
+			Key:      "peer-hash",
 			Sequence: seq.Add(1) - 1,
 			Opus:     opus,
 		}

@@ -15,8 +15,13 @@ type ChannelNode struct {
 
 // UserInfo describes one connected user inside a channel snapshot.
 type UserInfo struct {
-	Session   uint32 `json:"session"`        // per-connection id
-	Hash      string `json:"hash,omitempty"` // stable identity: client cert fingerprint (may be empty)
+	Session uint32 `json:"session"`        // per-connection id
+	Hash    string `json:"hash,omitempty"` // stable identity: client cert fingerprint (may be empty)
+	// Key is what this client files the peer's audio settings under. It is
+	// the hash when there is one and something weaker when there is not, so
+	// that two anonymous peers are two people rather than one entry
+	// (internal/mumble/peerkey.go). Never sent anywhere: it is a local name.
+	Key       string `json:"key"`
 	Name      string `json:"name"`
 	ChannelID uint32 `json:"channelId"`
 	SelfMute  bool   `json:"selfMute"`

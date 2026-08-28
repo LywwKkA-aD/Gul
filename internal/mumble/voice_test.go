@@ -196,8 +196,11 @@ func TestVoiceListenerCopiesSenderIdentity(t *testing.T) {
 
 	select {
 	case packet := <-buffer.out():
-		if packet.Session != 42 || packet.Hash != "abc123" {
-			t.Fatalf("sender = (%d, %q), want (42, \"abc123\")", packet.Session, packet.Hash)
+		// The key rather than the raw hash: what travels is what the audio
+		// engine files the peer under, and its prefix says how long the
+		// setting may be kept (peerkey.go).
+		if want := peerKeyHash + "abc123"; packet.Session != 42 || packet.Key != want {
+			t.Fatalf("sender = (%d, %q), want (42, %q)", packet.Session, packet.Key, want)
 		}
 		if packet.Sequence != 7 || !packet.Final || len(packet.Opus) != 1 || packet.Opus[0] != 9 {
 			t.Fatalf("packet = %+v, want sequence 7, final, opus [9]", packet)
