@@ -151,10 +151,18 @@ func roundTrips(b []burst) float64 {
 // handshake before it is Chrome-shaped by utls and identical in both
 // scenarios; including it would compare them on the one thing they share and
 // hide the thing they do not.
-func largestTunnelBurst(b []burst) burst {
+//
+// It takes a direction because the classifier reads both, and for a while this
+// only looked upward. That blind spot was aimed at exactly the risk this
+// milestone ran: removing the nested handshake takes the client's packets out
+// of the opening, and what remains is Murmur's sync flight running downward
+// with nothing interleaved - a longer one-directional run than before, which
+// is the feature n-grams of size-and-direction are built on. A regression that
+// grew the downward side could not have failed a test.
+func largestTunnelBurst(b []burst, up bool) burst {
 	var worst burst
 	for _, one := range b {
-		if one.up && one.bytes > worst.bytes {
+		if one.up == up && one.bytes > worst.bytes {
 			worst = one
 		}
 	}
@@ -184,23 +192,28 @@ func describe(name string, events []wireEvent) string {
 		}
 		fmt.Fprintf(&out, "       %-9s %-6d %d\n", direction, one.count, one.bytes)
 	}
-	worst, first := largestTunnelBurst(b), firstTunnelBurst(b)
+	worst, first := largestTunnelBurst(b, true), firstTunnelBurst(b)
+	down := largestTunnelBurst(b, false)
 	fmt.Fprintf(&out, "  всплесков: %d   round trip: %.1f\n", len(b), roundTrips(b))
 	fmt.Fprintf(&out, "  внутри туннеля: первый клиентский %d пак. / %d байт, крупнейший %d пак. / %d байт\n",
 		first.count, first.bytes, worst.count, worst.bytes)
+	fmt.Fprintf(&out, "  крупнейший серверный %d пак. / %d байт\n", down.count, down.bytes)
 	return out.String()
 }
 
 // murmurSyncFlight is what a real server sends a client the moment it has
 // authenticated, taken from a live session's own counters: version, ping,
 // cryptsetup, codecversion, channelstate, userstate x4, serversync,
-// serverconfig, permissionquery - eleven packets, 450 bytes of Mumble in
+// serverconfig, permissionquery - twelve packets, 450 bytes of Mumble in
 // total. A quiet room with one channel and four people in it.
 //
 // The sizes matter more than the names here, and the total is what was
-// measured, so the split across the eleven is proportioned rather than
-// invented per field.
-var murmurSyncFlight = []int{25, 20, 40, 20, 45, 35, 35, 35, 35, 25, 30, 15}
+// measured, so the split across the twelve is proportioned rather than
+// invented per field. The entries therefore have to add up to 450, and did
+// not: they summed to 360 until this was noticed, which made every downward
+// reading taken from this fixture a fifth smaller than the session it claims
+// to reproduce.
+var murmurSyncFlight = []int{31, 25, 50, 25, 56, 44, 44, 44, 44, 31, 38, 18}
 
 // writeSyncFlight sends what Murmur sends a client that has just logged in.
 func writeSyncFlight(conn net.Conn) {
@@ -372,11 +385,33 @@ func TestTheOpeningShapeStaysUnderTheThreshold(t *testing.T) {
 	// opening costs now, hello and login together, and anything above it means
 	// something large has come back.
 	const clientBurstCeiling = 3 * relayproto.ShapedCellBytes * 2
-	worst := largestTunnelBurst(inTunnel)
+	worst := largestTunnelBurst(inTunnel, true)
 	if worst.bytes >= clientBurstCeiling {
 		t.Fatalf("largest client burst in the tunnel = %d bytes in %d packets, want under %d - "+
 			"the shape the contract was changed to remove is back", worst.bytes, worst.count, clientBurstCeiling)
 	}
+	// The downward side is reported by describe() and deliberately not
+	// asserted. A ceiling was written here and then removed, because measuring
+	// it showed the assertion could only ever have been decoration.
+	//
+	// Eight identical runs of one build give 2356 bytes six times and 846 the
+	// other two. Nothing changed between them. The window holds the first 25
+	// events, the contract fills it with chaff cells on its own cadence, and
+	// how much of the server's flight lands inside it is a race between that
+	// cadence and loopback coalescing the server's writes into one. So any
+	// ceiling between those two numbers is a coin flip in CI, and any ceiling
+	// above them is passed by the design this milestone rejected: feeding the
+	// harness the relay-asks-the-client-to-sign scheme, ~2.2 KB more going
+	// down, moved the reading to 846 - smaller, not larger.
+	//
+	// The upward side does not have the problem, and five runs agree to the
+	// byte: the test drives it one write at a time, which is also what a real
+	// path does.
+	//
+	// The downward shape is real and worth guarding. This harness cannot do
+	// it, and a flaky guard reads as proof, which is worse than a documented
+	// gap. Measuring it needs a path with a real round trip - the pktmon
+	// capture that has been asked for and not yet taken.
 	const ordinaryRoundTrips = 2.5
 	if got := roundTrips(inTunnel); got >= ordinaryRoundTrips {
 		t.Fatalf("round trips = %.1f, want under %.1f", got, ordinaryRoundTrips)
