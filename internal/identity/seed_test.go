@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -34,12 +35,17 @@ func TestTheSeedIsMadeOnceAndKept(t *testing.T) {
 	if len(first) != SeedBytes {
 		t.Fatalf("seed is %d bytes, want %d", len(first), SeedBytes)
 	}
-	info, err := os.Stat(filepath.Join(dir, seedFile))
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("seed file mode = %v, want owner-only", perm)
+	if runtime.GOOS != "windows" {
+		// Unix permission bits are not meaningful on Windows, where the same
+		// Chmod produces something else entirely. cert.go's test skips for the
+		// same reason.
+		info, err := os.Stat(filepath.Join(dir, seedFile))
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("seed file mode = %v, want owner-only", perm)
+		}
 	}
 }
 

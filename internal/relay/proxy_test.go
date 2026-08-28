@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // TestProxySessionClosesIdleSessions covers the slot leak: a peer that neither
@@ -179,6 +181,12 @@ func TestHandlerReleasesCapacityWhenASessionGoesIdle(t *testing.T) {
 		t.Fatalf("first dial: %v", err)
 	}
 	t.Cleanup(func() { _ = idle.CloseNow() })
+	// The session has to reach the idle watchdog to be tested by it. A peer
+	// that connects and says nothing is held by the tunnel handshake budget
+	// instead, which is a different timer and a different test - and, on a
+	// slow machine, one that runs out at about the moment this test gives up.
+	completeTunnel(t, relayproto.Shape(relayproto.AsMessageConn(
+		websocket.NetConn(t.Context(), idle, websocket.MessageBinary))))
 	waitForActiveSessions(t, h, 1)
 
 	deadline := time.Now().Add(5 * time.Second)
