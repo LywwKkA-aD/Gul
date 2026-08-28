@@ -1,24 +1,25 @@
 import { create } from 'zustand';
-import { SILENT_DB } from './types';
+import { SILENT_DB } from './types.ts';
 import type {
   ChannelNode,
   ChatMessage,
   ConnectionStatus,
   TofuPrompt,
   UpdateAvailable,
-} from './types';
+} from './types.ts';
 import {
   PTT_KEY_DEFAULT,
   VAD_HANGOVER_DEFAULT,
   VAD_OPEN_DEFAULT,
   clampHangoverMs,
   clampOpenThreshold,
-} from './gate';
-import { CUE_VOLUME_DEFAULT, clampCueVolume } from './settings';
-import { DEFAULT_HOTKEY } from './hotkey';
-import type { GateMode } from './gate';
-import type { GulSettings } from './settings';
-import type { HotkeyStatus } from './hotkey';
+} from './gate.ts';
+import { CUE_VOLUME_DEFAULT, clampCueVolume } from './settings.ts';
+import { DEFAULT_HOTKEY } from './hotkey.ts';
+import { collectPeerKeys, forgetAbsentPeers } from './peerKeys.ts';
+import type { GateMode } from './gate.ts';
+import type { GulSettings } from './settings.ts';
+import type { HotkeyStatus } from './hotkey.ts';
 
 interface GulState {
   status: ConnectionStatus;
@@ -184,7 +185,20 @@ export const useGulStore = create<GulState>((set) => ({
       };
     }),
   setPingMs: (pingMs) => set((s) => (s.status.state === 'connected' ? { pingMs } : s)),
-  setTree: (tree) => set({ tree }),
+  // The roster is also what says who is still here, and two things in this
+  // store are filed under keys that die with the peer they name. The engine
+  // sweeps its own copy on the same event (internal/audio/engine.go,
+  // ForgetAbsentPeers); until now this copy swept nothing, so a session id
+  // Murmur handed out again arrived carrying the last owner's volume and
+  // local mute - visible here, absent there, and the window would show a
+  // person silenced while the engine played them.
+  setTree: (tree) =>
+    set((s) => {
+      const present = collectPeerKeys(tree);
+      const userVolumes = forgetAbsentPeers(s.userVolumes, present);
+      const mutedUsers = forgetAbsentPeers(s.mutedUsers, present);
+      return { tree, userVolumes, mutedUsers };
+    }),
   appendMessage: (message) =>
     set((s) => ({
       messages: {
