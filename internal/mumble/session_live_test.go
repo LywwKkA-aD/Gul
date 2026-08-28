@@ -12,10 +12,16 @@ import (
 // (task murmur:up). It is excluded from CI: run with `go test -tags live`.
 func TestDialLocalMurmur(t *testing.T) {
 	tofu := NewTOFUStore(t.TempDir(), slog.Default())
+	// Through a relay, because that is the only road there is now: the direct
+	// host:port one was removed with the tunnel contract, so a client and a
+	// Murmur on the same machine still meet through one.
+	ep, roots, _ := localRelay(t)
 
 	s, err := Dial(DialConfig{
-		Address:  "127.0.0.1:64738",
-		Username: "gul-smoke",
+		Address:    ep.address,
+		Username:   "gul-smoke",
+		Password:   relayLiveSecret,
+		OuterRoots: roots,
 	}, tofu, slog.Default())
 	if err != nil {
 		t.Fatalf("dial local murmur (is the stand up? task murmur:up): %v", err)

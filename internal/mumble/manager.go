@@ -86,6 +86,10 @@ type Manager struct {
 	// leaves the machine: the per-server seed is derived where the frame is
 	// built (identity.HostSeed).
 	identitySeed []byte
+	// outerRoots is a seam: nil means the system trust store. A live test
+	// standing up its own relay supplies its own roots, which is the only way
+	// to reach one now that the direct road is gone.
+	outerRoots *tls.Config
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
@@ -666,6 +670,7 @@ func (m *Manager) dialOnce(
 		Password:        c.password,
 		Certificate:     &cert,
 		IdentitySeed:    m.identitySeed,
+		OuterRoots:      m.outerRoots,
 		RelayCredential: c.bearer,
 		Transport:       transport,
 	}, hooks)

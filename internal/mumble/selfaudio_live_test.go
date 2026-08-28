@@ -22,8 +22,8 @@ func TestSelfAudioReachesOtherClients(t *testing.T) {
 	b := newLiveManager(t, "gul-selfaudio-b")
 	defer b.mgr.Close()
 
-	a.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-b", "")
+	connectLive(t, a, "gul-selfaudio-a")
+	connectLive(t, b, "gul-selfaudio-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 	waitRoot(t, b)
@@ -54,8 +54,8 @@ func TestRapidSelfAudioTogglesSettleOnTheLastIntent(t *testing.T) {
 	b := newLiveManager(t, "gul-selfaudio-spam-b")
 	defer b.mgr.Close()
 
-	a.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-spam-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-selfaudio-spam-b", "")
+	connectLive(t, a, "gul-selfaudio-spam-a")
+	connectLive(t, b, "gul-selfaudio-spam-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 	waitRoot(t, b)
@@ -146,8 +146,8 @@ func TestVoiceSurvivesADeafenCycle(t *testing.T) {
 	b := newLiveManager(t, "gul-deafcycle-b")
 	defer b.mgr.Close()
 
-	a.mgr.Connect("127.0.0.1:64738", "gul-deafcycle-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-deafcycle-b", "")
+	connectLive(t, a, "gul-deafcycle-a")
+	connectLive(t, b, "gul-deafcycle-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 	waitRoot(t, b)

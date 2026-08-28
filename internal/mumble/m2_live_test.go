@@ -21,8 +21,8 @@ func TestTwoManagersVoice(t *testing.T) {
 	b := newLiveManager(t, "gul-voice-b")
 	defer b.mgr.Close()
 
-	a.mgr.Connect("127.0.0.1:64738", "gul-voice-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-voice-b", "")
+	connectLive(t, a, "gul-voice-a")
+	connectLive(t, b, "gul-voice-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 	waitRoot(t, b)

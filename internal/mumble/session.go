@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -59,6 +60,12 @@ type DialConfig struct {
 	// IdentitySeed is the master secret this user is known by
 	// (internal/identity). Empty opens an anonymous session.
 	IdentitySeed []byte
+	// OuterRoots overrides who signs the relay's own certificate. Nil means
+	// the system trust store, which is what production uses; a live test
+	// pointing at a relay it stood up itself supplies its own. It exists
+	// because removing the direct road left no way to reach a test relay at
+	// all - every road now goes through one.
+	OuterRoots *tls.Config
 	// RelayCredential is the bearer for the WSS relay. Deriving it costs
 	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
 	// every reconnect reuses it; an empty value here is derived on the spot.
@@ -178,7 +185,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	// connection is bounded by the clock; the sync that follows is bounded by
 	// silence (syncSilence).
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
-	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.IdentitySeed)
+	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.IdentitySeed, cfg.OuterRoots)
 	// The road is open or it is not; neither dial keeps this context past its
 	// own handshake (wss.go, quic.go), so it is released here rather than
 	// being left to bound the sync as well.
@@ -290,7 +297,15 @@ func dialRelay(
 	credential relayproto.Credential,
 	tofu *TOFUStore,
 	seed []byte,
+	roots *tls.Config,
 ) (net.Conn, error) {
+	if transport == "" {
+		// The field's contract, kept: empty means the first road. It was the
+		// else branch that used to honour it, and the table replaced the else
+		// branch - so Dial, whose callers do not choose a road at all, started
+		// failing with "no road named" instead of taking the default one.
+		transport = relayTransports[0]
+	}
 	road, ok := relayRoads[transport]
 	if !ok {
 		// A road named but not built. This was an else branch until now, so
@@ -300,7 +315,7 @@ func dialRelay(
 		// record its success under the wrong name and write that to disk.
 		return nil, fmt.Errorf("mumble: no road named %q", transport)
 	}
-	return road(ctx, ep, credential, tofu, seed)
+	return road(ctx, ep, credential, tofu, seed, roots)
 }
 
 // relayRoad opens one road to the relay and returns the connection gumble will
@@ -312,6 +327,7 @@ type relayRoad func(
 	relayproto.Credential,
 	*TOFUStore,
 	[]byte,
+	*tls.Config,
 ) (net.Conn, error)
 
 // relayRoads is every road that exists, by the name the chooser and the
@@ -319,12 +335,16 @@ type relayRoad func(
 // relayTransports, which decides the order they are tried in.
 var relayRoads = map[Transport]relayRoad{
 	TransportWSS: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, seed []byte) (net.Conn, error) {
-		return dialWSSTunnel(ctx, ep, credential, tofu, seed, nil)
+		tofu *TOFUStore, seed []byte, roots *tls.Config) (net.Conn, error) {
+		var client *http.Client
+		if roots != nil {
+			client = &http.Client{Transport: &http.Transport{TLSClientConfig: roots}}
+		}
+		return dialWSSTunnel(ctx, ep, credential, tofu, seed, client)
 	},
 	TransportQUIC: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, seed []byte) (net.Conn, error) {
-		return dialQUICTunnel(ctx, ep, credential, tofu, seed, nil)
+		tofu *TOFUStore, seed []byte, roots *tls.Config) (net.Conn, error) {
+		return dialQUICTunnel(ctx, ep, credential, tofu, seed, roots)
 	},
 }
 

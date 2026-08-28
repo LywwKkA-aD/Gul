@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LywwKkA-aD/Gul/internal/identity"
 	"github.com/LywwKkA-aD/Gul/internal/relay"
 	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
@@ -36,18 +37,29 @@ import (
 //	task murmur:up && go test -tags live ./internal/mumble -run TestClientReachesMurmurThroughTheRelay
 const relayLiveSecret = "relay live test password"
 
+// liveSuperUserPassword is what the dev stand sets for SuperUser
+// (deploy/murmur/docker-compose.yml).
+const liveSuperUserPassword = "devsuperuser"
+
 // localRelay stands a relay up in front of the local Murmur stand and returns
 // the address a client dials plus the roots that trust its outer certificate.
 func localRelay(t *testing.T) (endpoint, *tls.Config, *tls.Config) {
 	t.Helper()
 
-	credential := relayproto.Derive([]byte(relayLiveSecret))
+	// One password opens both the relay and the Mumble session, because
+	// Connect carries a single one. The stand's SuperUser has its own, so the
+	// relay is told about both - otherwise an admin login could not get past
+	// the front door.
+	credentials := []relayproto.Credential{
+		relayproto.Derive([]byte(relayLiveSecret)),
+		relayproto.Derive([]byte(liveSuperUserPassword)),
+	}
 	handler, err := relay.NewHandler(relay.Config{
 		// The client addresses the relay by IP, so that is the host the relay
 		// must expect; anything else is answered as a wrong host.
 		ExpectedHost:            "127.0.0.1",
 		Upstream:                "127.0.0.1:64738",
-		BearerCredentials:       []relayproto.Credential{credential},
+		BearerCredentials:       credentials,
 		MaxConnections:          4,
 		MaxConnectionsPerIP:     4,
 		MaxWebSocketMessageSize: relayproto.MaxMessageBytes,
@@ -130,7 +142,7 @@ func TestClientReachesMurmurThroughTheRelay(t *testing.T) {
 
 	t.Run("websocket", func(t *testing.T) {
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: wssRoots}}
-		conn, err := dialWSSMumbleTLS(t.Context(), ep, credential, tofu, nil, client)
+		conn, err := dialWSSTunnel(t.Context(), ep, credential, tofu, nil, client)
 		if err != nil {
 			t.Fatalf("murmur was not reached over the websocket road: %v", err)
 		}
@@ -138,12 +150,57 @@ func TestClientReachesMurmurThroughTheRelay(t *testing.T) {
 	})
 
 	t.Run("quic", func(t *testing.T) {
-		conn, err := dialQUICMumbleTLS(t.Context(), ep, credential, tofu, nil, quicRoots)
+		conn, err := dialQUICTunnel(t.Context(), ep, credential, tofu, nil, quicRoots)
 		if err != nil {
 			t.Fatalf("murmur was not reached over the quic road: %v", err)
 		}
 		t.Cleanup(func() { _ = conn.Close() })
 	})
+}
+
+// The identity, end to end, against a real Murmur.
+//
+// This is the whole of the step in one assertion. The client derives its
+// certificate from a local secret scoped to this host, sends only the scoped
+// seed, the relay rebuilds the same certificate and presents it in the TLS it
+// speaks to Murmur - and Murmur, which has never heard of any of that, reports
+// back the name the client worked out for itself before connecting.
+//
+// If any link differs by a byte, the fingerprints disagree and this fails.
+func TestMurmurKnowsUsByTheNameWeDerived(t *testing.T) {
+	ep, wssRoots, _ := localRelay(t)
+
+	master := make([]byte, identity.SeedBytes)
+	for i := range master {
+		master[i] = byte(i*7 + 1)
+	}
+	expected, err := identity.ForHost(master, ep.host)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	manager, err := NewManager(t.TempDir(), testLogger(t), Callbacks{})
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	t.Cleanup(manager.Close)
+	manager.identitySeed = master
+	manager.outerRoots = wssRoots
+
+	manager.Connect(ep.address, "gul-identity-live", relayLiveSecret)
+	t.Cleanup(manager.Disconnect)
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if client := manager.currentClient(); client != nil && client.Self != nil && client.Self.Hash != "" {
+			if got := client.Self.Hash; got != expected.Fingerprint {
+				t.Fatalf("murmur knows this session as %s, the client derived %s", got, expected.Fingerprint)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("murmur never reported a name for this session; it stayed anonymous")
 }
 
 // A client holding the wrong password reaches nothing on either road, and the
@@ -154,11 +211,11 @@ func TestRelayRefusesTheWrongPasswordOnBothRoads(t *testing.T) {
 	tofu := NewTOFUStore(t.TempDir(), testLogger(t))
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: wssRoots}}
-	if conn, err := dialWSSMumbleTLS(t.Context(), ep, wrong, tofu, nil, client); err == nil {
+	if conn, err := dialWSSTunnel(t.Context(), ep, wrong, tofu, nil, client); err == nil {
 		_ = conn.Close()
 		t.Error("the websocket road carried a wrong password through to Murmur")
 	}
-	if conn, err := dialQUICMumbleTLS(t.Context(), ep, wrong, tofu, nil, quicRoots); err == nil {
+	if conn, err := dialQUICTunnel(t.Context(), ep, wrong, tofu, nil, quicRoots); err == nil {
 		_ = conn.Close()
 		t.Error("the quic road carried a wrong password through to Murmur")
 	}

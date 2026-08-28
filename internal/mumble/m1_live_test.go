@@ -3,6 +3,7 @@
 package mumble
 
 import (
+	"crypto/tls"
 	"log/slog"
 	"math"
 	"os/exec"
@@ -22,8 +23,8 @@ func TestTwoManagersChat(t *testing.T) {
 	b := newLiveManager(t, "gul-live-b")
 	defer b.mgr.Close()
 
-	a.mgr.Connect("127.0.0.1:64738", "gul-live-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-live-b", "")
+	connectLive(t, a, "gul-live-a")
+	connectLive(t, b, "gul-live-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 
@@ -57,7 +58,7 @@ func TestManagerReportsLatency(t *testing.T) {
 	c := newLiveManager(t, "gul-latency")
 	defer c.mgr.Close()
 
-	c.mgr.Connect("127.0.0.1:64738", "gul-latency", "")
+	connectLive(t, c, "gul-latency")
 	waitState(t, c, domain.StateConnected)
 
 	deadline := time.Now().Add(12 * time.Second)
@@ -108,6 +109,28 @@ func newLiveManager(t *testing.T, name string) *liveClient {
 	}
 	c.mgr = mgr
 	return c
+}
+
+// liveRelay is the address every live client now connects to, and the password
+// that opens it.
+//
+// The direct road is gone: there is no way to reach Murmur from this client
+// except through a relay, which is exactly the shape production has. So the
+// stand gets one, standing in front of the same Murmur these tests always
+// used. Its certificate is signed by nobody the machine trusts, hence the
+// roots handed to the manager (DialConfig.OuterRoots).
+func liveRelay(t *testing.T) (address, password string, roots *tls.Config) {
+	t.Helper()
+	ep, wssRoots, _ := localRelay(t)
+	return ep.address, relayLiveSecret, wssRoots
+}
+
+// connectLive points one live client at the stand's relay.
+func connectLive(t *testing.T, c *liveClient, name string) {
+	t.Helper()
+	address, password, roots := liveRelay(t)
+	c.mgr.outerRoots = roots
+	c.mgr.Connect(address, name, password)
 }
 
 func (c *liveClient) connectionLatency() (domain.ConnectionLatency, bool) {
@@ -169,7 +192,7 @@ func TestReconnectAfterServerRestart(t *testing.T) {
 
 	c := newLiveManager(t, "gul-reconnect")
 	defer c.mgr.Close()
-	c.mgr.Connect("127.0.0.1:64738", "gul-reconnect", "")
+	connectLive(t, c, "gul-reconnect")
 	waitState(t, c, domain.StateConnected)
 
 	cmd := exec.Command("docker", "compose", "-f", "../../deploy/murmur/docker-compose.yml", "restart", "mumble")
@@ -196,7 +219,10 @@ func TestReconnectAfterServerRestart(t *testing.T) {
 func TestChannelWalk(t *testing.T) {
 	admin := newLiveManager(t, "SuperUser")
 	defer admin.mgr.Close()
-	admin.mgr.Connect("127.0.0.1:64738", "SuperUser", "devsuperuser")
+	// SuperUser needs its own password, and the relay was told about it.
+	adminAddress, _, adminRoots := liveRelay(t)
+	admin.mgr.outerRoots = adminRoots
+	admin.mgr.Connect(adminAddress, "SuperUser", liveSuperUserPassword)
 	waitState(t, admin, domain.StateConnected)
 
 	if findChannelByName(admin.tree(), "general") == nil {
@@ -208,8 +234,8 @@ func TestChannelWalk(t *testing.T) {
 	defer a.mgr.Close()
 	b := newLiveManager(t, "gul-walk-b")
 	defer b.mgr.Close()
-	a.mgr.Connect("127.0.0.1:64738", "gul-walk-a", "")
-	b.mgr.Connect("127.0.0.1:64738", "gul-walk-b", "")
+	connectLive(t, a, "gul-walk-a")
+	connectLive(t, b, "gul-walk-b")
 	waitState(t, a, domain.StateConnected)
 	waitState(t, b, domain.StateConnected)
 

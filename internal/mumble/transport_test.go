@@ -378,13 +378,35 @@ func TestARoadOutsideTheTableFailsByName(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	_, err = dialRelay(t.Context(), ep, Transport("carrier pigeon"), "v2.test", nil, nil)
+	_, err = dialRelay(t.Context(), ep, Transport("carrier pigeon"), "v2.test", nil, nil, nil)
 
 	if err == nil {
 		t.Fatal("an unbuilt road dialled something; it must fail instead")
 	}
 	if !strings.Contains(err.Error(), "carrier pigeon") {
 		t.Fatalf("error = %v, want it to name the road", err)
+	}
+}
+
+// A caller that names no road gets the default one.
+//
+// The field's own documentation says empty means the WebSocket road, and the
+// else branch used to honour it. The table replaced the else branch and took
+// the default with it, so Dial - whose callers choose no road at all - started
+// failing with "no road named" against a relay that was answering perfectly.
+func TestNamingNoRoadTakesTheFirstOne(t *testing.T) {
+	t.Parallel()
+	ep, err := parseEndpoint(testRelayAddress)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	_, err = dialRelay(t.Context(), ep, "", "v2.test", NewTOFUStore(t.TempDir(), testLogger(t)), nil, nil)
+
+	// It fails - there is nothing listening - but it must fail having tried to
+	// dial, not having refused to choose.
+	if err != nil && strings.Contains(err.Error(), "no road named") {
+		t.Fatalf("an unnamed road was refused instead of defaulted: %v", err)
 	}
 }
 
