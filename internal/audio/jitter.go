@@ -87,7 +87,15 @@ type Jitter struct {
 	sincePush     int // ticks since the last accepted arrival
 	sinceUnderrun int // ticks of clean playout
 	sinceDrop     int // ticks since the last trim
+
+	// counts is the diagnostic tally (vitals.go). It describes the buffer,
+	// not the phrase: neither endStream nor Reset clears it, because the
+	// reading is always taken after the trouble rather than during it.
+	counts JitterCounts
 }
+
+// Counts reports what this buffer has done with the audio it was given.
+func (j *Jitter) Counts() JitterCounts { return j.counts }
 
 // NewJitter creates a per-user adaptive jitter buffer for 480-sample
 // frames. Single-goroutine use (the DSP goroutine), no locks needed.
@@ -123,6 +131,7 @@ func (j *Jitter) Push(seq int64, frame []int16) {
 	if seq < j.next {
 		if j.state != jitterPrimeState || j.highest-seq > jitterRingFrames {
 			// Late: this slot has already been played or concealed.
+			j.counts.Late++
 			return
 		}
 		// Still priming, so nothing has been played yet: the transmission
@@ -137,6 +146,7 @@ func (j *Jitter) Push(seq int64, frame []int16) {
 	idx := j.slot(seq)
 	if j.present[idx] {
 		// Duplicate: the first copy wins.
+		j.counts.Duplicate++
 		return
 	}
 	copyIntoSlot(j.ring[idx], frame)
@@ -165,7 +175,24 @@ func (j *Jitter) PushFinal(seq int64) {
 }
 
 // Pop is called exactly once per 10 ms tick. dst has FrameSamples length.
+//
+// The tally is taken here, on the one exit every path goes through, rather
+// than at each return inside. There are three ways to arrive at a concealed
+// slot and they are spread across two functions; counting at the source would
+// mean a fourth one added later is simply never counted, and a panel that
+// undercounts gaps is worse than no panel, because it reads as proof.
 func (j *Jitter) Pop(dst []int16) JitterResult {
+	result := j.pop(dst)
+	switch result {
+	case JitterFrame:
+		j.counts.Played++
+	case JitterConceal:
+		j.counts.Concealed++
+	}
+	return result
+}
+
+func (j *Jitter) pop(dst []int16) JitterResult {
 	j.sincePush++
 
 	switch j.state {
@@ -265,6 +292,7 @@ func (j *Jitter) play(dst []int16) JitterResult {
 	j.grow()
 	j.state = jitterStallState
 	j.sinceDrop = 0
+	j.counts.Stalls++
 	return JitterConceal
 }
 
@@ -308,6 +336,7 @@ func (j *Jitter) trimExcess() {
 	if j.present[idx] {
 		j.present[idx] = false
 		j.count--
+		j.counts.Trimmed++
 		j.advance()
 	}
 }
@@ -362,8 +391,14 @@ func (j *Jitter) endStream() {
 }
 
 // dropUntil discards queued frames below seq.
+// The audio given up here is counted as overflow rather than as concealment:
+// it is the ring reaching its design limit, which is a different report from a
+// frame that never arrived. clear() is deliberately not the place to count,
+// because Push also calls it for a restart, and a sender beginning a new
+// transmission has cost us nothing.
 func (j *Jitter) dropUntil(seq int64) {
 	if seq-j.next >= jitterRingFrames {
+		j.counts.Overflow += uint64(j.count)
 		j.clear()
 		j.next = seq
 		return
@@ -373,6 +408,7 @@ func (j *Jitter) dropUntil(seq int64) {
 		if j.present[idx] {
 			j.present[idx] = false
 			j.count--
+			j.counts.Overflow++
 		}
 	}
 }

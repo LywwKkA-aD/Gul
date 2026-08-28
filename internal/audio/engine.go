@@ -322,6 +322,7 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 	tick := 0
 	deviceLost, lostReported := false, false
 	var lastUnderruns uint64
+	var lastVoice VoiceVitals
 	pendingSilence := 0
 	for {
 		select {
@@ -375,6 +376,13 @@ func (e *Engine) run(src FrameSource, sink FrameSink, stop <-chan struct{}, done
 				}
 			}
 		}
+		// The receive panel, on the same cadence as the connection panel in
+		// mumble/manager.go, so the two interleave in a diagnostics archive.
+		// Reading them together is the whole point: a socket that carried
+		// every byte while the listener heard gaps is a different fault from
+		// one that stopped carrying, and until now only the socket had
+		// numbers.
+		rx.logVitals(tick, &lastVoice)
 		if tick%1000 == 0 {
 			if ppm, ok := drift.PPM(); ok {
 				e.cfg.Log.Debug("capture clock drift", "ppm", int(ppm))

@@ -1,10 +1,16 @@
 package mumble
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/LywwKkA-aD/Gul/internal/relayproto"
+	"github.com/LywwKkA-aD/gumble/gumble"
 )
 
 // The panel has to survive the stream arriving in pieces, because that is the
@@ -195,4 +201,141 @@ func concat(parts ...[]byte) []byte {
 		out = append(out, p...)
 	}
 	return out
+}
+
+// voiceCapture collects log records so a test can ask what a line contains.
+type voiceCapture struct{ records []slog.Record }
+
+func (h *voiceCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h *voiceCapture) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *voiceCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *voiceCapture) WithGroup(string) slog.Handler      { return h }
+
+// attrs flattens the named record's attributes, groups included, into
+// "group.key" -> value.
+func (h *voiceCapture) attrs(message string) map[string]string {
+	out := make(map[string]string)
+	for _, r := range h.records {
+		if r.Message != message {
+			continue
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Value.Kind() == slog.KindGroup {
+				for _, inner := range a.Value.Group() {
+					out[a.Key+"."+inner.Key] = inner.Value.String()
+				}
+				return true
+			}
+			if v, ok := a.Value.Any().(slog.LogValuer); ok {
+				for _, inner := range v.LogValue().Group() {
+					out[a.Key+"."+inner.Key] = inner.Value.String()
+				}
+				return true
+			}
+			out[a.Key] = a.Value.String()
+			return true
+		})
+	}
+	return out
+}
+
+// Every way a voice frame can be lost between the codec and the socket, named
+// apart. A frame dropped because the sender was behind, one dropped because
+// there was no session, and one the socket refused are three different faults
+// and only the counts tell them apart.
+func TestTheVoiceCountersNameEveryWayAFrameIsLost(t *testing.T) {
+	t.Parallel()
+	stats := VoiceStats{RXDrops: 1, TXDrops: 2, TXOffline: 3, TXErrors: 4}
+
+	got := make(map[string]string)
+	for _, attr := range stats.LogValue().Group() {
+		got[attr.Key] = attr.Value.String()
+	}
+	for key, want := range map[string]string{
+		"rx_drops": "1", "tx_drops": "2", "tx_offline": "3", "tx_errors": "4",
+	} {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %q", key, got[key], want)
+		}
+	}
+}
+
+// The counters have to reach the log without anyone asking.
+//
+// They existed for the whole of the last incident and no production line read
+// them, so a report of "my voice stopped going out" could not be told apart
+// from "my connection stopped" - which is the exact question that took three
+// releases to answer.
+func TestTheSessionPanelCarriesTheVoiceCounters(t *testing.T) {
+	t.Parallel()
+	capture := &voiceCapture{}
+	manager, err := NewManager(t.TempDir(), slog.New(capture), Callbacks{})
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	t.Cleanup(manager.Close)
+
+	manager.logVitals(&Session{packets: newPacketConn(&discardConn{}), addr: "example.test"}, TransportWSS)
+
+	got := capture.attrs("session vitals")
+	for _, key := range []string{"voice.rx_drops", "voice.tx_drops", "voice.tx_offline", "voice.tx_errors"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("the session panel says nothing about %s", key)
+		}
+	}
+	if _, ok := got["vitals.sent"]; !ok {
+		t.Error("the session panel lost its connection counters")
+	}
+}
+
+// The last line a lost session writes has to carry them too.
+//
+// The session panel runs every five seconds; a session that dies between two
+// ticks would otherwise be described by a reading up to five seconds stale,
+// and the counters that matter are exactly the ones that moved just before it
+// died. This line is written even when the session had no panel of its own,
+// because the voice counters live on the Manager and outlive it.
+func TestTheLostConnectionLineCarriesTheVoiceCounters(t *testing.T) {
+	t.Parallel()
+	capture := &voiceCapture{}
+	manager, err := NewManager(t.TempDir(), slog.New(capture), Callbacks{})
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	t.Cleanup(manager.Close)
+	manager.backoffFn = func(int) time.Duration { return time.Millisecond }
+	manager.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
+
+	hooksCh := make(chan sessionHooks, 1)
+	var attempts atomic.Int32
+	manager.dialFn = func(_ DialConfig, hooks sessionHooks) (*Session, error) {
+		if attempts.Add(1) == 1 {
+			hooksCh <- hooks
+			return &Session{}, nil
+		}
+		return nil, errors.New("no second attempt wanted")
+	}
+
+	manager.Connect("wss://murmur.example.test/mumble", "gul", "secret")
+	hooks := <-hooksCh
+	hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError, String: "reset"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for attempts.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	manager.Disconnect()
+
+	got := capture.attrs("connection lost")
+	if len(got) == 0 {
+		t.Fatal("no connection lost line was written; this test proves nothing")
+	}
+	for _, key := range []string{"voice.rx_drops", "voice.tx_drops", "voice.tx_offline", "voice.tx_errors"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("the lost connection line says nothing about %s", key)
+		}
+	}
 }

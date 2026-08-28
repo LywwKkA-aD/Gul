@@ -67,11 +67,28 @@ type VoicePacket struct {
 
 // VoiceStats are the voice transport counters. Every field is monotonic for
 // the life of the Manager and survives reconnects.
+//
+// The four are kept apart because they are four different faults with four
+// different owners: a consumer too slow to keep up, a sender too slow, a
+// session that was not there, and a socket that refused. Rolled into one
+// number they would say only "voice was lost", which is the answer that made
+// the last incident take three releases.
 type VoiceStats struct {
 	RXDrops   uint64 // incoming frames dropped because the RX consumer fell behind
 	TXDrops   uint64 // outgoing frames dropped because the sender fell behind
 	TXOffline uint64 // outgoing frames dropped because no session was connected
 	TXErrors  uint64 // WriteAudio failures
+}
+
+// LogValue renders the counters as one group on the session panel. Nothing
+// here can name a person or a server, so it needs no redaction.
+func (s VoiceStats) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Uint64("rx_drops", s.RXDrops),
+		slog.Uint64("tx_drops", s.TXDrops),
+		slog.Uint64("tx_offline", s.TXOffline),
+		slog.Uint64("tx_errors", s.TXErrors),
+	)
 }
 
 // VoicePackets returns the stream of incoming Opus frames. The channel is

@@ -523,6 +523,11 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		if vitals, ok := session.vitals(); ok {
 			lost = append(lost, "vitals", vitals.redact(c.address))
 		}
+		// The voice counters belong on this line whether or not the session
+		// had a panel of its own: they live on the Manager, they survive the
+		// session that lost them, and a drop with a growing tx_errors is a
+		// different story from a drop with none.
+		lost = append(lost, "voice", m.voice.stats())
 		m.log.Warn("connection lost", lost...)
 		reconnecting = true
 		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address, Error: note})
@@ -604,7 +609,15 @@ func (m *Manager) logVitals(session *Session, transport Transport) {
 	// The session knows the address it dialled, which is what the redaction
 	// needs; address here is the caller's key for the road memory, not a
 	// spelling to redact against.
-	m.log.Debug("session vitals", "transport", string(transport), "vitals", vitals.redact(session.addr))
+	// The voice counters ride the same line. They are the boundary between
+	// this layer and the audio engine, and reading them beside the socket
+	// counters is what separates "my voice stopped going out" from "my
+	// connection stopped" - two reports that looked identical for the whole
+	// of the last incident, because nothing read these.
+	m.log.Debug("session vitals",
+		"transport", string(transport),
+		"vitals", vitals.redact(session.addr),
+		"voice", m.voice.stats())
 }
 
 // requestSelfStats samples the round-trip time the client measured itself and

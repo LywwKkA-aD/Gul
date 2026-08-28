@@ -37,6 +37,57 @@ type rxPipeline struct {
 	frame   []int16
 	silence []int16
 	outRMS  float64
+
+	// retired carries the tallies of senders whose state has been released,
+	// so a reading taken after the room went quiet still describes the
+	// session (vitals.go). Without it the panel would report zeros at
+	// precisely the moment somebody asks what went wrong.
+	retired JitterCounts
+}
+
+// vitals sums what every sender's buffer has done, live and released alike.
+func (r *rxPipeline) vitals() VoiceVitals {
+	v := VoiceVitals{JitterCounts: r.retired, Streams: len(r.streams)}
+	for _, s := range r.streams {
+		v.add(s.jit.Counts())
+		// The worst sender, not the last one the map happened to yield: one
+		// peer on a bursting link is the reason this is being read at all.
+		if depth := s.jit.Depth(); depth > v.Depth {
+			v.Depth = depth
+		}
+	}
+	return v
+}
+
+// logVitals writes the receive panel on its own cadence, and only when there
+// is something to describe.
+//
+// last is the previous reading, updated in place. The rule it implements is
+// what keeps the log honest and short: write while a sender is live, and
+// otherwise only when the tally has moved since the last line. A silent room
+// therefore writes nothing at all, while a word spoken and finished between
+// two ticks still gets its line - the counters moved even though nobody was
+// live when the reading was taken.
+//
+// The consequence worth knowing when reading an archive: a gap in these lines
+// means nobody was talking, not that logging stopped.
+func (r *rxPipeline) logVitals(tick int, last *VoiceVitals) {
+	if tick%voiceVitalsTicks != 0 {
+		return
+	}
+	v := r.vitals()
+	if v.Streams == 0 && v.JitterCounts == last.JitterCounts {
+		return
+	}
+	r.log.Debug("voice vitals", "vitals", v)
+	*last = v
+}
+
+// release drops one sender's state, keeping what it measured.
+func (r *rxPipeline) release(session uint32, s *rxStream) {
+	r.retired.add(s.jit.Counts())
+	s.dec.Close()
+	delete(r.streams, session)
 }
 
 func newRxPipeline(cfg Config, chain *dspChain) *rxPipeline {
@@ -132,8 +183,7 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, users *userAudioState, 
 		case JitterIdle:
 			r.setTalking(s, false)
 			if now.Sub(s.lastPacket) > streamIdleTimeout {
-				s.dec.Close()
-				delete(r.streams, session)
+				r.release(session, s)
 			}
 			continue
 		}
@@ -192,8 +242,7 @@ func (r *rxPipeline) setTalking(s *rxStream, talking bool) {
 func (r *rxPipeline) close() {
 	for session, s := range r.streams {
 		r.setTalking(s, false)
-		s.dec.Close()
-		delete(r.streams, session)
+		r.release(session, s)
 	}
 }
 
