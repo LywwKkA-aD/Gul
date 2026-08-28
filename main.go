@@ -86,11 +86,15 @@ func (v *voiceAdapter) Start(captureID, playbackID string) error {
 func (v *voiceAdapter) Stop()                   { v.engine.Stop() }
 func (v *voiceAdapter) SetMute(muted bool)      { v.engine.SetMute(muted) }
 func (v *voiceAdapter) SetDeafen(deafened bool) { v.engine.SetDeafen(deafened) }
-func (v *voiceAdapter) SetUserVolume(hash string, volume float32) {
-	v.engine.SetUserVolume(hash, volume)
+func (v *voiceAdapter) SetUserVolume(key string, volume float32) {
+	v.engine.SetUserVolume(key, volume)
 }
-func (v *voiceAdapter) SetUserMute(hash string, muted bool) {
-	v.engine.SetUserMute(hash, muted)
+func (v *voiceAdapter) SetUserMute(key string, muted bool) {
+	v.engine.SetUserMute(key, muted)
+}
+
+func (v *voiceAdapter) ForgetAbsentPeers(present map[string]bool) {
+	v.engine.ForgetAbsentPeers(present)
 }
 
 // SetGateMode maps the validated core mode onto the engine's own type.

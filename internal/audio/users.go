@@ -1,6 +1,10 @@
 package audio
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/LywwKkA-aD/Gul/internal/mumble"
+)
 
 // How this client treats one other person's voice: the gain the listener
 // chose for them, and whether the listener silenced them locally.
@@ -45,13 +49,13 @@ var defaultUserAudio = userAudio{volume: 1}
 // volume change and a mute arriving together cannot lose one another.
 type userAudioState struct {
 	writes sync.Mutex
-	values sync.Map // user hash -> userAudio
+	values sync.Map // peer key -> userAudio
 }
 
 // get returns the treatment of one peer, or the default for a peer nobody has
 // touched. Called from the DSP goroutine: no locks, no allocations.
-func (s *userAudioState) get(hash string) userAudio {
-	v, ok := s.values.Load(hash)
+func (s *userAudioState) get(key string) userAudio {
+	v, ok := s.values.Load(key)
 	if !ok {
 		return defaultUserAudio
 	}
@@ -62,20 +66,45 @@ func (s *userAudioState) get(hash string) userAudio {
 
 // setVolume sets the gain, leaving the mute alone. A muted peer stays muted
 // and the new gain is what they come back at.
-func (s *userAudioState) setVolume(hash string, volume float32) {
+func (s *userAudioState) setVolume(key string, volume float32) {
 	s.writes.Lock()
 	defer s.writes.Unlock()
-	current := s.get(hash)
+	current := s.get(key)
 	current.volume = volume
-	s.values.Store(hash, current)
+	s.values.Store(key, current)
 }
 
 // setMuted silences or restores one peer, leaving the gain alone. That is the
 // whole point: unmuting restores what the listener had chosen.
-func (s *userAudioState) setMuted(hash string, muted bool) {
+func (s *userAudioState) setMuted(key string, muted bool) {
 	s.writes.Lock()
 	defer s.writes.Unlock()
-	current := s.get(hash)
+	current := s.get(key)
 	current.muted = muted
-	s.values.Store(hash, current)
+	s.values.Store(key, current)
+}
+
+// keep drops every setting whose key stands for a peer who is no longer here.
+//
+// Only the mortal ones. A key built from a certificate hash or a registration
+// id names the same person next week and is meant to outlive the session; a
+// key built from a session id names nothing at all once that session ends, and
+// Murmur hands session ids out again. Left in place, the volume somebody set
+// for a stranger becomes the volume of the next stranger to get that number.
+//
+// Called with the keys currently in the tree. Sweeping rather than deleting on
+// a departure event is deliberate: a departure that never arrives - a dropped
+// connection, a reconnect that rebuilt the tree - would leave the entry
+// forever, and the tree is the thing that is actually authoritative about who
+// is here.
+func (s *userAudioState) keep(present map[string]bool) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	s.values.Range(func(key, _ any) bool {
+		name, _ := key.(string)
+		if mumble.PeerKeyIsMortal(name) && !present[name] {
+			s.values.Delete(key)
+		}
+		return true
+	})
 }

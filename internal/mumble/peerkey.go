@@ -2,6 +2,7 @@ package mumble
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/LywwKkA-aD/gumble/gumble"
 )
@@ -55,8 +56,12 @@ func peerKey(user *gumble.User) string {
 	return peerKeySession + strconv.FormatUint(uint64(user.Session), 10)
 }
 
-// peerKeyIsMortal reports whether a key stands for this connection only, and
+// PeerKeyIsMortal reports whether a key stands for this connection only, and
 // therefore has to be forgotten when the peer goes.
-func peerKeyIsMortal(key string) bool {
-	return len(key) >= len(peerKeySession) && key[:len(peerKeySession)] == peerKeySession
+//
+// Exported because the audio engine is what stores against these keys and has
+// to sweep them, and because the rule belongs next to the function that builds
+// them rather than being re-derived from a prefix somewhere else.
+func PeerKeyIsMortal(key string) bool {
+	return strings.HasPrefix(key, peerKeySession)
 }

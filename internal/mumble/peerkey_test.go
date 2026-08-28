@@ -57,7 +57,7 @@ func TestPeerKeyPrefersWhatSurvivesAReconnect(t *testing.T) {
 			// Murmur reuses session ids, so a setting kept under one of these
 			// would eventually land on a stranger. Whoever stores against it
 			// has to be told.
-			if peerKeyIsMortal(got) != tc.mortal {
+			if PeerKeyIsMortal(got) != tc.mortal {
 				t.Fatalf("key %q reports mortal=%v, want %v", got, !tc.mortal, tc.mortal)
 			}
 		})

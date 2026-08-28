@@ -115,15 +115,16 @@ func (v *orderedVoice) Start(captureID, playbackID string) error {
 	v.record("start %s|%s", captureID, playbackID)
 	return nil
 }
-func (v *orderedVoice) Stop()                         { v.record("stop") }
-func (v *orderedVoice) SetMute(bool)                  {}
-func (v *orderedVoice) SetDeafen(bool)                {}
-func (v *orderedVoice) SetUserVolume(string, float32) {}
-func (v *orderedVoice) SetUserMute(string, bool)      {}
-func (v *orderedVoice) SetPTT(bool)                   {}
-func (v *orderedVoice) SetCueVolume(volume float32)   { v.record("cue volume %g", volume) }
-func (v *orderedVoice) PlayCue(cue Cue)               { v.record("cue %d", cue) }
-func (v *orderedVoice) SetGateMode(mode GateMode)     { v.record("gate %s", mode) }
+func (v *orderedVoice) Stop()                             { v.record("stop") }
+func (v *orderedVoice) SetMute(bool)                      {}
+func (v *orderedVoice) SetDeafen(bool)                    {}
+func (v *orderedVoice) SetUserVolume(string, float32)     {}
+func (v *orderedVoice) SetUserMute(string, bool)          {}
+func (v *orderedVoice) ForgetAbsentPeers(map[string]bool) {}
+func (v *orderedVoice) SetPTT(bool)                       {}
+func (v *orderedVoice) SetCueVolume(volume float32)       { v.record("cue volume %g", volume) }
+func (v *orderedVoice) PlayCue(cue Cue)                   { v.record("cue %d", cue) }
+func (v *orderedVoice) SetGateMode(mode GateMode)         { v.record("gate %s", mode) }
 func (v *orderedVoice) SetVADTuning(open, closeLevel float32, hangoverMs int) {
 	v.record("vad %g/%g/%d", open, closeLevel, hangoverMs)
 }

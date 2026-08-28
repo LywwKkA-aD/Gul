@@ -55,6 +55,7 @@ type VoiceEngine interface {
 	SetDeafen(deafened bool)
 	SetUserVolume(key string, volume float32)
 	SetUserMute(key string, muted bool)
+	ForgetAbsentPeers(present map[string]bool)
 	SetGateMode(mode GateMode)
 	SetVADTuning(open, close float32, hangoverMs int)
 	SetPTT(held bool)
@@ -321,4 +322,30 @@ func (a *App) HandleSelfTalking(talking bool) {
 // HandleLevels forwards meter values (already throttled by the engine).
 func (a *App) HandleLevels(micDb, outDb float64) {
 	a.emit(domain.EventAudioLevels, domain.AudioLevels{MicDb: micDb, OutDb: outDb})
+}
+
+// forgetAbsentPeers tells the engine who is still in the room, so the settings
+// of peers whose key dies with the session go with them.
+//
+// The tree is the authority rather than a departure event, because a departure
+// event is exactly what does not arrive when a connection drops. Called on
+// every tree, which is cheap: the sweep walks a map that holds one entry per
+// peer somebody has actually touched, and in an ordinary room that is none.
+func (a *App) forgetAbsentPeers(root domain.ChannelNode) {
+	v := a.voiceEngine()
+	if v == nil {
+		return
+	}
+	present := map[string]bool{}
+	var walk func(domain.ChannelNode)
+	walk = func(node domain.ChannelNode) {
+		for _, u := range node.Users {
+			present[u.Key] = true
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(root)
+	v.ForgetAbsentPeers(present)
 }

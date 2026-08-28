@@ -276,6 +276,8 @@ func (v *voiceRecorder) SetUserVolume(hash string, volume float32) {
 	v.volumes = append(v.volumes, fmt.Sprintf("%s|%g", hash, volume))
 }
 
+func (v *voiceRecorder) ForgetAbsentPeers(map[string]bool) {}
+
 func (v *voiceRecorder) SetUserMute(hash string, muted bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

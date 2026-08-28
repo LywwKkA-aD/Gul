@@ -327,3 +327,46 @@ func TestEngineUserMuteSilencesOnePeer(t *testing.T) {
 		t.Fatalf("engine state = %+v, want the chosen gain kept", got)
 	}
 }
+
+// A setting made for somebody who has left must not greet the next person to
+// get their number.
+//
+// Murmur hands session ids out again, so a key built from one names nothing
+// once that session ends. A key built from a certificate hash or a
+// registration id names the same person next week and is meant to outlive the
+// session - sweeping those would throw away the setting every time somebody
+// stepped out of the room for a moment.
+func TestOnlyMortalSettingsAreSweptAway(t *testing.T) {
+	t.Parallel()
+	var state userAudioState
+	state.setMuted("s:7", true)
+	state.setVolume("s:9", 0.25)
+	state.setMuted("h:abc123", true)
+	state.setVolume("u:42", 2)
+
+	// Session 9 is still here; the rest of the room has changed.
+	state.keep(map[string]bool{"s:9": true})
+
+	if got := state.get("s:7"); got.muted {
+		t.Error("a mute survived the peer it was set for; the next session with that id inherits it")
+	}
+	if got := state.get("s:9"); got.volume != 0.25 {
+		t.Errorf("volume for a peer who is still here = %v, want it left alone", got.volume)
+	}
+	if got := state.get("h:abc123"); !got.muted {
+		t.Error("a mute keyed by certificate was swept; it is meant to survive a reconnect")
+	}
+	if got := state.get("u:42"); got.volume != 2 {
+		t.Error("a volume keyed by registration was swept; it is meant to survive a reconnect")
+	}
+}
+
+// Sweeping an empty room must not cost anything and must not panic.
+func TestSweepingAnEmptyRoomIsHarmless(t *testing.T) {
+	t.Parallel()
+	var state userAudioState
+	state.keep(nil)
+	if got := state.get("s:1"); got != defaultUserAudio {
+		t.Fatalf("treatment after sweeping nothing = %+v, want the default", got)
+	}
+}

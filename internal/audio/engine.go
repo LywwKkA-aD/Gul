@@ -232,6 +232,18 @@ func (e *Engine) SetUserVolume(key string, volume float32) {
 // This is not "volume zero": the gain the listener chose is kept untouched
 // and is exactly what they hear again on unmute. It is also not the Mumble
 // mute on the wire - nothing is sent, and the person is never told.
+// ForgetAbsentPeers drops the settings of peers who are no longer in the room,
+// and only the ones that were never meant to outlive the session.
+//
+// The room is what decides. A departure event that never arrives - a dropped
+// connection, a reconnect that rebuilt the tree from scratch - would leave the
+// entry behind forever, and Murmur hands session ids out again, so the volume
+// somebody set for a stranger would become the volume of the next stranger to
+// be given that number.
+func (e *Engine) ForgetAbsentPeers(present map[string]bool) {
+	e.state.users.keep(present)
+}
+
 func (e *Engine) SetUserMute(key string, muted bool) {
 	e.state.users.setMuted(key, muted)
 }

@@ -391,6 +391,7 @@ func (a *App) HandleTree(root domain.ChannelNode) {
 	a.mu.Unlock()
 
 	a.emit(domain.EventChannelsTree, root)
+	a.forgetAbsentPeers(root)
 	a.reconcileSelfAudio(root)
 
 	if cue, who, ok := a.channelCue(root); ok {

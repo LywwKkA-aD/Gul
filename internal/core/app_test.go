@@ -204,6 +204,7 @@ type fakeVoice struct {
 	deafens  []bool
 	volumes  []volumeCall
 	userMute []muteCall
+	kept     []map[string]bool
 	modes    []GateMode
 	tunings  []vadTuning
 	ptt      []bool
@@ -259,6 +260,12 @@ func (v *fakeVoice) SetUserMute(hash string, muted bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.userMute = append(v.userMute, muteCall{hash, muted})
+}
+
+func (v *fakeVoice) ForgetAbsentPeers(present map[string]bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.kept = append(v.kept, present)
 }
 
 func (v *fakeVoice) SetGateMode(mode GateMode) {
