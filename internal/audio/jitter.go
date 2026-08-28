@@ -237,6 +237,26 @@ func (j *Jitter) play(dst []int16) JitterResult {
 		j.advance()
 		return JitterConceal
 	}
+	if j.final && j.next > j.finalSeq {
+		// Nothing left and nothing coming: the terminator named a frame this
+		// buffer has already played past. Ending here rather than stalling is
+		// not an optimisation - without it the buffer never leaves this state.
+		//
+		// ready() answers true unconditionally once final is set, so the stall
+		// state hands control straight back to play, which runs dry again and
+		// stalls again. advance() is what calls endStream, and the dry path
+		// never reaches it, so next never passes finalSeq and the stream never
+		// closes. Measured before the fix: three thousand ticks - thirty
+		// seconds - of unbroken conceal, the target pinned at the 500 ms
+		// ceiling, the peer lit up as speaking the whole time, their decoder
+		// never released, and the ceiling still in place when they next spoke.
+		//
+		// It is reachable from any peer: a terminator whose payload is empty
+		// or undecodable arrives with no frames of its own (pipeline_rx.go),
+		// which is exactly a final for a sequence already behind us.
+		j.endStream()
+		return JitterIdle
+	}
 	// Ran dry. Hold the playout position so no audio is skipped, deepen the
 	// target by the length of the stall and rebuild before speaking again.
 	// The pre-stall depth is remembered: growth is kept only if audio really

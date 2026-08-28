@@ -514,3 +514,46 @@ func BenchmarkJitterSteadyState(b *testing.B) {
 		}
 	}
 }
+
+// A terminator for a frame already played past must end the phrase, not start
+// an endless one.
+//
+// ready() answers true unconditionally once final is set, so the stall state
+// hands control back to play, which runs dry and stalls again. endStream is
+// only reached through advance, and the dry path never calls it, so next never
+// passes finalSeq. Measured before the fix: three thousand ticks - thirty
+// seconds - of unbroken conceal, the target pinned at the ceiling, and the
+// peer lit up as speaking for all of it.
+//
+// It needs no hostile peer. A terminator whose payload is empty or undecodable
+// reaches the buffer with no frames of its own (pipeline_rx.go), which is
+// exactly a final for a sequence already behind.
+func TestATerminatorForAFramePlayedPastEndsThePhrase(t *testing.T) {
+	t.Parallel()
+	j := NewJitter()
+	frame := make([]int16, FrameSamples)
+	dst := make([]int16, FrameSamples)
+
+	for seq := int64(0); seq < 20; seq++ {
+		j.Push(seq, frame)
+	}
+	for played := 0; played < 20; {
+		if j.Pop(dst) == JitterFrame {
+			played++
+		}
+	}
+	// While the stream is still live, so PushFinal is not refused as a restart.
+	j.PushFinal(18)
+
+	// Well inside the silence valve, which is a second: an unfixed buffer
+	// conceals here for as long as anybody keeps asking.
+	concealed := 0
+	for range jitterSilenceTicks {
+		if j.Pop(dst) == JitterIdle {
+			return
+		}
+		concealed++
+	}
+	t.Fatalf("still concealing after %d ticks with nothing left to play and nothing coming; "+
+		"depth %d frames", concealed, j.Depth())
+}
