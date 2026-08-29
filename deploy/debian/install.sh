@@ -180,9 +180,25 @@ apt_refresh() {
 done_marker() { printf '%s\n' "$(date -u +%FT%TZ)" >"$STATE_DIR/$1.done"; }
 is_done() { [[ -f $STATE_DIR/$1.done ]]; }
 
+# as_service runs a command as the unprivileged container owner.
+#
+# The cd is not decoration. runuser keeps the caller's working directory, and
+# this script runs as root - usually from /root, which is mode 700 and which
+# the service user cannot enter. git survived that because it was handed an
+# absolute path; podman did not, and failed with "cannot chdir to /root:
+# Permission denied" followed by "Error: setting up the process", which is
+# not a message that names its own cause. Found on a real box, after the same
+# line had appeared in an earlier session and been read past.
+#
+# The subshell keeps the directory change from leaking into the caller.
 as_service() {
-  runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" "$@"
+  local uid
+  uid=$(id -u "$SERVICE_USER")
+  (
+    cd "$SERVICE_HOME" 2>/dev/null || cd /
+    runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -520,8 +536,11 @@ maxretry = 4
 enabled = true
 port = $ssh_port
 EOF
-  run systemctl enable --now fail2ban || warn "fail2ban не стартовал - вход по ключу от этого не страдает"
-  good "fail2ban следит за sshd на порту $ssh_port"
+  if run systemctl enable --now fail2ban; then
+    good "fail2ban следит за sshd на порту $ssh_port"
+  else
+    warn "fail2ban не стартовал - вход по ключу от этого не страдает"
+  fi
   done_marker fail2ban
 }
 
@@ -537,8 +556,14 @@ phase_maintenance() {
   banner "Обновления и часы"
   if is_done maintenance; then good "уже сделано"; return; fi
 
-  run systemctl enable --now chronyd || warn "chronyd не стартовал - следите за временем сами, от него зависят сертификаты"
-  good "часы синхронизируются"
+  # The unit is chrony.service on Debian; chronyd.service is an alias symlink
+  # and systemctl refuses to enable one ("Refusing to operate on alias name or
+  # linked unit file"). The name that works is the one shipped.
+  if run systemctl enable --now chrony; then
+    good "часы синхронизируются"
+  else
+    warn "chrony не стартовал - следите за временем сами, от него зависят сертификаты"
+  fi
 
   if confirm "Ставить обновления безопасности автоматически?"; then
     # Both files are needed: 50unattended-upgrades says what may be installed,
@@ -548,9 +573,11 @@ phase_maintenance() {
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-    run systemctl enable --now unattended-upgrades \
-      || warn "unattended-upgrades не запустился"
-    good "обновления безопасности ставятся сами"
+    if run systemctl enable --now unattended-upgrades; then
+      good "обновления безопасности ставятся сами"
+    else
+      warn "unattended-upgrades не запустился - обновления придётся ставить руками"
+    fi
   else
     rm -f /etc/apt/apt.conf.d/20auto-upgrades
     say "тогда не забывайте про apt update && apt upgrade"
@@ -707,25 +734,55 @@ phase_build_relay() {
   mkdir -p "$work"
   chown "$SERVICE_USER:$SERVICE_USER" "$work"
 
-  spin "клонирую $ref" runuser -u "$SERVICE_USER" -- \
+  spin "клонирую $ref" as_service \
     git clone --depth 1 --branch "$ref" "$GUL_REPO_URL" "$work/src" \
     || die "не смог склонировать $GUL_REPO_URL на $ref"
 
   # CGO off on purpose: the relay's dependency graph is identity, relayproto
   # and relay, none of which touch C. The client's audio stack does, and does
   # not belong on a server.
-  # Binary and legal bundle in one pass. The Containerfile copies `legal` from
-  # the build context and there is no such directory in the repository: it is
-  # generated, and generating it needs the Go toolchain to walk the module
-  # graph. Both therefore happen in the throwaway builder rather than on the
-  # host, which is why the host needs no Go at all.
+  # The build recipe is written to a file rather than inlined, because it is
+  # about to be quoted through a heredoc, a shell -c and a container - three
+  # layers in which a stray backslash is invisible until it fails on someone
+  # else's server.
+  #
+  # scripts/collect-licenses.sh is deliberately NOT used. It walks the whole
+  # release matrix - desktop targets that need a built frontend and cgo, plus
+  # npm packages - because that is what a release ships. On a bare clone it
+  # fails at the first target ("pattern all:frontend/dist: no matching files
+  # found"), which is exactly what happened on the first real install. What
+  # the relay image needs is narrower and is gathered here: this repository's
+  # own licence and notice, plus the licence of every module that actually
+  # ends up inside the relay binary.
+  cat >"$work/build-relay.sh" <<'RECIPE'
+#!/usr/bin/env bash
+set -eu
+go build -ldflags "-s -w -X main.version=${GUL_BUILD_REF}" \
+  -o deploy/relay/gul-relay ./cmd/gul-relay
+
+mkdir -p deploy/relay/legal
+cp LICENSE NOTICE deploy/relay/legal/
+go list -deps -f '{{with .Module}}{{.Path}}|{{.Dir}}{{end}}' ./cmd/gul-relay |
+  sort -u |
+  while IFS='|' read -r module_path module_dir; do
+    [ -n "$module_dir" ] || continue
+    case "$module_path" in github.com/LywwKkA-aD/Gul) continue ;; esac
+    for licence in "$module_dir"/LICENSE* "$module_dir"/LICENCE* \
+      "$module_dir"/COPYING* "$module_dir"/NOTICE*; do
+      [ -f "$licence" ] || continue
+      target="deploy/relay/legal/$module_path"
+      mkdir -p "$target"
+      cp "$licence" "$target/"
+    done
+  done
+RECIPE
+  chown "$SERVICE_USER:$SERVICE_USER" "$work/build-relay.sh"
+
   spin "собираю релей и лицензии" as_service podman run --rm \
-    -v "$work/src:/src:z" -w /src \
-    -e CGO_ENABLED=0 -e GOFLAGS=-trimpath \
+    -v "$work/src:/src:z" -v "$work/build-relay.sh:/build-relay.sh:ro,z" -w /src \
+    -e CGO_ENABLED=0 -e GOFLAGS=-trimpath -e "GUL_BUILD_REF=$ref" \
     "$GUL_BUILDER_IMAGE" \
-    bash -c "set -e
-      go build -ldflags '-s -w -X main.version=$ref' -o deploy/relay/gul-relay ./cmd/gul-relay
-      bash scripts/collect-licenses.sh deploy/relay/legal" \
+    bash /build-relay.sh \
     || die "сборка не прошла, смотрите $LOG_FILE"
 
   [[ -f $work/src/deploy/relay/gul-relay ]] || die "бинарь релея не появился"
