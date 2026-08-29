@@ -948,6 +948,17 @@ phase_secrets() {
 
   good "три секрета заведены в podman, на диск в открытом виде ничего не легло"
 
+  # podman reads a secret when the container starts and never again, so
+  # re-issuing them changes nothing until the services are restarted. Without
+  # this the script would report new secrets while the running relay kept
+  # checking against the old ones - and the only sign would be a client that
+  # cannot connect with the password it was just given.
+  if as_service systemctl --user is-active --quiet gul-murmur.service 2>/dev/null; then
+    say "перезапускаю службы, чтобы они увидели новые секреты"
+    as_service systemctl --user restart gul-murmur.service gul-relay.service 2>/dev/null \
+      || warn "не смог перезапустить - сделайте это вручную, иначе останутся старые секреты"
+  fi
+
   say ""
   if have_gum; then
     gum style --border double --border-foreground 214 --padding "1 3" \
