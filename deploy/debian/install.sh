@@ -1200,6 +1200,37 @@ phase_start() {
   done
   [[ $waited -lt 120 ]] || warn "сертификата пока нет - релей не стартует, пока он не появится"
 
+  # The first-boot race, and it is silent without this.
+  #
+  # The image runs Murmur and the certificate manager side by side under
+  # supervisord, and Murmur refuses to start without a certificate - the
+  # entrypoint sets the superuser password by invoking the server binary
+  # before it reaches its own wait loop. So on a fresh host Murmur dies in
+  # under a second, supervisord spends its three default attempts in the first
+  # two seconds, marks the program FATAL, and never tries again. The
+  # certificate then arrives half a minute later with nobody left to use it.
+  #
+  # The container stays up the whole time, because supervisord is still
+  # running, so systemd sees a healthy service and every check here passes
+  # while the voice server does not exist. Found on the second real install:
+  # nine green checks and a client that could not connect.
+  if ! as_service podman exec gul-murmur pgrep -x mumble-server >/dev/null 2>&1; then
+    say "Murmur сдался, пока ждал сертификат - перезапускаю"
+    as_service systemctl --user restart gul-murmur.service \
+      || warn "не смог перезапустить Murmur"
+    local up=0
+    while [[ $up -lt 60 ]]; do
+      as_service podman exec gul-murmur pgrep -x mumble-server >/dev/null 2>&1 && break
+      sleep 3
+      up=$((up + 3))
+    done
+    if [[ $up -lt 60 ]]; then
+      good "Murmur поднялся"
+    else
+      warn "Murmur так и не запустился - смотрите journalctl --user -u gul-murmur"
+    fi
+  fi
+
   spin "поднимаю релей" as_service systemctl --user start gul-relay.service \
     || warn "релей не поднялся"
 
@@ -1214,7 +1245,11 @@ phase_verify() {
     if eval "$2" >>"$LOG_FILE" 2>&1; then good "$1"; ok=$((ok + 1)); else warn "$1 - НЕТ"; fail=$((fail + 1)); fi
   }
 
+  # Not just the unit: supervisord keeps the container alive whether or not
+  # the voice server inside it is running, so an active unit proves nothing on
+  # its own. The process is what the check is about.
   check "Murmur запущен" "as_service systemctl --user is-active --quiet gul-murmur.service"
+  check "голосовой сервер работает" "as_service podman exec gul-murmur pgrep -x mumble-server"
   check "релей запущен" "as_service systemctl --user is-active --quiet gul-relay.service"
   check "порт $RELAY_PORT слушается" "ss -tln | grep -q ':$RELAY_PORT'"
   # Not a loopback connect to 443: the firewalld redirect acts on traffic
