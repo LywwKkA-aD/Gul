@@ -1021,6 +1021,20 @@ phase_units() {
     }
   done
 
+  # Murmur's autoban is off below, and that is not laziness.
+  #
+  # It counts attempts per source address, and behind the relay every client
+  # arrives from one - the container's own loopback - so Murmur cannot ban an
+  # individual: it can only ban everybody. That is not hypothetical. A user
+  # whose sessions were being cut kept reconnecting, crossed ten attempts in
+  # two minutes, and Murmur began answering "Ignoring connection (Global ban)"
+  # to everyone, including the people already talking.
+  #
+  # Nothing is lost by turning it off: the relay limits by source address one
+  # layer up, where the real address is visible. The dev stand's compose file
+  # carries a note to keep autoban on in production; that note predates the
+  # relay terminating the session and is wrong for this arrangement.
+  #
   # port_handler=slirp4netns preserves the client's real address. The default
   # rootlesskit handler rewrites every source to 127.0.0.1, which would blind
   # the relay's per-address admission control and make every log line say the
@@ -1075,9 +1089,7 @@ ExecStart=/usr/bin/podman run \\
   --env MUMBLE_CONFIG_BONJOUR=false \\
   --env MUMBLE_CONFIG_ICE= \\
   --env MUMBLE_CONFIG_LOGDAYS=31 \\
-  --env MUMBLE_CONFIG_AUTOBANATTEMPTS=10 \\
-  --env MUMBLE_CONFIG_AUTOBANTIMEFRAME=120 \\
-  --env MUMBLE_CONFIG_AUTOBANTIME=300 \\
+  --env MUMBLE_CONFIG_AUTOBANATTEMPTS=0 \\
   --memory 768m --pids-limit 256 \\
   --security-opt no-new-privileges \\
   --log-driver journald \\
