@@ -326,6 +326,49 @@ phase_packages() {
   done_marker packages
 }
 
+# grant_sudo makes the administrator account able to become root.
+#
+# Membership of the sudo group is not enough on its own. useradd leaves the
+# password locked, so sudo asks for a password that does not exist and can
+# never be given: the account can log in by key and then do nothing. The first
+# real install ended with exactly that - an administrator who could not read
+# the log of their own installation.
+#
+# The default is a password-less rule rather than a password, because on a box
+# whose sshd takes keys only there is nothing for a password to protect: it
+# would be typed down the same connection the key already opened, and it is
+# one more thing to lose. This is what cloud images do for the same reason.
+# Anyone who prefers the prompt can have it.
+grant_sudo() {
+  local admin=$1 rule=/etc/sudoers.d/gul-admin
+
+  if [[ ${GUL_SUDO_MODE:-} == password ]] || {
+    [[ ${GUL_SUDO_MODE:-} != nopasswd ]] &&
+      ! confirm "Разрешить $admin sudo без пароля? (вход и так только по ключу)"
+  }; then
+    rm -f "$rule"
+    say "Задайте пароль для $admin - его будет спрашивать sudo."
+    if passwd "$admin"; then
+      good "пароль задан, sudo будет его спрашивать"
+    else
+      warn "пароль не задан: $admin не сможет стать root, пока вы его не зададите"
+    fi
+    return
+  fi
+
+  # Never install a sudoers file without checking it: a malformed one takes
+  # sudo away from everybody at once, and the way back is single-user mode.
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$admin" >"$rule.tmp"
+  chmod 0440 "$rule.tmp"
+  if visudo -c -q -f "$rule.tmp" 2>>"$LOG_FILE"; then
+    mv "$rule.tmp" "$rule"
+    good "$admin получает sudo без пароля"
+  else
+    rm -f "$rule.tmp"
+    warn "правило sudo не прошло проверку и не установлено - задайте пароль через passwd $admin"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Phase 3: the human's account and key
 #
@@ -335,7 +378,31 @@ phase_packages() {
 
 phase_admin() {
   banner "Учётная запись администратора"
-  if is_done admin; then good "уже сделано"; return; fi
+
+  # Not a plain early return on the done marker: the first version of this
+  # script left the account unable to use sudo, and a re-run has to be able to
+  # repair that rather than skip past it. Creating the user and taking the key
+  # are what "done" covers; the ability to become root is checked every time.
+  if is_done admin; then
+    local known
+    known=$(cat "$STATE_DIR/admin.user" 2>/dev/null || printf '')
+    if [[ -n $known ]] && id "$known" >/dev/null 2>&1; then
+      good "учётка $known уже заведена"
+      # The test has to run AS the user. Asking "sudo -n -u gul true" from
+      # root proves nothing: root may become anybody without a password, so
+      # that form answers yes on precisely the broken box it is meant to
+      # catch - which is what it did on the first attempt at this repair.
+      if runuser -u "$known" -- sudo -n true 2>/dev/null ||
+        [[ $(passwd -S "$known" 2>/dev/null | awk '{print $2}') == P ]]; then
+        good "$known может стать root"
+      else
+        warn "$known в группе sudo, но пароля нет и правила нет - стать root не может"
+        grant_sudo "$known"
+      fi
+      return
+    fi
+    warn "отметка о готовности есть, а учётки нет - завожу заново"
+  fi
 
   local admin
   admin=$(ask "Имя администратора:" "gul" "${GUL_ADMIN_USER:-}")
@@ -352,6 +419,8 @@ phase_admin() {
   # to become root - found by running this on a clean bookworm.
   run usermod -aG sudo "$admin" \
     || warn "не смог добавить в группу sudo - права придётся выдать вручную"
+
+  grant_sudo "$admin"
 
   local keyfile="/home/$admin/.ssh/authorized_keys"
   mkdir -p "/home/$admin/.ssh"
