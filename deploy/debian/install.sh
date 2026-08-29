@@ -27,7 +27,13 @@ set -euo pipefail
 GUL_REPO_URL=${GUL_REPO_URL:-https://github.com/LywwKkA-aD/Gul.git}
 GUL_REPO_REF=${GUL_REPO_REF:-main}
 GUL_BUILDER_IMAGE=${GUL_BUILDER_IMAGE:-docker.io/library/golang:1.26}
-GUL_MUMBLE_IMAGE=${GUL_MUMBLE_IMAGE:-docker.io/mumblevoip/mumble-server:v1.5.915}
+# The -acme variant, and the suffix is load-bearing. The plain image only
+# WAITS for /data/acme/mumble.crt and never issues it, so a server built on it
+# blocks forever on a certificate nobody is making. The -acme image runs
+# supervisord instead of the entrypoint directly, starting lego's certificate
+# manager alongside Murmur so that one creates what the other waits for.
+# Verified by digest: this tag is what the existing production server runs.
+GUL_MUMBLE_IMAGE=${GUL_MUMBLE_IMAGE:-docker.io/mumblevoip/mumble-server:v1.5.915-acme}
 
 # The unprivileged account that owns the containers. Rootless: nothing here
 # runs as root once the box is provisioned.
@@ -1049,6 +1055,7 @@ ExecStart=/usr/bin/podman run \\
   --env MUMBLE_CONFIG_ALLOWPING=false \\
   --env MUMBLE_CONFIG_SENDVERSION=false \\
   --env MUMBLE_CONFIG_BONJOUR=false \\
+  --env MUMBLE_CONFIG_ICE= \\
   --env MUMBLE_CONFIG_LOGDAYS=31 \\
   --env MUMBLE_CONFIG_AUTOBANATTEMPTS=10 \\
   --env MUMBLE_CONFIG_AUTOBANTIMEFRAME=120 \\
