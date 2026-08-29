@@ -112,9 +112,47 @@ func dialBrowserTLS(
 		config.RootCAs = base.RootCAs
 		config.InsecureSkipVerify = base.InsecureSkipVerify
 	}
-	conn := utls.UClient(raw, config, utls.HelloChrome_Auto)
-	if err := conn.HandshakeContext(ctx); err != nil {
+	conn, err := browserHandshake(ctx, raw, config)
+	if err != nil {
 		_ = raw.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// browserHandshake performs Chrome's handshake, minus HTTP/2 in ALPN.
+//
+// The preset offers "h2, http/1.1" because that is what the browser offers,
+// and against our own relay it costs nothing: the relay speaks only HTTP/1.1
+// and picks it out of the list. Against anything else it is fatal. A CDN
+// selects h2, the connection is then an HTTP/2 one, and the WebSocket dial -
+// which is HTTP/1.1 semantics, and stays that way because RFC 8441 is not
+// what this library implements - reads the server's first SETTINGS frame as a
+// reply and gives up with "malformed HTTP response".
+//
+// Found the first time this client was pointed at a Cloudflare front, which is
+// the only remaining idea for a user whose traffic dies to every host of ours
+// and to no large provider. Offering one protocol where Chrome offers two is a
+// deviation from the fingerprint, and it is taken deliberately: it is the
+// difference between being able to hide behind a CDN and not.
+func browserHandshake(ctx context.Context, raw net.Conn, config *utls.Config) (*utls.UConn, error) {
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+	if err != nil {
+		return nil, err
+	}
+	for _, extension := range spec.Extensions {
+		alpn, ok := extension.(*utls.ALPNExtension)
+		if !ok {
+			continue
+		}
+		alpn.AlpnProtocols = []string{"http/1.1"}
+	}
+
+	conn := utls.UClient(raw, config, utls.HelloCustom)
+	if err := conn.ApplyPreset(&spec); err != nil {
+		return nil, err
+	}
+	if err := conn.HandshakeContext(ctx); err != nil {
 		return nil, err
 	}
 	return conn, nil
