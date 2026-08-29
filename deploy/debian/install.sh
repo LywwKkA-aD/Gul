@@ -324,7 +324,12 @@ phase_packages() {
   # container flags need.
   say "podman $(podman --version | awk '{print $3}')"
 
-  if spin "ставлю fail2ban" apt-get install -y --no-install-recommends fail2ban; then
+  # python3-systemd and ipset are Recommends, which --no-install-recommends
+  # skips, and fail2ban needs both: the first to read the journal at all, the
+  # second for the only ban action that survives a firewalld reload. Without
+  # them the service starts, prints "Server ready" and exits 255.
+  if spin "ставлю fail2ban" apt-get install -y --no-install-recommends \
+    fail2ban python3-systemd ipset; then
     good "fail2ban поставлен"
   else
     warn "fail2ban не поставился - обойдёмся, вход и так только по ключу"
@@ -602,7 +607,9 @@ phase_fail2ban() {
   cat >/etc/fail2ban/jail.d/gul.local <<EOF
 [DEFAULT]
 backend = systemd
-banaction = firewallcmd-rich-rules[actiontype=<multiport>]
+# firewallcmd-ipset, not firewallcmd-rich-rules: the latter is a Red Hat
+# action name and does not exist in Debian's fail2ban at all.
+banaction = firewallcmd-ipset
 bantime = 1h
 findtime = 10m
 maxretry = 4
@@ -1226,15 +1233,25 @@ phase_verify() {
 
   # The cover site is the whole disguise: a stranger on 443 must get a plain
   # nginx page, not something that says Gul.
+  #
+  # Asked of the relay's own listener rather than of the public address,
+  # because a box cannot reach its own public IP through firewalld's redirect:
+  # that rule acts on traffic arriving from outside, and a locally-originated
+  # connection never passes it. The first real install reported "прикрытие не
+  # ответило" on a server whose cover site was answering 200 to the rest of
+  # the world. --resolve keeps the real hostname in SNI and in the
+  # certificate check, so this still proves the name and the certificate.
   local cover
-  cover=$(curl -fsS --max-time 10 -o /dev/null -w '%{http_code}' "https://$DOMAIN/" 2>/dev/null || printf '000')
+  cover=$(curl -sS --max-time 10 --resolve "$DOMAIN:$RELAY_PORT:127.0.0.1" \
+    -o /dev/null -w '%{http_code}' "https://$DOMAIN:$RELAY_PORT/" 2>/dev/null) || cover=000
   if [[ $cover == 404 || $cover == 200 ]]; then
-    good "прикрытие отвечает снаружи (HTTP $cover)"
+    good "прикрытие отвечает и сертификат годен (HTTP $cover)"
     ok=$((ok + 1))
   else
-    warn "прикрытие не ответило (HTTP $cover) - проверьте DNS и сертификат"
+    warn "прикрытие не ответило (HTTP $cover) - проверьте сертификат и журнал релея"
     fail=$((fail + 1))
   fi
+  say "снаружи проверьте сами: curl -sI https://$DOMAIN/"
 
   say ""
   if [[ $fail -eq 0 ]]; then
