@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Gul server provisioning for Rocky Linux 9 and 10.
+# Gul server provisioning for Debian.
 #
 # One script, one fresh box, one voice server: Murmur behind an authenticated
 # relay, plus the hardening the box needs before it is worth putting either on
 # it. Interactive throughout (charmbracelet/gum), and safe to run again - every
 # phase checks the state it is about to create and skips what is already there.
 #
-#   curl -fsSLO https://raw.githubusercontent.com/LywwKkA-aD/Gul/main/deploy/rocky/install.sh
+#   curl -fsSLO https://raw.githubusercontent.com/LywwKkA-aD/Gul/main/deploy/debian/install.sh
 #   sudo bash install.sh
 #
 # The one thing this script will not do quietly is lock you out. SSH hardening
@@ -166,6 +166,16 @@ spin() {
   fi
 }
 
+# apt_refresh and the DEBIAN_FRONTEND below exist so that no phase can stop on
+# a debconf prompt: this script asks its questions through gum, and a package
+# deciding to open a dialog of its own would hang an unattended run forever.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+apt_refresh() {
+  run apt-get update -qq || warn "список пакетов обновился не полностью"
+}
+
 # done_marker records a completed phase so a second run can skip it.
 done_marker() { printf '%s\n' "$(date -u +%FT%TZ)" >"$STATE_DIR/$1.done"; }
 is_done() { [[ -f $STATE_DIR/$1.done ]]; }
@@ -184,12 +194,23 @@ phase_preflight() {
 
   [[ $EUID -eq 0 ]] || die "запускать надо от root: sudo bash $0"
 
-  local id version
+  local id version pretty
   id=$(. /etc/os-release && printf '%s' "$ID")
   version=$(. /etc/os-release && printf '%s' "${VERSION_ID%%.*}")
-  [[ $id == rocky ]] || die "этот скрипт только для Rocky Linux, а здесь $id"
-  [[ $version -ge 9 ]] || die "нужна Rocky 9 или новее, здесь $version"
-  good "Rocky Linux $version, $(uname -m)"
+  pretty=$(. /etc/os-release && printf '%s' "$PRETTY_NAME")
+  [[ $id == debian ]] || die "этот скрипт только для Debian, а здесь $id"
+
+  case $version in
+  12 | 13) good "$pretty, $(uname -m)" ;;
+  11)
+    # Bullseye LTS ended 2026-08-31. A new server put on it gets no security
+    # updates from the day it is built, which is not a trade worth taking for
+    # a box that will be on a public address.
+    warn "$pretty снят с поддержки 31 августа 2026 - обновлений безопасности больше нет"
+    confirm "Всё равно ставить на него?" || die "остановлено: возьмите Debian 12 или 13"
+    ;;
+  *) die "нужен Debian 12 или 13, здесь $pretty" ;;
+  esac
 
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR"
@@ -219,17 +240,25 @@ phase_preflight() {
 phase_gum() {
   if have_gum; then good "gum уже стоит"; return; fi
   banner "Ставлю gum"
-  cat >/etc/yum.repos.d/charm.repo <<'EOF'
-[charm]
-name=Charm
-baseurl=https://repo.charm.sh/yum/
-enabled=1
-gpgcheck=1
-gpgkey=https://repo.charm.sh/yum/gpg.key
-EOF
-  if ! run dnf install -y gum; then
-    rm -f /etc/yum.repos.d/charm.repo
-    warn "репозиторий Charm недоступен, дальше без gum - вопросы будут простым текстом"
+  apt_refresh
+  run apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    || die "без curl и gnupg дальше никак"
+
+  mkdir -p /etc/apt/keyrings
+  if ! curl -fsSL --max-time 30 https://repo.charm.sh/apt/gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/charm.gpg 2>>"$LOG_FILE"; then
+    warn "ключ Charm не скачался, дальше без gum - вопросы будут простым текстом"
+    return
+  fi
+  # A flat repository: the "* *" is the documented form and the only one that
+  # resolves - repo.charm.sh serves no dists/stable path.
+  printf 'deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *\n' \
+    >/etc/apt/sources.list.d/charm.list
+  apt_refresh
+  if ! run apt-get install -y --no-install-recommends gum; then
+    rm -f /etc/apt/sources.list.d/charm.list
+    apt_refresh
+    warn "gum не поставился, дальше вопросы будут простым текстом"
     return
   fi
   good "gum поставлен"
@@ -243,30 +272,21 @@ phase_packages() {
   banner "Базовые пакеты"
   if is_done packages; then good "уже сделано"; return; fi
 
+  apt_refresh
   # A tolerated failure: a mirror having a bad minute is not a reason to
   # abandon an install. The packages below are not optional and do abort.
-  spin "обновляю систему" dnf -y upgrade --refresh \
+  spin "обновляю систему" apt-get -y upgrade \
     || warn "обновление не прошло целиком, продолжаю"
 
-  # fail2ban is not in Rocky's own repositories, only in EPEL. Found by
-  # running this script on a clean Rocky 9, where the whole install died on
-  # "Unable to find a match: fail2ban" - so EPEL comes first, and its absence
-  # is survivable rather than fatal: with password login off and keys only,
-  # fail2ban trims the log noise, it does not hold the door.
-  spin "подключаю EPEL" dnf install -y epel-release \
-    || warn "EPEL не подключился - поставлю всё, кроме fail2ban"
-
-  # curl, tar and openssl are deliberately absent from this list. A minimal
-  # Rocky carries curl-minimal, which provides the same /usr/bin/curl, and
-  # asking for the full package makes dnf refuse the whole transaction over a
-  # conflict it cannot resolve on its own. What matters is the binary, so the
-  # binary is what gets checked, below.
-  if ! spin "ставлю пакеты" dnf install -y \
-    podman container-selinux \
+  # uidmap, slirp4netns and dbus-user-session are what make rootless podman
+  # work at all on Debian: the subordinate id ranges, the network, and the
+  # user session bus the units live in. Debian does not pull them in with
+  # podman, and without them the containers fail late and confusingly.
+  if ! spin "ставлю пакеты" apt-get install -y --no-install-recommends \
+    podman uidmap slirp4netns dbus-user-session \
     firewalld openssh-server \
-    chrony dnf-automatic \
-    policycoreutils-python-utils \
-    git jq; then
+    chrony unattended-upgrades \
+    git jq curl ca-certificates openssl sudo; then
     die "не поставились обязательные пакеты - подробности в $LOG_FILE"
   fi
 
@@ -277,10 +297,15 @@ phase_packages() {
   [[ ${#missing[@]} -eq 0 ]] || die "не хватает программ: ${missing[*]}"
   good "обязательные пакеты на месте"
 
-  if spin "ставлю fail2ban" dnf install -y fail2ban; then
+  # podman 4.3 in bookworm has no quadlet - this script writes plain systemd
+  # units instead, which is why no version is demanded here beyond what the
+  # container flags need.
+  say "podman $(podman --version | awk '{print $3}')"
+
+  if spin "ставлю fail2ban" apt-get install -y --no-install-recommends fail2ban; then
     good "fail2ban поставлен"
   else
-    warn "fail2ban недоступен - обойдёмся без него, вход и так только по ключу"
+    warn "fail2ban не поставился - обойдёмся, вход и так только по ключу"
   fi
   done_marker packages
 }
@@ -306,7 +331,11 @@ phase_admin() {
     run useradd -m -s /bin/bash "$admin" || die "не смог создать $admin"
     good "создан $admin"
   fi
-  run usermod -aG wheel "$admin" || warn "не смог добавить в wheel - sudo придётся настроить вручную"
+  # Debian's administrator group is "sudo"; "wheel" is the Red Hat name and
+  # does not exist here, so asking for it fails and leaves the account unable
+  # to become root - found by running this on a clean bookworm.
+  run usermod -aG sudo "$admin" \
+    || warn "не смог добавить в группу sudo - права придётся выдать вручную"
 
   local keyfile="/home/$admin/.ssh/authorized_keys"
   mkdir -p "/home/$admin/.ssh"
@@ -512,12 +541,19 @@ phase_maintenance() {
   good "часы синхронизируются"
 
   if confirm "Ставить обновления безопасности автоматически?"; then
-    sed -i 's/^upgrade_type =.*/upgrade_type = security/; s/^apply_updates =.*/apply_updates = yes/' \
-      /etc/dnf/automatic.conf
-    run systemctl enable --now dnf-automatic.timer || warn "таймер обновлений не включился"
+    # Both files are needed: 50unattended-upgrades says what may be installed,
+    # 20auto-upgrades says whether the timer runs at all. Debian ships the
+    # first and omits the second, so the package alone does nothing.
+    cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+    run systemctl enable --now unattended-upgrades \
+      || warn "unattended-upgrades не запустился"
     good "обновления безопасности ставятся сами"
   else
-    say "тогда не забывайте про dnf upgrade --security"
+    rm -f /etc/apt/apt.conf.d/20auto-upgrades
+    say "тогда не забывайте про apt update && apt upgrade"
   fi
   done_marker maintenance
 }
@@ -556,7 +592,7 @@ net.ipv4.tcp_max_syn_backlog = 4096
 net.core.somaxconn = 4096
 
 # The QUIC road is UDP, and quic-go wants room for bursts; the defaults on
-# Rocky are 208 KB and drop datagrams under load rather than queueing them.
+# Debian are 208 KB and drop datagrams under load rather than queueing them.
 net.core.rmem_max = 8388608
 net.core.wmem_max = 8388608
 net.core.netdev_max_backlog = 8192
@@ -792,44 +828,55 @@ phase_secrets() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 12: quadlets
+# Phase 12: systemd units
 # ---------------------------------------------------------------------------
 
-phase_quadlets() {
+# Phase 12 writes plain systemd user units rather than Quadlet files.
+#
+# Quadlet would be the tidier form, but it arrived in podman 4.4 and Debian 12
+# ships 4.3.1 with no generator at all - verified, not assumed. Rather than
+# carry two orchestration paths, this writes the unit podman would have been
+# asked to generate. It works from podman 3.0 upward, so the same file serves
+# whatever Debian the next box runs.
+phase_units() {
   banner "Юниты Murmur и релея"
 
   local users bandwidth welcome quic
-  users=$(ask "Максимум одновременных пользователей:" "32" "${GUL_MAX_USERS:-}")
+  users=$(ask "Максимум одновременных пользователей:" "100" "${GUL_MAX_USERS:-}")
   bandwidth=$(ask "Потолок битрейта на клиента, бит/с:" "128000" "${GUL_BANDWIDTH:-}")
   welcome=$(ask "Приветствие:" "Welcome" "${GUL_WELCOME:-}")
   if confirm "Включить вторую дорогу QUIC (UDP 443)?"; then quic=true; else quic=false; fi
 
   local digest unit_dir
   digest=$(cat "$STATE_DIR/relay.digest")
-  unit_dir="$SERVICE_HOME/.config/containers/systemd"
+  unit_dir="$SERVICE_HOME/.config/systemd/user"
   mkdir -p "$unit_dir"
 
-  # Back up anything already here, the way an operator would want it done.
   local stamp; stamp=$(date -u +%Y%m%d-%H%M%S)
-  for f in "$unit_dir"/*.container "$unit_dir"/*.volume; do
+  for f in "$unit_dir"/gul-*.service; do
     [[ -e $f ]] || continue
     cp -a "$f" "$f.bak-$stamp"
   done
 
-  cat >"$unit_dir/gul-murmur-data.volume" <<'EOF'
-[Volume]
-VolumeName=gul-murmur-data
-Label=app=gul-murmur
-EOF
+  # Three volumes, and the middle one is the reason there are three. The image
+  # writes its certificate to /data/acme and the relay has to read it; podman
+  # 4.3 cannot mount a subdirectory of a volume (no --mount subpath), so the
+  # certificate gets a volume of its own mounted at that exact path. /etc/acme
+  # is lego's own state and stays private to Murmur.
+  for v in gul-murmur-data gul-murmur-certs gul-murmur-acme; do
+    as_service podman volume exists "$v" 2>/dev/null || {
+      as_service podman volume create "$v" >/dev/null 2>&1 \
+        || die "не смог создать том $v"
+      good "создан том $v"
+    }
+  done
 
-  cat >"$unit_dir/gul-murmur-acme.volume" <<'EOF'
-[Volume]
-VolumeName=gul-murmur-acme
-Label=app=gul-murmur
-Label=purpose=acme
-EOF
-
-  cat >"$unit_dir/gul-murmur.container" <<EOF
+  # port_handler=slirp4netns preserves the client's real address. The default
+  # rootlesskit handler rewrites every source to 127.0.0.1, which would blind
+  # the relay's per-address admission control and make every log line say the
+  # same thing. It costs some throughput and buys back the one field the
+  # relay's defences are keyed on.
+  cat >"$unit_dir/gul-murmur.service" <<EOF
 [Unit]
 Description=Gul public Mumble server
 Wants=network-online.target
@@ -837,117 +884,106 @@ After=network-online.target
 StartLimitIntervalSec=10min
 StartLimitBurst=3
 
-[Container]
-ContainerName=gul-murmur
-HostName=$DOMAIN
-Image=$GUL_MUMBLE_IMAGE
-Network=pasta
-
-Volume=gul-murmur-data.volume:/data
-Volume=gul-murmur-acme.volume:/etc/acme
-Secret=MUMBLE_SUPERUSER_PASSWORD,type=env,target=MUMBLE_SUPERUSER_PASSWORD
-Secret=MUMBLE_CONFIG_SERVER_PASSWORD,type=env,target=MUMBLE_CONFIG_SERVER_PASSWORD
-
-# 80 and 443 are redirected here by firewalld, so nothing binds a low port.
-PublishPort=0.0.0.0:$ACME_PORT:80/tcp
-PublishPort=0.0.0.0:$RELAY_PORT:$RELAY_PORT/tcp
-PublishPort=0.0.0.0:$RELAY_PORT:$RELAY_PORT/udp
-PublishPort=127.0.0.1:$MUMBLE_PORT:$MUMBLE_PORT/tcp
-
-Environment=PUID=10000
-Environment=PGID=10000
-Environment=MUMBLE_CHOWN_DATA=true
-Environment=MUMBLE_VERBOSE=false
-Environment=ACME_DOMAIN=$DOMAIN
-Environment=ACME_ACCOUNT_MAIL=$ACME_MAIL
-Environment=ACME_HTTP=1
-
-Environment="MUMBLE_CONFIG_WELCOMETEXT=$welcome"
-Environment=MUMBLE_CONFIG_USERS=$users
-Environment=MUMBLE_CONFIG_BANDWIDTH=$bandwidth
-Environment=MUMBLE_CONFIG_OPUSTHRESHOLD=0
-Environment=MUMBLE_CONFIG_TIMEOUT=30
-Environment=MUMBLE_CONFIG_REMEMBERCHANNEL=true
-Environment=MUMBLE_CONFIG_ALLOWHTML=false
-# Answering pings would let anyone enumerate the server from outside; the
-# cover site exists so that a stranger on 443 finds nothing to identify.
-Environment=MUMBLE_CONFIG_ALLOWPING=false
-Environment=MUMBLE_CONFIG_SENDVERSION=false
-Environment=MUMBLE_CONFIG_BONJOUR=false
-Environment=MUMBLE_CONFIG_ICE=
-Environment=MUMBLE_CONFIG_LOGDAYS=31
-Environment=MUMBLE_CONFIG_AUTOBANATTEMPTS=10
-Environment=MUMBLE_CONFIG_AUTOBANTIMEFRAME=120
-Environment=MUMBLE_CONFIG_AUTOBANTIME=300
-
-NoNewPrivileges=true
-PidsLimit=256
-Memory=768M
-LogDriver=journald
-PodmanArgs=--umask=0077
-HealthCmd=pidof mumble-server
-HealthInterval=30s
-HealthTimeout=5s
-HealthRetries=3
-HealthStartPeriod=30s
-
 [Service]
+Type=notify
+NotifyAccess=all
 Restart=on-failure
 RestartSec=10s
-TimeoutStartSec=3min
+# First start waits for a certificate from Let's Encrypt: the image blocks
+# until /data/acme/mumble.crt exists, and that is a round trip to the outside.
+TimeoutStartSec=10min
+TimeoutStopSec=45s
+ExecStartPre=-/usr/bin/podman rm -f gul-murmur
+ExecStart=/usr/bin/podman run \\
+  --rm --name gul-murmur --hostname $DOMAIN \\
+  --sdnotify=conmon --cgroups=no-conmon \\
+  --network slirp4netns:port_handler=slirp4netns \\
+  --publish 0.0.0.0:$ACME_PORT:80/tcp \\
+  --publish 0.0.0.0:$RELAY_PORT:$RELAY_PORT/tcp \\
+  --publish 0.0.0.0:$RELAY_PORT:$RELAY_PORT/udp \\
+  --publish 127.0.0.1:$MUMBLE_PORT:$MUMBLE_PORT/tcp \\
+  --volume gul-murmur-data:/data \\
+  --volume gul-murmur-certs:/data/acme \\
+  --volume gul-murmur-acme:/etc/acme \\
+  --secret MUMBLE_SUPERUSER_PASSWORD,type=env,target=MUMBLE_SUPERUSER_PASSWORD \\
+  --secret MUMBLE_CONFIG_SERVER_PASSWORD,type=env,target=MUMBLE_CONFIG_SERVER_PASSWORD \\
+  --env PUID=10000 --env PGID=10000 \\
+  --env MUMBLE_CHOWN_DATA=true \\
+  --env MUMBLE_VERBOSE=false \\
+  --env ACME_DOMAIN=$DOMAIN \\
+  --env ACME_ACCOUNT_MAIL=$ACME_MAIL \\
+  --env ACME_HTTP=1 \\
+  --env "MUMBLE_CONFIG_WELCOMETEXT=$welcome" \\
+  --env MUMBLE_CONFIG_USERS=$users \\
+  --env MUMBLE_CONFIG_BANDWIDTH=$bandwidth \\
+  --env MUMBLE_CONFIG_OPUSTHRESHOLD=0 \\
+  --env MUMBLE_CONFIG_TIMEOUT=30 \\
+  --env MUMBLE_CONFIG_REMEMBERCHANNEL=true \\
+  --env MUMBLE_CONFIG_ALLOWHTML=false \\
+  --env MUMBLE_CONFIG_ALLOWPING=false \\
+  --env MUMBLE_CONFIG_SENDVERSION=false \\
+  --env MUMBLE_CONFIG_BONJOUR=false \\
+  --env MUMBLE_CONFIG_LOGDAYS=31 \\
+  --env MUMBLE_CONFIG_AUTOBANATTEMPTS=10 \\
+  --env MUMBLE_CONFIG_AUTOBANTIMEFRAME=120 \\
+  --env MUMBLE_CONFIG_AUTOBANTIME=300 \\
+  --memory 768m --pids-limit 256 \\
+  --security-opt no-new-privileges \\
+  --log-driver journald \\
+  $GUL_MUMBLE_IMAGE
+ExecStop=/usr/bin/podman stop --ignore -t 30 gul-murmur
 
 [Install]
 WantedBy=default.target
 EOF
 
-  cat >"$unit_dir/gul-relay.container" <<EOF
+  cat >"$unit_dir/gul-relay.service" <<EOF
 [Unit]
 Description=Gul authenticated relay
 Requires=gul-murmur.service
-After=network-online.target gul-murmur.service
+After=gul-murmur.service
 PartOf=gul-murmur.service
 StartLimitIntervalSec=10min
 StartLimitBurst=3
 
-[Container]
-ContainerName=gul-wss-relay
-Image=localhost/gul-wss-relay@$digest
-Pull=never
-# Share Murmur's network namespace only: the relay reaches Murmur on loopback
-# and gains nothing else from the host.
-Network=gul-murmur.container
-User=10000:10000
-
-Mount=type=volume,source=gul-murmur-data.volume,destination=/run/relay-tls,subpath=acme,ro=true
-Secret=GUL_RELAY_BEARER,type=mount,target=GUL_RELAY_BEARER,uid=10000,gid=10000,mode=0400
-
-Exec=--listen 0.0.0.0:$RELAY_PORT --host $DOMAIN --upstream 127.0.0.1:$MUMBLE_PORT --cert /run/relay-tls/mumble.crt --key /run/relay-tls/mumble.key --credential-file /run/secrets/GUL_RELAY_BEARER --quic=$quic --log-level info
-
-ReadOnly=true
-NoNewPrivileges=true
-DropCapability=ALL
-PidsLimit=128
-Memory=128M
-LogDriver=journald
-HealthCmd=["/usr/local/bin/gul-relay","healthcheck"]
-HealthInterval=30s
-HealthTimeout=5s
-HealthRetries=3
-HealthStartPeriod=15s
-HealthOnFailure=kill
-StopTimeout=15
-
 [Service]
+Type=notify
+NotifyAccess=all
 Restart=on-failure
 RestartSec=10s
 TimeoutStartSec=2min
 LimitNOFILE=8192
+ExecStartPre=-/usr/bin/podman rm -f gul-wss-relay
+# The relay joins Murmur's network namespace: it reaches Murmur on loopback
+# and gains nothing else of the host. Murmur publishes the listener port.
+ExecStart=/usr/bin/podman run \\
+  --rm --name gul-wss-relay \\
+  --sdnotify=conmon --cgroups=no-conmon \\
+  --network container:gul-murmur \\
+  --user 10000:10000 \\
+  --read-only \\
+  --cap-drop ALL \\
+  --security-opt no-new-privileges \\
+  --memory 128m --pids-limit 128 \\
+  --log-driver journald \\
+  --volume gul-murmur-certs:/run/relay-tls:ro \\
+  --secret GUL_RELAY_BEARER,type=mount,target=GUL_RELAY_BEARER,uid=10000,gid=10000,mode=0400 \\
+  localhost/gul-wss-relay@$digest \\
+  --listen 0.0.0.0:$RELAY_PORT \\
+  --host $DOMAIN \\
+  --upstream 127.0.0.1:$MUMBLE_PORT \\
+  --cert /run/relay-tls/mumble.crt \\
+  --key /run/relay-tls/mumble.key \\
+  --credential-file /run/secrets/GUL_RELAY_BEARER \\
+  --quic=$quic \\
+  --log-level info
+ExecStop=/usr/bin/podman stop --ignore -t 15 gul-wss-relay
 
 [Install]
 WantedBy=default.target
 EOF
 
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$unit_dir"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_HOME/.config"
   good "юниты записаны в $unit_dir"
 }
 
@@ -998,6 +1034,7 @@ phase_start() {
 
   as_service systemctl --user daemon-reload \
     || die "systemd пользователя $SERVICE_USER не отвечает - проверьте loginctl enable-linger"
+  as_service systemctl --user enable gul-murmur.service gul-relay.service >/dev/null 2>&1 || true
   spin "поднимаю Murmur" as_service systemctl --user start gul-murmur.service \
     || warn "Murmur не поднялся с первого раза, смотрим ниже"
 
@@ -1038,7 +1075,10 @@ phase_verify() {
   if command -v fail2ban-server >/dev/null 2>&1; then
     check "fail2ban жив" "systemctl is-active --quiet fail2ban"
   fi
-  check "SELinux в enforcing" "[[ \$(getenforce) == Enforcing ]]"
+  # Debian has no SELinux; AppArmor is the default and needs nothing from us.
+  if command -v aa-status >/dev/null 2>&1; then
+    check "AppArmor загружен" "aa-status --enabled"
+  fi
 
   # The cover site is the whole disguise: a stranger on 443 must get a plain
   # nginx page, not something that says Gul.
@@ -1072,7 +1112,7 @@ phase_verify() {
 main() {
   if have_gum; then
     gum style --border double --border-foreground 63 --padding "1 4" --margin "1 0" --bold \
-      "Установка сервера Gul" "Rocky Linux, rootless podman"
+      "Установка сервера Gul" "Debian, rootless podman"
   else
     printf '\n=== Установка сервера Gul ===\n\n'
   fi
@@ -1089,7 +1129,7 @@ main() {
   phase_identity
   phase_build_relay
   phase_secrets
-  phase_quadlets
+  phase_units
   phase_firewall
   phase_start
   phase_verify
