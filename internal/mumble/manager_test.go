@@ -1008,3 +1008,18 @@ func TestASingleFailureIsReportedPlainly(t *testing.T) {
 		t.Errorf("получено %q, ожидалось %q", got, "connection refused")
 	}
 }
+
+// Roads that failed identically are reported once. Labelling them would turn
+// "connection refused" into "wss: connection refused; quic: connection
+// refused" - longer, no more informative, and an invitation to look for a
+// difference that is not there.
+func TestIdenticalRoadFailuresAreReportedOnce(t *testing.T) {
+	t.Parallel()
+	message := everyRoadFailed([]roadFailure{
+		{TransportWSS, errors.New("connection refused")},
+		{TransportQUIC, errors.New("connection refused")},
+	})
+	if message != "connection refused" {
+		t.Errorf("получено %q, ожидалось %q", message, "connection refused")
+	}
+}

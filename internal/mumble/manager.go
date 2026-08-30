@@ -1046,9 +1046,22 @@ func everyRoadFailed(failures []roadFailure) string {
 	case 1:
 		return failures[0].err.Error()
 	}
+	// Roads that failed the same way are reported once and unlabelled. Naming
+	// them would turn "connection refused" into "wss: connection refused;
+	// quic: connection refused", which is longer, no more informative, and
+	// invites the reader to look for a difference that is not there. The
+	// labels exist for the case they were added for: roads failing
+	// differently.
 	parts := make([]string, 0, len(failures))
+	same := true
 	for _, failure := range failures {
 		parts = append(parts, string(failure.transport)+": "+failure.err.Error())
+		if failure.err.Error() != failures[0].err.Error() {
+			same = false
+		}
+	}
+	if same {
+		return failures[0].err.Error()
 	}
 	return strings.Join(parts, "; ")
 }
