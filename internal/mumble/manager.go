@@ -377,6 +377,11 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 	// Moving to the next road continues the same attempt rather than starting
 	// a new one, so it must not announce itself again.
 	searching := false
+	// What each road answered during one search. The user is told all of it:
+	// reporting only the last road is how "QUIC handshake failed" ends up on
+	// screen for someone whose websocket road failed first and for an entirely
+	// different reason.
+	var roadFailures []roadFailure
 
 	for {
 		if isStopped(stop) {
@@ -389,6 +394,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 		// that loses both roads and gets one back would never reconnect.
 		if !searching {
 			roadsLeft = len(m.transports.roads(c.kind)) - 1
+			roadFailures = roadFailures[:0]
 		}
 		if !reconnecting && !searching {
 			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
@@ -441,6 +447,7 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 			if roadsLeft > 0 && isRoadFailure(err) {
 				roadsLeft--
 				searching = true
+				roadFailures = append(roadFailures, roadFailure{transport, err})
 				m.transports.failed(c.key)
 				m.log.Info("road did not open, trying another", "transport", string(transport))
 				continue
@@ -448,7 +455,9 @@ func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{})
 
 			if !reconnecting || isTerminalDialError(err) {
 				m.emitStatus(domain.ConnectionStatus{
-					State: domain.StateDisconnected, Server: c.address, Error: err.Error(),
+					State:  domain.StateDisconnected,
+					Server: c.address,
+					Error:  everyRoadFailed(append(roadFailures, roadFailure{transport, err})),
 				})
 				return
 			}
@@ -1017,6 +1026,33 @@ func joinReason(prefix, detail string) string {
 // that refused the credential or asked us to come back later, all answered,
 // and taking a different road to the same answer would only spend the user's
 // time twice.
+// roadFailure is one road's answer during a search across them.
+type roadFailure struct {
+	transport Transport
+	err       error
+}
+
+// everyRoadFailed renders what the user is shown when no road opened.
+//
+// One line per road, named. The alternative - and what this replaced - is the
+// last road's error alone, which is actively misleading: the roads are tried
+// in order and fail for unrelated reasons, so a websocket failure followed by
+// a QUIC timeout is reported as a QUIC problem, and the reader goes looking at
+// the wrong half of the system.
+func everyRoadFailed(failures []roadFailure) string {
+	switch len(failures) {
+	case 0:
+		return ""
+	case 1:
+		return failures[0].err.Error()
+	}
+	parts := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		parts = append(parts, string(failure.transport)+": "+failure.err.Error())
+	}
+	return strings.Join(parts, "; ")
+}
+
 func isRoadFailure(err error) bool {
 	var reject *gumble.RejectError
 	if errors.As(err, &reject) {

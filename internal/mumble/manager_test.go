@@ -979,3 +979,32 @@ func TestManagerLogsCarryNoServerAddress(t *testing.T) {
 		t.Fatalf("log does not show that the address was redacted: %s", logged)
 	}
 }
+
+// The message a user sees when nothing opened has to name every road.
+//
+// Reporting only the last one is how "QUIC handshake failed" reaches the
+// screen of somebody whose websocket road failed first, for an unrelated
+// reason - and sends them looking at the wrong half of the system. Seen
+// happening: a Cloudflare front answered the websocket dial with HTTP/2 and
+// the QUIC road then timed out, and only the timeout was shown.
+func TestEveryRoadFailedNamesThemAll(t *testing.T) {
+	t.Parallel()
+	message := everyRoadFailed([]roadFailure{
+		{TransportWSS, errors.New("server negotiated HTTP/2")},
+		{TransportQUIC, errors.New("timeout: no recent network activity")},
+	})
+	for _, want := range []string{"wss", "HTTP/2", "quic", "timeout"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("сообщение %q не содержит %q", message, want)
+		}
+	}
+}
+
+// One road is the ordinary case and must read as it always did: naming a
+// single road adds noise where there was no choice to explain.
+func TestASingleFailureIsReportedPlainly(t *testing.T) {
+	t.Parallel()
+	if got := everyRoadFailed([]roadFailure{{TransportWSS, errors.New("connection refused")}}); got != "connection refused" {
+		t.Errorf("получено %q, ожидалось %q", got, "connection refused")
+	}
+}
