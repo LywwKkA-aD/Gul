@@ -3,6 +3,7 @@ package mumble
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 
@@ -46,7 +47,7 @@ const (
 // caller's proxy - and replaces only how the connection is established. A base
 // client without an *http.Transport is left alone rather than silently
 // rebuilt: that is a caller doing something deliberate.
-func browserClient(base *http.Client) *http.Client {
+func browserClient(base *http.Client, httpOneOnly bool) *http.Client {
 	client := noRedirectHTTPClient(base)
 	transport, ok := transportOf(client)
 	if !ok {
@@ -62,7 +63,7 @@ func browserClient(base *http.Client) *http.Client {
 		dial = (&net.Dialer{}).DialContext
 	}
 	clone.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		return dialBrowserTLS(ctx, network, address, tlsConfig, dial)
+		return dialBrowserTLS(ctx, network, address, tlsConfig, dial, httpOneOnly)
 	}
 	// DialTLSContext owns the handshake now, and the fields below would only
 	// describe one that no longer happens.
@@ -92,6 +93,7 @@ func dialBrowserTLS(
 	network, address string,
 	base *tls.Config,
 	dial func(context.Context, string, string) (net.Conn, error),
+	httpOneOnly bool,
 ) (net.Conn, error) {
 	// The name to verify comes from the address, not from wherever the dialer
 	// actually connects: those differ on purpose when a caller redirects one
@@ -112,7 +114,7 @@ func dialBrowserTLS(
 		config.RootCAs = base.RootCAs
 		config.InsecureSkipVerify = base.InsecureSkipVerify
 	}
-	conn, err := browserHandshake(ctx, raw, config)
+	conn, err := browserHandshake(ctx, raw, config, httpOneOnly)
 	if err != nil {
 		_ = raw.Close()
 		return nil, err
@@ -120,32 +122,40 @@ func dialBrowserTLS(
 	return conn, nil
 }
 
-// browserHandshake performs Chrome's handshake, minus HTTP/2 in ALPN.
+// errHTTP2Negotiated says the far side chose h2, which this client cannot
+// speak: the WebSocket handshake is HTTP/1.1 semantics and stays that way,
+// because RFC 8441 is not what the library implements. The caller retries
+// without h2 on offer rather than letting the dial fail with "malformed HTTP
+// response" against the server's first SETTINGS frame.
+var errHTTP2Negotiated = errors.New("relay: server negotiated HTTP/2")
+
+// browserHandshake performs Chrome's handshake.
 //
-// The preset offers "h2, http/1.1" because that is what the browser offers,
-// and against our own relay it costs nothing: the relay speaks only HTTP/1.1
-// and picks it out of the list. Against anything else it is fatal. A CDN
-// selects h2, the connection is then an HTTP/2 one, and the WebSocket dial -
-// which is HTTP/1.1 semantics, and stays that way because RFC 8441 is not
-// what this library implements - reads the server's first SETTINGS frame as a
-// reply and gives up with "malformed HTTP response".
+// The ALPN offer is Chrome's - "h2, http/1.1" - and stays that way, because
+// what a middlebox reads in the clear is the ClientHello and almost nothing
+// else: the HTTP request, its headers and their order are all inside TLS. An
+// ALPN list of one is a deviation in the only structure that is actually
+// visible, so it is not the default.
 //
-// Found the first time this client was pointed at a Cloudflare front, which is
-// the only remaining idea for a user whose traffic dies to every host of ours
-// and to no large provider. Offering one protocol where Chrome offers two is a
-// deviation from the fingerprint, and it is taken deliberately: it is the
-// difference between being able to hide behind a CDN and not.
-func browserHandshake(ctx context.Context, raw net.Conn, config *utls.Config) (*utls.UConn, error) {
+// httpOneOnly drops h2 for the retry, and only for it. Our own relay speaks
+// HTTP/1.1 alone and picks it out of the full list, so the ordinary path never
+// deviates; a CDN in front of the relay selects h2 and forces the second
+// attempt. An earlier version of this made the narrow case the default, which
+// bought Cloudflare support and paid for it with every connection looking
+// unlike a browser.
+func browserHandshake(
+	ctx context.Context, raw net.Conn, config *utls.Config, httpOneOnly bool,
+) (*utls.UConn, error) {
 	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
 	if err != nil {
 		return nil, err
 	}
-	for _, extension := range spec.Extensions {
-		alpn, ok := extension.(*utls.ALPNExtension)
-		if !ok {
-			continue
+	if httpOneOnly {
+		for _, extension := range spec.Extensions {
+			if alpn, ok := extension.(*utls.ALPNExtension); ok {
+				alpn.AlpnProtocols = []string{"http/1.1"}
+			}
 		}
-		alpn.AlpnProtocols = []string{"http/1.1"}
 	}
 
 	conn := utls.UClient(raw, config, utls.HelloCustom)
@@ -154,6 +164,11 @@ func browserHandshake(ctx context.Context, raw net.Conn, config *utls.Config) (*
 	}
 	if err := conn.HandshakeContext(ctx); err != nil {
 		return nil, err
+	}
+	// Caught here rather than three layers up, where it surfaces as a parse
+	// error on binary that is not a reply at all.
+	if conn.ConnectionState().NegotiatedProtocol == "h2" {
+		return nil, errHTTP2Negotiated
 	}
 	return conn, nil
 }

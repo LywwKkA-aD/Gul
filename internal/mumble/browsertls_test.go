@@ -50,7 +50,7 @@ func TestOuterHandshakeLooksLikeABrowser(t *testing.T) {
 	t.Parallel()
 	server, hello := captureHello(t)
 
-	response, err := browserClient(server.Client()).Get(server.URL)
+	response, err := browserClient(server.Client(), false).Get(server.URL)
 	if err != nil {
 		t.Fatalf("get through the browser client: %v", err)
 	}
@@ -101,14 +101,14 @@ func TestBrowserClientKeepsTheCallersTransport(t *testing.T) {
 
 	// server.Client() trusts only the test certificate, so reaching it at all
 	// proves the roots survived.
-	if response, err := browserClient(server.Client()).Get(server.URL); err != nil {
+	if response, err := browserClient(server.Client(), false).Get(server.URL); err != nil {
 		t.Fatalf("the caller's roots were dropped: %v", err)
 	} else {
 		_ = response.Body.Close()
 	}
 
 	// And a client that trusts nothing of the sort must still fail.
-	if response, err := browserClient(&http.Client{}).Get(server.URL); err == nil {
+	if response, err := browserClient(&http.Client{}, false).Get(server.URL); err == nil {
 		_ = response.Body.Close()
 		t.Fatal("verification was skipped")
 	}

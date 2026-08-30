@@ -125,21 +125,18 @@ func dialWSS(
 	// visible outside the tunnel should look like the most ordinary thing on
 	// the web, and what a TLS-inspecting middlebox reads inside it should not
 	// say "Go program on an opaque connection".
-	client := browserClient(baseClient)
 	header := make(http.Header)
 	header.Set("Authorization", credential.Header())
 	applyBrowserHeaders(header, relayOrigin(address))
-	ws, response, err := websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
-		HTTPClient: client,
-		HTTPHeader: header,
-		// One name. Offering the older ones as insurance against a rollback
-		// would cost the property this contract exists for: three derived hex
-		// names in a WebSocket handshake is a shape ordinary browsing does not
-		// have, and it would be offered on every connection to hedge against
-		// an image nobody has deployed.
-		Subprotocols:    []string{names.Tunnel},
-		CompressionMode: websocket.CompressionDisabled,
-	})
+
+	// Chrome's ALPN first, which is what an unremarkable connection offers.
+	// A CDN in front of the relay answers it with h2, which this client
+	// cannot speak; the second attempt drops h2 and only that attempt
+	// deviates from the browser (browsertls.go).
+	ws, response, err := dialTunnelWebSocket(ctx, address, names, header, baseClient, false)
+	if errors.Is(err, errHTTP2Negotiated) {
+		ws, response, err = dialTunnelWebSocket(ctx, address, names, header, baseClient, true)
+	}
 	if err != nil {
 		if response != nil {
 			switch response.StatusCode {
@@ -189,6 +186,28 @@ func dialWSS(
 // send: the same authority, port and all. An address that cannot be parsed
 // yields an empty origin rather than an error - the dial that follows will
 // fail on its own and say why.
+// dialTunnelWebSocket opens the WebSocket, with or without h2 on offer.
+func dialTunnelWebSocket(
+	ctx context.Context,
+	address string,
+	names relayproto.Names,
+	header http.Header,
+	baseClient *http.Client,
+	httpOneOnly bool,
+) (*websocket.Conn, *http.Response, error) {
+	return websocket.Dial(ctx, address+names.Path, &websocket.DialOptions{
+		HTTPClient: browserClient(baseClient, httpOneOnly),
+		HTTPHeader: header,
+		// One name. Offering the older ones as insurance against a rollback
+		// would cost the property this contract exists for: three derived hex
+		// names in a WebSocket handshake is a shape ordinary browsing does not
+		// have, and it would be offered on every connection to hedge against
+		// an image nobody has deployed.
+		Subprotocols:    []string{names.Tunnel},
+		CompressionMode: websocket.CompressionDisabled,
+	})
+}
+
 func relayOrigin(address string) string {
 	parsed, err := url.Parse(address)
 	if err != nil || parsed.Host == "" {
