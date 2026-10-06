@@ -13,6 +13,7 @@ export const MUMBLE_DEFAULT_PORT = '64738';
 /** Ports the scheme already implies, so printing them adds nothing. */
 const SCHEME_DEFAULT_PORT: Record<string, string> = {
   livekit: '443',
+  'livekit+vless': '443',
   hysteria2: '443',
   hy2: '443',
   vless: '443',
@@ -71,7 +72,7 @@ export function serverHost(address: string): string {
   if (host === '') return value;
 
   const schemeName = scheme?.[1].toLowerCase();
-  const explicitTransport = schemeName === 'livekit' || schemeName === 'hy2' || schemeName === 'hysteria2' || schemeName === 'vless';
+  const explicitTransport = schemeName === 'livekit' || schemeName === 'livekit+vless' || schemeName === 'hy2' || schemeName === 'hysteria2' || schemeName === 'vless';
   const implied = schemeName ? SCHEME_DEFAULT_PORT[schemeName] : '443';
   const historicalDefault = !explicitTransport && port === MUMBLE_DEFAULT_PORT;
   const noise = port === '' || historicalDefault || port === implied;

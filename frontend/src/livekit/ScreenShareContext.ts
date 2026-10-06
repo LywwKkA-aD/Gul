@@ -5,6 +5,9 @@ interface ScreenShareContextValue {
   readonly controller: LiveKitController;
   readonly snapshot: LiveKitSnapshot;
   readonly canCapture: boolean;
+  readonly openBrowser?: () => Promise<void>;
+  readonly openingBrowser?: boolean;
+  readonly browserError?: string;
 }
 
 // A single authenticated channel owns both the bottom-bar control and its video

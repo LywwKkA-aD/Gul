@@ -10,6 +10,15 @@ export function ScreenSharePanel() {
   const screenShare = useScreenShare();
   const deafened = useGulStore((state) => state.deafened);
   if (!screenShare) return null;
+  if (screenShare.openBrowser) return (
+    <section aria-label="Демонстрации экрана" data-testid="screen-share-panel" className="shrink-0 border-b border-line-soft bg-bg-1 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-text-3">Демонстрации открываются в браузере. Голос остаётся в Gul.</p>
+        <Button variant="quiet" disabled={screenShare.openingBrowser} onClick={() => void screenShare.openBrowser?.()}>Открыть демонстрации</Button>
+      </div>
+      {screenShare.browserError && <p role="alert" className="text-xs text-danger">{screenShare.browserError}</p>}
+    </section>
+  );
   const { controller, snapshot } = screenShare;
   const videos = snapshot.tracks.filter((track) => track.kind === 'video');
   if (!videos.length && !snapshot.warning && !snapshot.error) return null;

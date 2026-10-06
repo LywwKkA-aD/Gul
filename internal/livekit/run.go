@@ -11,6 +11,9 @@ import (
 func (m *Manager) runConnection(r *connectionRun, username, password string) {
 	// Register before login so every exit closes the transport pool. Later
 	// logout defers run first, closing their final keep-alive connection too.
+	if r.gateway != nil {
+		defer r.gateway.Close()
+	}
 	defer r.broker.close()
 	login, err := r.broker.login(r.ctx, username, password)
 	if err != nil {
@@ -68,7 +71,18 @@ func (m *Manager) runConnection(r *connectionRun, username, password string) {
 				}
 			},
 		}
-		media, err = m.dial(r.ctx, login.Grant, hooks)
+		if r.gateway != nil {
+			err = r.gateway.BeginEpoch(epoch)
+			if err == nil {
+				var signalURL string
+				signalURL, err = r.gateway.SignalURL(epoch, login.Grant.Token)
+				if err == nil {
+					media, err = dialGatewayMedia(r.ctx, login.Grant, hooks, signalURL)
+				}
+			}
+		} else {
+			media, err = m.dial(r.ctx, login.Grant, hooks)
+		}
 		if !m.active(r) {
 			if media != nil {
 				media.close()
@@ -153,6 +167,7 @@ func validLogin(base string, login api.LoginResponse) bool {
 func (m *Manager) connected(r *connectionRun, media mediaConnection, login api.LoginResponse, reconnect <-chan struct{}) (api.LoginResponse, bool, error) {
 	poll := time.NewTicker(500 * time.Millisecond)
 	defer poll.Stop()
+	m.sampleLatency(r, media)
 	if err := m.poll(r, login); err != nil {
 		return login, false, err
 	}
@@ -168,6 +183,7 @@ func (m *Manager) connected(r *connectionRun, media mediaConnection, login api.L
 				return login, false, err
 			}
 		case <-poll.C:
+			m.sampleLatency(r, media)
 			if err := m.poll(r, login); err != nil {
 				failures++
 				if failures >= 3 {

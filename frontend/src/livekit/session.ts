@@ -1,10 +1,13 @@
 import type { ConnectionStatus } from '../state/types';
 import type { JoinGrant } from './controller';
+import { ScreenGrantError } from './connection.ts';
+import { realityBrokerOrigin, realityGateway } from './transport.ts';
 
 export interface ScreenSession {
   readonly epoch: number;
   readonly channelId: number;
   readonly serverOrigin: string;
+  readonly transport?: 'reality';
   readonly key: string;
 }
 
@@ -22,6 +25,8 @@ export function screenSession(status: ConnectionStatus): ScreenSession | null {
       selfChannel < 0 || selfChannel > 0xffffffff) return null;
   try {
     const server = new URL(status.server);
+    const broker = realityBrokerOrigin(server);
+    if (broker) return Object.freeze({ epoch, channelId: selfChannel, serverOrigin: broker, transport: 'reality', key: `reality:${broker}|${epoch}:${selfChannel}` });
     if (!cleanRoot(server) || (server.protocol !== 'https:' && server.origin !== 'http://127.0.0.1:8787')) return null;
     const serverOrigin = server.origin;
     return Object.freeze({ epoch, channelId: selfChannel, serverOrigin, key: `${serverOrigin}|${epoch}:${selfChannel}` });
@@ -47,17 +52,24 @@ export function sessionGrantProvider(
   request: (epoch: number, channelId: number) => Promise<ScreenGrant>,
 ): () => Promise<ScreenGrant> {
   return async () => {
+    let grant: ScreenGrant;
     try {
-      const grant = await request(session.epoch, session.channelId);
+      grant = await request(session.epoch, session.channelId);
+    } catch {
+      throw new ScreenGrantError('SCREEN_GRANT_REQUEST');
+    }
+    try {
       const endpoint = new URL(grant.url);
       if (grant.epoch !== session.epoch || grant.channelId !== session.channelId ||
           !grant.token || !grant.identity || !grant.ownerIdentity || !grant.room ||
           grant.identity === grant.ownerIdentity ||
-          !trustedEndpoint(endpoint, session.serverOrigin)) throw new Error('Invalid screen grant');
+          !(session.transport === 'reality'
+            ? grant.transport === 'reality' && grant.relayOnly === true && realityGateway(grant.url)
+            : !grant.transport && !grant.relayOnly && trustedEndpoint(endpoint, session.serverOrigin))) throw new Error('Invalid screen grant');
       return grant;
     } catch {
       // Wails/network exceptions may carry authentication response details.
-      throw new Error('Screen session is no longer available');
+      throw new ScreenGrantError('SCREEN_GRANT_INVALID');
     }
   };
 }

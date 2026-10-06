@@ -23,6 +23,12 @@ func Dial(ctx context.Context, cfg Config, target string) (net.Conn, error) {
 	return dialTarget(ctx, cfg, target)
 }
 
+// DialLiveKit permits only the server's HTTPS/TURN TLS multiplexer. It cannot
+// turn a client profile into an arbitrary VLESS proxy destination.
+func DialLiveKit(ctx context.Context, cfg Config) (net.Conn, error) {
+	return dialTarget(ctx, cfg, "127.0.0.1:443")
+}
+
 func dialTarget(ctx context.Context, cfg Config, target string) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

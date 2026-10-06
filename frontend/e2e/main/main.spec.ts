@@ -57,15 +57,68 @@ test('production MainScreen surfaces a grant failure and retry reaches the share
   let requests = 0;
   await page.route('**/test/screen-grant', (route) => {
     requests++;
-    return requests === 1 ? route.fulfill({ status: 503 }) : grant(route, 'full-main-retry');
+    return requests <= 3 ? route.fulfill({ status: 503 }) : grant(route, 'full-main-retry');
   });
   await page.goto('/e2e/main/index.html');
-  await expect(page.getByRole('alert')).toContainText('Не удалось подключить демонстрации');
+  await expect(page.getByRole('alert')).toContainText('SCREEN_GRANT_REQUEST');
+  expect(requests).toBe(3);
   await expect(page.getByTestId('screen-share-toggle')).toHaveAttribute('data-state', 'disconnected');
   await page.getByRole('button', { name: 'Повторить', exact: true }).click();
   await ready(page);
   await page.evaluate(() => window.gulMainScreenTest.churn(30));
   await ready(page);
+  expect(requests).toBe(4);
+  await expect(page.getByTestId('screen-share-panel')).toHaveCount(0);
+});
+
+test('production MainScreen uses an explicit browser fallback when embedded WebRTC is absent', async ({ page }) => {
+  let requests = 0;
+  let opened = 0;
+  await page.addInitScript(() => {
+    // webrtc-adapter can restore the standard constructor from Chrome's alias.
+    for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection']) {
+      Object.defineProperty(window, name, { value: undefined, configurable: true });
+    }
+  });
+  await page.route('**/test/screen-grant', (route) => { requests++; return route.fulfill({ status: 503 }); });
+  await page.route('**/test/open-screen-browser', (route) => {
+    opened++;
+    expect(route.request().postDataJSON()).toEqual({ epoch: 7, channelId: 0 });
+    return route.fulfill({ status: opened === 1 ? 503 : 204 });
+  });
+  await page.goto('/e2e/main/index.html');
+  await expect(page.getByTestId('screen-share-toggle')).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(opened).toBe(0);
+  await page.getByTestId('screen-share-toggle').click();
+  await expect.poll(() => opened).toBe(1);
+  await expect(page.getByRole('alert')).toContainText('Не удалось открыть браузер');
+  await page.getByTestId('screen-share-toggle').click();
+  await expect.poll(() => opened).toBe(2);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(requests).toBe(0);
+  expect(await page.evaluate(() => window.gulMainScreenTest.captures())).toEqual([]);
+});
+
+test('production MainScreen uses the same browser fallback when display capture alone is missing', async ({ page }) => {
+  let grants = 0;
+  await page.addInitScript(() => { navigator.mediaDevices.getDisplayMedia = undefined as never; });
+  await page.route('**/test/screen-grant', (route) => { grants++; return route.fulfill({ status: 503 }); });
+  await page.goto('/e2e/main/index.html');
+  await expect(page.getByTestId('screen-share-toggle')).toHaveAttribute('data-state', 'browser');
+  await expect(page.getByTestId('screen-share-toggle')).toBeEnabled();
+  expect(grants).toBe(0);
+});
+
+test('production MainScreen recovers a transient grant failure with one fresh automatic attempt', async ({ page }) => {
+  let requests = 0;
+  await page.route('**/test/screen-grant', (route) => {
+    requests++;
+    return requests === 1 ? route.fulfill({ status: 503 }) : grant(route, 'full-main-auto-retry');
+  });
+  await page.goto('/e2e/main/index.html');
+  await ready(page);
   expect(requests).toBe(2);
   await expect(page.getByTestId('screen-share-panel')).toHaveCount(0);
+  expect(await page.evaluate(() => window.gulMainScreenTest.captures())).toEqual([]);
 });

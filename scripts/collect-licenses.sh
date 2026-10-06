@@ -78,6 +78,14 @@ if [[ "$vendored_licenses" -eq 0 ]]; then
   exit 1
 fi
 
+# REALITY's adapted handshake is MPL-covered source compiled into the client.
+# Include the exact modified file, not only a link to the upstream version.
+reality_destination="$licenses_dir/vendored/internal/reality"
+mkdir -p "$reality_destination"
+cp "$repo_root/internal/reality/LICENSE" "$repo_root/internal/reality/VERSION" "$reality_destination/"
+cp "$repo_root/internal/reality/handshake.go" "$reality_destination/handshake.go.txt"
+printf '  internal/reality: MPL-2.0 adaptation and complete modified handshake source\n' >>"$manifest"
+
 {
   echo
   echo "Go toolchain and modules"

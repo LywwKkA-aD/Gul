@@ -59,8 +59,8 @@ type SelfTalkingState struct {
 	Talking bool `json:"talking"`
 }
 
-// ConnectionLatency is the smoothed TCP round-trip time of the active Mumble
-// session. Zero is valid on a local server; no event means no sample yet.
+// ConnectionLatency is the measured round-trip time of the active media
+// transport. Zero is valid on a local server; no event means no sample yet.
 type ConnectionLatency struct {
 	PingMS float64 `json:"pingMs"`
 }

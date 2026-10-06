@@ -43,6 +43,13 @@ test('a LiveKit address hides connection options and only its own default port',
   assert.equal(serverHost('livekit://[2001:db8::1]:443'), '[2001:db8::1]');
 });
 
+test('a tunneled LiveKit profile shows its server without exposing profile options', () => {
+  assert.equal(serverHost('livekit+vless://voice.example.com:443?security=reality&pbk=private-profile'), 'voice.example.com');
+  assert.equal(serverHost('livekit+vless://voice.example.com:8443?security=reality'), 'voice.example.com:8443');
+  assert.equal(serverHost('livekit+vless://voice.example.com:64738?security=reality'), 'voice.example.com:64738');
+  assert.equal(serverHost('livekit+vless://[2001:db8::1]:443?security=reality'), '[2001:db8::1]');
+});
+
 test('a relay URL loses its scheme and its path', () => {
   assert.equal(serverHost('wss://murmur.gulvox.com/mumble'), 'murmur.gulvox.com');
 });

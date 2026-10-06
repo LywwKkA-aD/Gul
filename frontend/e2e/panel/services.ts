@@ -13,6 +13,12 @@ export const ChannelsService = { Join: async () => {} };
 export const ConnectionService = { Disconnect: async () => {} };
 
 export const ScreenShareService = {
+  async OpenBrowser(epoch: number, channelId: number) {
+    const response = await fetch('/test/open-screen-browser', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epoch, channelId }),
+    });
+    if (!response.ok) throw new Error('Browser launch unavailable');
+  },
   async Grant(epoch: number, channelId: number): Promise<ScreenGrant> {
     const response = await fetch('/test/screen-grant', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

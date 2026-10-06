@@ -29,7 +29,9 @@ export function BottomBar() {
   // gate, so the mic button carries it: filled and lit while the key is held.
   const transmitting = useGulStore((s) => s.gateMode === 'ptt' && s.pttHeld && !s.muted);
   const screenShare = useScreenShare();
-  const shareControl = screenShareControl(screenShare?.snapshot ?? null, screenShare?.canCapture ?? false);
+  const shareControl = screenShare?.openBrowser
+    ? { label: screenShare.openingBrowser ? 'Открываем браузер…' : 'Демонстрации в браузере', active: false, disabled: !!screenShare.openingBrowser }
+    : screenShareControl(screenShare?.snapshot ?? null, screenShare?.canCapture ?? false);
 
   const connected = status.state === 'connected';
   const roundedPing = connected && pingMs !== null ? Math.max(0, Math.round(pingMs)) : null;
@@ -166,10 +168,10 @@ export function BottomBar() {
             active={shareControl.active}
             disabled={shareControl.disabled}
             aria-label={shareControl.label}
-            aria-busy={screenShare?.snapshot.pendingShare || undefined}
+            aria-busy={screenShare?.snapshot.pendingShare || screenShare?.openingBrowser || undefined}
             data-testid="screen-share-toggle"
-            data-state={screenShare?.snapshot.status ?? 'connecting'}
-            onClick={() => { if (screenShare) void toggleScreenShare(screenShare.controller); }}
+            data-state={screenShare?.openBrowser ? 'browser' : screenShare?.snapshot.status ?? 'connecting'}
+            onClick={() => { if (screenShare) void (screenShare.openBrowser ? screenShare.openBrowser() : toggleScreenShare(screenShare.controller)); }}
           >
             <MonitorIcon size={16} weight={shareControl.active ? 'fill' : 'regular'}
               className={shareControl.active ? 'text-[var(--speak)]' : undefined} />

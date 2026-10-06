@@ -38,7 +38,7 @@ store.getState().setStatus(status);
 store.getState().setTree(tree(0));
 
 const captures: MediaStream[] = [];
-navigator.mediaDevices.getDisplayMedia = async () => {
+if (typeof navigator.mediaDevices.getDisplayMedia === 'function') navigator.mediaDevices.getDisplayMedia = async () => {
   const canvas = document.createElement('canvas');
   canvas.width = 640;
   canvas.height = 360;

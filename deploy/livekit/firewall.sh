@@ -9,7 +9,7 @@ for tool in iptables ip6tables; do
 :GUL_LIVEKIT_INPUT - [0:0]
 -F GUL_LIVEKIT_INPUT
 -A GUL_LIVEKIT_INPUT -i lo -j RETURN
--A GUL_LIVEKIT_INPUT -p tcp -m multiport --dports 5349,7880,8080,8787 -j REJECT
+-A GUL_LIVEKIT_INPUT -p tcp -m multiport --dports 5349,7880,8080,8443,8787,9443 -j REJECT
 -A GUL_LIVEKIT_INPUT -j RETURN
 COMMIT
 RULES

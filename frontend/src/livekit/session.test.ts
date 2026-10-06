@@ -45,6 +45,7 @@ test('stale, malformed or credential-bearing grants are rejected without exposin
     const provider = sessionGrantProvider(screenSession(connected), async () => ({ ...validGrant, ...patch }));
     await assert.rejects(provider(), (error) => {
       assert.equal(error.message, 'Screen session is no longer available');
+      assert.equal(error.code, 'SCREEN_GRANT_INVALID');
       assert.ok(!error.message.includes('private-token'));
       return true;
     });
@@ -53,7 +54,7 @@ test('stale, malformed or credential-bearing grants are rejected without exposin
 
 test('broker errors cannot leak into screen session errors', async () => {
   const provider = sessionGrantProvider(screenSession(connected), async () => { throw new Error('private-token'); });
-  await assert.rejects(provider(), { message: 'Screen session is no longer available' });
+  await assert.rejects(provider(), { message: 'Screen session is no longer available', code: 'SCREEN_GRANT_REQUEST' });
 });
 
 test('remote screen grants must stay on authenticated broker authority and use WSS', async () => {
@@ -84,4 +85,17 @@ test('invalid broker origins cannot create a screen session and a server switch 
     assert.equal(screenSession({ ...connected, server }), null);
   }
   assert.notEqual(screenSession(connected).key, screenSession({ ...connected, server: 'https://other.example' }).key);
+});
+
+test('REALITY profiles permit only explicitly tagged local capability gateways with forced relay', async () => {
+  const profile = 'livekit+vless://gul.example:8443?security=reality&flow=none&type=tcp&sni=cover.example&pbk=' + 'A'.repeat(43) + '&sid=1234';
+  const session = screenSession({ ...connected, server: profile });
+  assert.equal(session.serverOrigin, 'https://gul.example');
+  assert.equal(session.transport, 'reality');
+  const gateway = { ...validGrant, url: `ws://127.0.0.1:41321/${'a'.repeat(64)}`, transport: 'reality', relayOnly: true };
+  assert.equal((await sessionGrantProvider(session, async () => gateway)()).url, gateway.url);
+  for (const patch of [{ transport: '' }, { relayOnly: false }, { url: gateway.url.replace('127.0.0.1', 'localhost') }, { url: 'ws://127.0.0.1:41321/short' }, { url: `${gateway.url}?token=private` }]) {
+    await assert.rejects(sessionGrantProvider(session, async () => ({ ...gateway, ...patch }))());
+  }
+  await assert.rejects(sessionGrantProvider(screenSession(connected), async () => gateway)());
 });

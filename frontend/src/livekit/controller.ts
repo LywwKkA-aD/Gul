@@ -2,8 +2,10 @@ import {
   LogLevel, Room, RoomEvent, Track, setLogLevel,
   type LocalAudioTrack, type LocalVideoTrack, type RemoteTrackPublication, type RoomEventCallbacks,
 } from 'livekit-client';
+import { connectionFailure, connectionMessage, runtimeIssue, waitForRetry, type ConnectionStage, type RuntimeIssue } from './connection.ts';
+import { realityGateway } from './transport.ts';
 
-export interface JoinGrant { url: string; token: string; identity: string; room: string }
+export interface JoinGrant { url: string; token: string; identity: string; room: string; transport?: string; relayOnly?: boolean }
 export interface ScreenCapture {
   tracks: (LocalAudioTrack | LocalVideoTrack)[];
   cleanup?: () => void;
@@ -42,6 +44,10 @@ interface Dependencies {
   /** Opt-in transport verification; ICE servers still come from the authenticated SFU. */
   forceRelay?: boolean;
   stopSharingOnReconnect?: boolean;
+  /** At most two retries, each with a fresh session grant and Room. */
+  retryJoin?: boolean;
+  runtimeCheck?: () => RuntimeIssue | undefined;
+  waitForRetry?: typeof waitForRetry;
 }
 
 const emptySnapshot = (): LiveKitSnapshot => Object.freeze({
@@ -61,9 +67,14 @@ export class LiveKitController {
   private readonly allowServerIce: boolean;
   private readonly forceRelay: boolean;
   private readonly stopSharingOnReconnect: boolean;
+  private readonly retryJoin: boolean;
+  private readonly runtimeCheck: () => RuntimeIssue | undefined;
+  private readonly waitForRetry: typeof waitForRetry;
   private readonly listeners = new Set<() => void>();
   private snapshot = emptySnapshot();
   private room?: Room;
+  private joiningRoom?: Room;
+  private joinAbort?: AbortController;
   private unbindRoom = () => {};
   private connectionGeneration = 0;
   private captureGeneration = 0;
@@ -75,10 +86,15 @@ export class LiveKitController {
     this.allowServerIce = dependencies.allowServerIce === true;
     this.forceRelay = dependencies.forceRelay === true;
     this.stopSharingOnReconnect = dependencies.stopSharingOnReconnect === true;
+    this.retryJoin = dependencies.retryJoin === true;
+    this.runtimeCheck = dependencies.runtimeCheck ?? runtimeIssue;
+    this.waitForRetry = dependencies.waitForRetry ?? waitForRetry;
     this.roomFactory = dependencies.roomFactory ?? (() => new Room({
       adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true,
     }));
-    setLogLevel(LogLevel.error);
+    // SDK exception contexts may contain signaling credentials. Only our
+    // allowlisted stage/reason codes reach the UI.
+    setLogLevel(LogLevel.silent);
   }
 
   getSnapshot = (): LiveKitSnapshot => this.snapshot;
@@ -98,44 +114,71 @@ export class LiveKitController {
 
   join = async (identity: string): Promise<void> => {
     const generation = ++this.connectionGeneration;
+    this.joinAbort?.abort();
+    const abort = new AbortController();
+    this.joinAbort = abort;
     const previous = this.room;
     this.room = undefined;
+    this.joiningRoom = undefined;
     this.unbindRoom();
     this.unbindRoom = () => {};
     const stopped = this.stopShare();
     this.update({ ...emptySnapshot(), identity: identity.trim(), status: 'connecting' });
     await Promise.all([stopped, disconnect(previous)]);
     if (generation !== this.connectionGeneration) return;
-    let room: Room | undefined;
-    try {
-      const grant = await this.grantProvider(identity.trim());
-      if (generation !== this.connectionGeneration) return;
-      room = this.roomFactory();
-      this.room = room;
-      this.bind(room);
-      const rtcConfig: RTCConfiguration = {};
-      if (!this.allowServerIce || loopbackEndpoint(grant.url)) rtcConfig.iceServers = [];
-      if (this.forceRelay) rtcConfig.iceTransportPolicy = 'relay';
-      await room.connect(grant.url, grant.token, {
-        autoSubscribe: false,
-        ...(Object.keys(rtcConfig).length ? { rtcConfig } : {}),
-      });
-      if (generation !== this.connectionGeneration || this.room !== room) {
+    const issue = this.runtimeCheck();
+    if (issue) {
+      this.update({ ...emptySnapshot(), error: connectionMessage(issue) });
+      return;
+    }
+    for (let attempt = 0; attempt <= (this.retryJoin ? 2 : 0); attempt++) {
+      let room: Room | undefined;
+      let stage: ConnectionStage = 'grant';
+      try {
+        const grant = await this.grantProvider(identity.trim());
+        if (generation !== this.connectionGeneration) return;
+        stage = 'runtime';
+        room = this.roomFactory();
+        this.room = room;
+        this.joiningRoom = room;
+        this.bind(room);
+        const rtcConfig: RTCConfiguration = {};
+        const tunneled = grant.transport === 'reality' && grant.relayOnly === true && realityGateway(grant.url);
+        if (!this.allowServerIce || (loopbackEndpoint(grant.url) && !tunneled)) rtcConfig.iceServers = [];
+        if (this.forceRelay || tunneled) rtcConfig.iceTransportPolicy = 'relay';
+        stage = 'connect';
+        await room.connect(grant.url, grant.token, {
+          autoSubscribe: false,
+          ...(Object.keys(rtcConfig).length ? { rtcConfig } : {}),
+        });
+        if (generation !== this.connectionGeneration || this.room !== room) {
+          await disconnect(room);
+          return;
+        }
+        this.joiningRoom = undefined;
+        this.update({ status: 'connected', identity: grant.identity, error: '' });
+        this.updateParticipants(room);
+        room.remoteParticipants.forEach((participant) => {
+          participant.trackPublications.forEach(this.subscribeScreen);
+        });
+        return;
+      } catch (error) {
+        if (room && this.room === room) {
+          this.unbindRoom();
+          this.unbindRoom = () => {};
+          this.room = undefined;
+          this.joiningRoom = undefined;
+        }
         await disconnect(room);
+        if (generation !== this.connectionGeneration) return;
+        const failure = connectionFailure(stage, error);
+        if (this.retryJoin && attempt < 2 && failure.retryable) {
+          if (!await this.waitForRetry(attempt ? 1500 : 500, abort.signal) || generation !== this.connectionGeneration) return;
+          continue;
+        }
+        this.update({ ...emptySnapshot(), identity: identity.trim(), error: connectionMessage(failure.code) });
         return;
       }
-      this.update({ status: 'connected', identity: grant.identity, error: '' });
-      this.updateParticipants(room);
-      room.remoteParticipants.forEach((participant) => {
-        participant.trackPublications.forEach(this.subscribeScreen);
-      });
-    } catch {
-      await disconnect(room);
-      if (generation !== this.connectionGeneration) return;
-      this.unbindRoom();
-      this.unbindRoom = () => {};
-      this.room = undefined;
-      this.update({ ...emptySnapshot(), identity: identity.trim(), error: 'Не удалось подключить демонстрации к каналу.' });
     }
   };
 
@@ -229,8 +272,11 @@ export class LiveKitController {
 
   leave = async (): Promise<void> => {
     ++this.connectionGeneration;
+    this.joinAbort?.abort();
+    this.joinAbort = undefined;
     const room = this.room;
     this.room = undefined;
+    this.joiningRoom = undefined;
     this.unbindRoom();
     this.unbindRoom = () => {};
     const stopped = this.stopShare();
@@ -303,6 +349,9 @@ export class LiveKitController {
     });
     on(RoomEvent.Disconnected, () => {
       if (this.room !== room) return;
+      // connect() rejects with the useful reason. Handling its disconnect event
+      // as an established-session loss would cancel the bounded retry loop.
+      if (this.joiningRoom === room) return;
       void this.leave();
       this.update({ error: 'Соединение с демонстрациями потеряно.' });
     });

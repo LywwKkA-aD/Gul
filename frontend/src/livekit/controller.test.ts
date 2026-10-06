@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { RoomEvent, Track } from 'livekit-client';
+import { ConnectionError, RoomEvent, Track } from 'livekit-client';
 import { LiveKitController } from './controller.ts';
+import { ScreenGrantError } from './connection.ts';
 
 function deferred() {
   let resolve, reject;
@@ -61,13 +62,105 @@ test('relay-only remote verification preserves server-issued ICE and keeps local
   assert.deepEqual(local.room.connections[0][2].rtcConfig, { iceServers: [], iceTransportPolicy: 'relay' });
   await local.controller.leave();
 });
+
+test('authenticated REALITY gateway preserves rewritten server ICE and forces relay on loopback', async () => {
+  const { controller, room } = setup(async () => ({ ...grant, url: `ws://127.0.0.1:41900/${'a'.repeat(64)}`, transport: 'reality', relayOnly: true }), { allowServerIce: true });
+  await controller.join('alice');
+  assert.deepEqual(room.connections[0][2].rtcConfig, { iceTransportPolicy: 'relay' });
+  await controller.leave();
+});
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function setup(provider = async () => grant, options = {}) {
   const room = new FakeRoom();
-  const controller = new LiveKitController(provider, { ...options, roomFactory: () => room });
+  const controller = new LiveKitController(provider, { runtimeCheck: () => undefined, ...options, roomFactory: () => room });
   return { room, controller };
 }
 const tracks = () => [new FakeTrack(Track.Kind.Video, 'screen'), new FakeTrack(Track.Kind.Audio, 'sound')];
+
+test('unsupported embedded RTC reports its local cause before requesting a grant', async () => {
+  let grants = 0;
+  const { room, controller } = setup(async () => { grants++; return grant; }, {
+    retryJoin: true, runtimeCheck: () => 'SCREEN_RTC_UNAVAILABLE',
+  });
+  await controller.join('alice');
+  assert.equal(grants, 0);
+  assert.equal(room.connections.length, 0);
+  assert.match(controller.getSnapshot().error, /SCREEN_RTC_UNAVAILABLE/);
+});
+
+test('transient connection failure retries with a fresh grant and room despite SDK disconnect events', async () => {
+  let grants = 0;
+  const rooms = [];
+  const controller = new LiveKitController(async () => ({ ...grant, token: `private-${++grants}` }), {
+    runtimeCheck: () => undefined, retryJoin: true, waitForRetry: async () => true,
+    roomFactory: () => {
+      const room = new FakeRoom();
+      rooms.push(room);
+      if (rooms.length === 1) room.connect = async () => {
+        room.emit(RoomEvent.Disconnected);
+        throw ConnectionError.timeout('private-token');
+      };
+      return room;
+    },
+  });
+  await controller.join('alice');
+  assert.equal(grants, 2);
+  assert.equal(rooms.length, 2);
+  assert.equal(rooms[0].disconnects, 1);
+  assert.equal(rooms[1].connections[0][1], 'private-2');
+  assert.equal(controller.getSnapshot().status, 'connected');
+  assert.equal(controller.getSnapshot().error, '');
+  await controller.leave();
+});
+
+test('retries stop after three fresh grants and preserve a safe actionable failure code', async () => {
+  let grants = 0;
+  const { controller, room } = setup(async () => { grants++; return grant; }, {
+    retryJoin: true, waitForRetry: async () => true,
+  });
+  room.connect = async () => { throw ConnectionError.websocket('private-token'); };
+  await controller.join('alice');
+  assert.equal(grants, 3);
+  assert.match(controller.getSnapshot().error, /SCREEN_SIGNAL/);
+  assert.ok(!JSON.stringify(controller.getSnapshot()).includes('private-token'));
+  assert.equal(controller.getSnapshot().status, 'disconnected');
+});
+
+test('leave cancels backoff and cannot request another grant for the old channel', async () => {
+  let grants = 0;
+  let retrySignal;
+  const backoff = deferred();
+  const { controller } = setup(async () => { grants++; throw new Error('private-token'); }, {
+    retryJoin: true, waitForRetry: (_delay, signal) => { retrySignal = signal; return backoff.promise; },
+  });
+  const joining = controller.join('alice');
+  await tick();
+  await controller.leave();
+  assert.equal(retrySignal.aborted, true);
+  backoff.resolve(true);
+  await joining;
+  assert.equal(grants, 1);
+  assert.equal(controller.getSnapshot().error, '');
+});
+
+test('invalid grants and unsupported runtime construction fail once with distinct codes', async () => {
+  let grants = 0;
+  const invalid = setup(async () => { grants++; throw new ScreenGrantError('SCREEN_GRANT_INVALID'); }, {
+    retryJoin: true, waitForRetry: async () => true,
+  });
+  await invalid.controller.join('alice');
+  assert.equal(grants, 1);
+  assert.match(invalid.controller.getSnapshot().error, /SCREEN_GRANT_INVALID/);
+  let rooms = 0;
+  const runtime = new LiveKitController(async () => grant, {
+    runtimeCheck: () => undefined, retryJoin: true, waitForRetry: async () => true,
+    roomFactory: () => { rooms++; throw new Error('private-token'); },
+  });
+  await runtime.join('alice');
+  assert.equal(rooms, 1);
+  assert.match(runtime.getSnapshot().error, /SCREEN_RUNTIME/);
+  assert.ok(!runtime.getSnapshot().error.includes('private-token'));
+});
 
 test('leave cancels a pending token request without opening a room', async () => {
   const token = deferred();

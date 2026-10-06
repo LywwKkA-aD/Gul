@@ -9,13 +9,17 @@ require (
 	github.com/apernet/quic-go v0.63.1-0.20261004180939-a10df75c260c
 	github.com/coder/websocket v1.8.15
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/livekit/protocol v1.49.0
 	github.com/livekit/server-sdk-go/v2 v2.18.1
+	github.com/pion/logging v0.2.4
 	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.2
+	github.com/pion/turn/v5 v5.0.9
 	github.com/pion/webrtc/v4 v4.2.15
 	github.com/quic-go/quic-go v0.61.0
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af
+	github.com/twitchtv/twirp v8.1.3+incompatible
 	github.com/wailsapp/wails/v3 v3.0.0-beta.11
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 	golang.org/x/crypto v0.54.0
@@ -48,7 +52,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/cel-go v0.28.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/jxskiss/base62 v1.1.0 // indirect
@@ -69,7 +72,6 @@ require (
 	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/ice/v4 v4.2.7 // indirect
 	github.com/pion/interceptor v0.1.45 // indirect
-	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
@@ -78,7 +80,6 @@ require (
 	github.com/pion/srtp/v3 v3.0.11 // indirect
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
-	github.com/pion/turn/v5 v5.0.9 // indirect
 	github.com/pires/go-proxyproto v0.11.0 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -89,7 +90,6 @@ require (
 	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect

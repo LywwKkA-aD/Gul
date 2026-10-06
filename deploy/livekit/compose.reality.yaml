@@ -1,0 +1,23 @@
+# Apply after compose.yaml; relative paths resolve against that base file.
+services:
+  reality:
+    image: ${GUL_LIVEKIT_REALITY_IMAGE:?Set the verified local Xray image digest}
+    pull_policy: never
+    restart: unless-stopped
+    # Xray binds loopback 8443 only; HAProxy owns the public listener on 443.
+    network_mode: host
+    user: "0:0"
+    environment:
+      GOMEMLIMIT: 96MiB
+    mem_limit: 128m
+    pids_limit: 128
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./private/reality/server.json:/etc/xray/server.json:ro
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"

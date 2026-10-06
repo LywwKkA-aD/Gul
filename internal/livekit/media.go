@@ -31,6 +31,7 @@ type mediaConnection interface {
 	write(*rtp.Packet) error
 	chat(string) error
 	mute(bool)
+	latency() (float64, bool)
 	close()
 }
 type mediaDial func(context.Context, api.Grant, mediaHooks) (mediaConnection, error)
@@ -85,6 +86,19 @@ func dialMediaWithPolicy(ctx context.Context, grant api.Grant, hooks mediaHooks,
 		return nil, ErrBroker
 	}
 	grant.URL, _ = mediaAddress(grant.URL)
+	return dialMediaEndpoint(ctx, grant, hooks, policy, grant.URL)
+}
+
+// The caller has already bound the original public grant to its broker. Only
+// a per-session gateway capability may replace that verified signaling URL.
+func dialGatewayMedia(ctx context.Context, grant api.Grant, hooks mediaHooks, signalURL string) (mediaConnection, error) {
+	if !validGrant(grant, false) {
+		return nil, ErrBroker
+	}
+	return dialMediaEndpoint(ctx, grant, hooks, webrtc.ICETransportPolicyRelay, signalURL)
+}
+
+func dialMediaEndpoint(ctx context.Context, grant api.Grant, hooks mediaHooks, policy webrtc.ICETransportPolicy, endpoint string) (mediaConnection, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	c := &sdkMedia{ctx: ctx, cancel: cancel, grant: grant, hooks: hooks, streams: make(map[uint32]*remoteStream)}
 	cb := lksdk.NewRoomCallback()
@@ -107,7 +121,7 @@ func dialMediaWithPolicy(ctx context.Context, grant api.Grant, hooks mediaHooks,
 	}
 	c.room = lksdk.NewRoom(cb)
 	c.room.SetLogger(lklog.GetDiscardLogger())
-	if err := c.room.JoinWithContextAndToken(ctx, grant.URL, grant.Token, mediaConnectOptions(grant.URL, policy)...); err != nil {
+	if err := c.room.JoinWithContextAndToken(ctx, endpoint, grant.Token, mediaConnectOptions(endpoint, policy)...); err != nil {
 		c.close()
 		return nil, ErrMedia
 	}

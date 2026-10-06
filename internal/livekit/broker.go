@@ -15,7 +15,7 @@ import (
 
 var (
 	ErrNotConnected   = errors.New("LiveKit: нет активного подключения")
-	ErrInvalidAddress = errors.New("LiveKit: укажите HTTPS-адрес сервера или http://127.0.0.1:8787 для локального стенда")
+	ErrInvalidAddress = errors.New("LiveKit: укажите HTTPS-адрес, профиль livekit+vless:// или http://127.0.0.1:8787 для локального стенда")
 	ErrBroker         = errors.New("LiveKit: сервер не ответил корректно")
 	ErrAuthentication = errors.New("LiveKit: имя или пароль не приняты сервером")
 	ErrStaleSession   = errors.New("LiveKit: комната изменилась; повторите действие")

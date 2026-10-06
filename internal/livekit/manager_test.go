@@ -134,6 +134,8 @@ type fakeMedia struct {
 	packets   []*rtp.Packet
 	muted     bool
 	chatCount int
+	pingMS    float64
+	pingValid bool
 }
 
 func (f *fakeMedia) write(p *rtp.Packet) error {
@@ -145,6 +147,11 @@ func (f *fakeMedia) write(p *rtp.Packet) error {
 func (f *fakeMedia) chat(string) error { f.mu.Lock(); f.chatCount++; f.mu.Unlock(); return nil }
 func (f *fakeMedia) mute(v bool)       { f.mu.Lock(); f.muted = v; f.mu.Unlock() }
 func (f *fakeMedia) close()            { f.mu.Lock(); f.closed++; f.mu.Unlock() }
+func (f *fakeMedia) latency() (float64, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pingMS, f.pingValid
+}
 func waitFor(t *testing.T, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

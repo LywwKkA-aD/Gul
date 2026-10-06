@@ -1,7 +1,7 @@
 # Local LiveKit client and screen lab
 
 This lab runs only on the developer's computer. It does not configure a VPS,
-change the deployed Mumble server, or use the current REALITY connection. It is not a deployment
+change the deployed LiveKit server, or use its REALITY connection. It is not a deployment
 configuration: the token endpoint trusts local processes and grants access to
 one local room without user authentication.
 
@@ -10,7 +10,8 @@ one local room without user authentication.
 The normal client entry point now uses LiveKit for voice, channels and chat.
 Its existing native audio engine handles microphone processing, PTT, devices,
 individual volumes/mutes, and playback including screen audio. The webview handles
-screen capture/publication and remote video only; it never opens a microphone.
+screen capture/publication and remote video where supported; otherwise the
+compact screen button opens the browser companion. Neither opens a microphone.
 
 Start the local server as below, then on macOS:
 
@@ -39,9 +40,18 @@ feedback: source/application audio isolation still needs platform testing.
 No reconnect automatically resumes screen capture. Chat history is in memory,
 and only currently joined participants receive a message.
 
-This is still a loopback-only prototype: remote addresses are rejected. The old
-Mumble/Hysteria/REALITY implementations remain as legacy source and regression
-tests, but are absent from the current GUI runtime dependency graph.
+The desktop also accepts remote HTTPS and `livekit+vless://` REALITY profiles.
+Mumble and Hysteria remain as legacy source and regression tests, outside the
+current GUI runtime dependency graph. The shared REALITY transport is active
+when the new LiveKit profile is selected. The isolated server below remains
+local-only.
+
+On Ubuntu 24.04, stock WebKitGTK has no WebRTC constructors even when its runtime
+setting is enabled. Installing additional GStreamer plugins did not change
+that result. `scripts/probe-linux-webrtc.py` reproduces the capability check.
+The browser companion uses a one-use loopback handoff, keeps grants in memory,
+and stops on native channel changes, disconnects, or lost control connection.
+Voice and screen-audio playback remain in the native client.
 
 ## Run
 

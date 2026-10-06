@@ -12,6 +12,8 @@ import (
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	api "github.com/LywwKkA-aD/Gul/internal/livekitapi"
+	"github.com/LywwKkA-aD/Gul/internal/livekittransport"
+	"github.com/LywwKkA-aD/Gul/internal/reality"
 	"github.com/LywwKkA-aD/Gul/internal/session"
 )
 
@@ -23,6 +25,7 @@ type connectionRun struct {
 	wake     chan struct{}
 	broker   brokerAPI
 	address  string
+	gateway  *livekittransport.Gateway
 }
 type command struct {
 	channel     *uint32
@@ -49,6 +52,7 @@ type Manager struct {
 	audioAck          api.AudioState
 	brokerFactory     func(string) brokerAPI
 	dial              mediaDial
+	gatewayFactory    func(reality.LiveKitProfile, string) (*livekittransport.Gateway, error)
 	voice             *voiceIO
 }
 
@@ -59,6 +63,9 @@ func NewManager(log *slog.Logger, cb session.Callbacks) *Manager {
 		log = slog.Default()
 	}
 	m := &Manager{log: log, cb: cb, brokerFactory: func(base string) brokerAPI { return newBroker(base) }, dial: dialMedia, status: domain.ConnectionStatus{State: domain.StateDisconnected}}
+	m.gatewayFactory = func(p reality.LiveKitProfile, password string) (*livekittransport.Gateway, error) {
+		return livekittransport.New(p, password, livekittransport.Options{})
+	}
 	m.voice = newVoiceIO(m)
 	return m
 }
@@ -76,11 +83,29 @@ func (m *Manager) Connect(address, username, password string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &connectionRun{ctx: ctx, cancel: cancel, done: make(chan struct{}), commands: make(chan command, 16), wake: make(chan struct{}, 1), broker: m.brokerFactory(base), address: base}
+	if strings.HasPrefix(base, "livekit+vless:") {
+		profile, _ := reality.ParseLiveKitProfile(base)
+		r.gateway, err = m.gatewayFactory(profile, password)
+		if err != nil {
+			cancel()
+			r.broker.close()
+			m.detachedError(ErrMedia)
+			return
+		}
+		r.broker.close()
+		b := newBroker(profile.Origin)
+		b.client.Transport = r.gateway.Transport()
+		r.broker = b
+	}
+
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		cancel()
 		r.broker.close()
+		if r.gateway != nil {
+			r.gateway.Close()
+		}
 		return
 	}
 	if m.run != nil {
@@ -194,36 +219,6 @@ func (m *Manager) SelfAudioSettled(muted, deafened bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.audioGeneration == m.audioAcknowledged && m.audioAck == m.desired && m.audioAck == (api.AudioState{Muted: muted, Deafened: deafened})
-}
-
-func (m *Manager) ScreenGrant(ctx context.Context, epoch uint64, channelID uint32) (domain.ScreenGrant, error) {
-	m.mu.Lock()
-	r := m.run
-	login := m.login
-	valid := r != nil && m.status.State == domain.StateConnected && m.epoch == epoch && m.status.Epoch == epoch && login.ChannelID == channelID
-	m.mu.Unlock()
-	if !valid {
-		return domain.ScreenGrant{}, ErrStaleSession
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(r.ctx, cancel)
-	defer stop()
-	grant, err := r.broker.screen(ctx, login.SessionToken, api.ScreenRequest{ChannelID: channelID, Revision: login.Revision})
-	m.mu.Lock()
-	valid = m.run == r && m.status.State == domain.StateConnected && m.epoch == epoch && m.status.Epoch == epoch && m.login.ChannelID == channelID && m.login.Revision == login.Revision
-	m.mu.Unlock()
-	if !valid {
-		return domain.ScreenGrant{}, ErrStaleSession
-	}
-	if err != nil {
-		return domain.ScreenGrant{}, safeError(err)
-	}
-	if !validGrantForBroker(r.address, grant, true) || grant.Revision != login.Revision || grant.SessionID != login.SessionID || grant.ChannelID != channelID {
-		return domain.ScreenGrant{}, ErrBroker
-	}
-	grant.URL, _ = mediaAddress(grant.URL)
-	return domain.ScreenGrant{URL: grant.URL, Token: grant.Token, Identity: grant.Identity, Room: grant.Room, OwnerIdentity: grant.OwnerIdentity, ChannelID: channelID, Epoch: epoch}, nil
 }
 
 func (m *Manager) setStatus(r *connectionRun, state domain.ConnState, message string) bool {

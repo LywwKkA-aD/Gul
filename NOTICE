@@ -40,6 +40,13 @@ The LiveKit transport uses Pion WebRTC and its RTP, RTCP, ICE, DTLS, SRTP,
 SCTP and data-channel dependencies, licensed MIT by the Pion community.
 Their exact versions and license texts are included in the generated bundle.
 
+The optional built-in VLESS/REALITY transport includes an adapted Xray-core
+v26.3.27 REALITY handshake (MPL-2.0, Xray contributors). Its provenance,
+license and complete modified source accompany the application under
+THIRD_PARTY_LICENSES/vendored/internal/reality. The REALITY and uTLS module
+licenses are included in the Go module bundle. Xray runs separately on the
+server and is not embedded as an executable in the desktop application.
+
 Other Go runtime dependencies include the Go standard library, Wails v3,
 adrg/xdg, godbus/dbus, go-ole, golang.org/x/net, golang.org/x/sys,
 google.golang.org/protobuf and, on

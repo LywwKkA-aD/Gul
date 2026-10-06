@@ -124,3 +124,122 @@ HAProxy access logs выключены: URL сигналинга может со
 их без редактирования query/headers. TURN/TLS помогает при недоступном UDP,
 но не гарантирует прохождение DPI или блокировки IP; проверяйте реальное
 подключение из нужной сети. Захват игрового/системного звука зависит от ОС.
+
+## Дополнительный транспорт VLESS + REALITY
+
+`prepare_reality.py` добавляет транспорт к существующему LiveKit, сохраняя
+обычный `https://IP`, сертификат, API credentials и комнаты. Голос и демонстрации
+остаются LiveKit. Встроенный клиент REALITY устанавливает внешний TCP 443;
+внутри него проходят прежние HTTPS/WSS и TURN/TLS с проверкой сертификата IP.
+Профиль имеет вид `livekit+vless://IP?flow=none&pbk=KEY&security=reality&sid=HEX&sni=DOMAIN&type=tcp`.
+Пароль вводится отдельно. VLESS UUIDv8 выводится из исходных байт случайного
+пароля тем же domain-separated SHA-256, что и в `internal/reality`; слабый пароль
+эта схема не усиливает.
+
+HAProxy сначала читает только TLS ClientHello. Указанный REALITY SNI направляется
+в Xray на `127.0.0.1:8443`; остальные HTTPS/TURN соединения — в TLS frontend на
+`127.0.0.1:9443`. На этой ветке PROXY v2 сохраняет IP прямого клиента. Xray
+разрешает только VLESS TCP к `127.0.0.1:443` и дополнительно закрепляет этот адрес
+через `freedom.redirect`; остальные IP, порты и UDP блокируются. Внутренний TLS
+по IP не передаёт camouflage SNI, поэтому возвращается в обычную TLS-ветку,
+а не зацикливается в REALITY. У клиентов REALITY broker видит loopback как
+источник, поэтому они разделяют его лимит попыток входа с одного IP.
+
+Используется закреплённый официальный Xray **v26.3.27**:
+
+```sh
+xray_dir=$(mktemp -d)
+curl --fail --location --output "$xray_dir/Xray-linux-64.zip" \
+  https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+(cd "$xray_dir" && printf '%s  %s\n' \
+  23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae \
+  Xray-linux-64.zip | sha256sum --check -)
+unzip -q "$xray_dir/Xray-linux-64.zip" xray LICENSE -d "$xray_dir"
+chmod 755 "$xray_dir/xray"
+docker build -f deploy/livekit/Containerfile.reality \
+  -t gul-livekit-xray:26.3.27 "$xray_dir"
+```
+
+Сохраните immutable image ID в приватном `/opt/gul-livekit/.env` как
+`GUL_LIVEKIT_REALITY_IMAGE=sha256:...`; значение получает
+`docker image inspect gul-livekit-xray:26.3.27 --format '{{.Id}}'`.
+Compose не скачивает изменившийся тег. Xray имеет read-only rootfs, лимит 128 МиБ,
+`GOMEMLIMIT=96MiB` и нулевые capabilities; единственный bind — loopback 8443.
+
+Выберите SNI сайта, доступного **с VPS**, с TLS 1.3 и HTTP/2. Проверьте его через
+`openssl s_client -connect DOMAIN:443 -servername DOMAIN -tls1_3 -alpn h2`.
+Затем подготовьте отдельный каталог; существующие ключи не перезаписываются:
+
+```sh
+python3 deploy/livekit/prepare_reality.py SERVER_IPV4 DOMAIN \
+  --password-file /private/path/join-password --xray "$xray_dir/xray" \
+  --output /opt/gul-livekit/private/reality
+"$xray_dir/xray" run -test -config /opt/gul-livekit/private/reality/server.json
+haproxy -c -f /opt/gul-livekit/private/reality/haproxy.cfg
+```
+
+Скопируйте `compose.reality.yaml` рядом с действующим `compose.yaml`. Обновите
+`firewall.sh`: внутренние 8443 и 9443 тоже должны оставаться закрыты снаружи.
+Из `/opt/gul-livekit` запустите **только** новый контейнер, затем примените
+проверенный proxy config:
+
+```sh
+/opt/gul-livekit/firewall.sh
+docker compose -f compose.yaml -f compose.reality.yaml up -d --no-deps reality
+install -m 0644 private/reality/haproxy.cfg /etc/haproxy/haproxy.cfg
+systemctl reload haproxy
+```
+
+Graceful reload оставляет установленные соединения старому worker; перезапуск
+SFU, broker или Docker не требуется. Certbot по-прежнему обновляет тот же
+`/etc/haproxy/gul.pem`, проверяет текущий конфиг и делает reload. Передайте
+пользователям приватный `Gul-LiveKit-Reality-server.txt`, не публикуя его в Git.
+
+## Локальная проверка REALITY без изменения VPS
+
+`stand_reality.py` создаёт отдельную Docker-сеть namespace с HAProxy **2.6**,
+официальным Xray и закреплённым LiveKit. Внешний порт публикуется только на
+`127.0.0.1` со случайным номером. Внутренний сертификат тестовый: тестовый клиент
+явно доверяет `ca.pem`; отключение проверки TLS не используется. TLS 1.3 decoy
+также локальный, поэтому camouflage-сайт не нужен для этой проверки.
+TURN разрешает приватный IP SFU внутри Docker отдельным `/32` в
+`allow_restricted_peer_cidrs`; остальные адреса остаются запрещены. Это
+исключение относится только к стенду: production использует публичный IP SFU.
+
+```sh
+docker build --platform linux/amd64 -f deploy/livekit/Containerfile.smoke \
+  -t gul-livekit-reality-smoke:local deploy/livekit
+GOTOOLCHAIN=go1.26.7 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -o bin/gul-livekit-server ./cmd/gul-livekit-server
+python3 deploy/livekit/stand_reality.py --output bin/livekit-reality-fixture \
+  --xray "$xray_dir/xray" --broker bin/gul-livekit-server
+python3 deploy/livekit/smoke_reality.py bin/livekit-reality-fixture
+```
+
+Smoke проверяет HTTPS broker через REALITY с доверенным сертификатом, настоящий
+STUN Binding ответ встроенного TURN через обе ветки TCP 443, запрет обращения
+к другому IP/порту и отказ с неверным паролем. Приватные `address`, `join-password`
+и `ca.pem` можно передать native integration tests. Для остановки только
+созданных этим стендом контейнеров выполните `--remove` после проверки.
+Полная проверка двух клиентов включает голос в обе стороны, звук демонстрации,
+чат, смену канала и выбор только локального TURN/TCP через REALITY:
+
+```sh
+GOTOOLCHAIN=go1.26.7 GUL_LIVEKIT_REALITY=1 \
+  GUL_LIVEKIT_ADDRESS_FILE="$PWD/bin/livekit-reality-fixture/address" \
+  GUL_LIVEKIT_PASSWORD_FILE="$PWD/bin/livekit-reality-fixture/join-password" \
+  GUL_LIVEKIT_CA_FILE="$PWD/bin/livekit-reality-fixture/ca.pem" \
+  go test -race -tags live ./internal/livekit \
+  -run '^TestRealitySFUTwoNativeManagers$' -count=1 -timeout=90s
+```
+
+Остановка локального стенда:
+
+```sh
+python3 deploy/livekit/stand_reality.py --remove bin/livekit-reality-fixture
+```
+
+После завершения тестов удалите приватный каталог стенда. Отдельный скрипт
+`scripts/probe-linux-webrtc.py` проверяет реальный WebKitGTK Ubuntu: наличие
+JavaScript WebRTC API нельзя вывести из успешной сборки DEB или наличия
+GStreamer-плагинов.

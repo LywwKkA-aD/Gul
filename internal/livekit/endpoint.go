@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	api "github.com/LywwKkA-aD/Gul/internal/livekitapi"
+	"github.com/LywwKkA-aD/Gul/internal/reality"
 )
 
 const localBrokerAddress = "http://127.0.0.1:8787"
@@ -16,6 +17,13 @@ func brokerAddress(address string) (string, error) {
 	address = strings.TrimSpace(address)
 	if address == localBrokerAddress || address == "livekit://127.0.0.1:8787" {
 		return localBrokerAddress, nil
+	}
+	if strings.HasPrefix(address, "livekit+vless:") {
+		p, err := reality.ParseLiveKitProfile(address)
+		if err != nil {
+			return "", ErrInvalidAddress
+		}
+		return p.Address, nil
 	}
 	return secureEndpoint(address, "https")
 }
@@ -40,6 +48,13 @@ func validGrantForBroker(base string, grant api.Grant, screen bool) bool {
 	}
 	if base == localBrokerAddress {
 		return endpoint == "ws://127.0.0.1:7880"
+	}
+	if strings.HasPrefix(base, "livekit+vless:") {
+		p, err := reality.ParseLiveKitProfile(base)
+		if err != nil {
+			return false
+		}
+		base = p.Origin
 	}
 	canonical, err := secureEndpoint(base, "https")
 	return err == nil && endpoint == "wss"+strings.TrimPrefix(canonical, "https")

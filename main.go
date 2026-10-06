@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"log"
 	"log/slog"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
 	"github.com/LywwKkA-aD/Gul/internal/livekit"
 	"github.com/LywwKkA-aD/Gul/internal/logging"
+	"github.com/LywwKkA-aD/Gul/internal/screenbridge"
 	"github.com/LywwKkA-aD/Gul/internal/secret"
 	"github.com/LywwKkA-aD/Gul/internal/tray"
 	"github.com/LywwKkA-aD/Gul/services"
@@ -231,7 +233,15 @@ func main() {
 	notifier := newSystemNotifier(logger)
 	coreApp.SetNotifier(notifier)
 
-	app := application.New(application.Options{
+	var app *application.App
+	screenAssets, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatal("screen assets unavailable")
+	}
+	screenBrowser := screenbridge.New(manager, screenAssets, func(url string) error { return app.Browser.OpenURL(url) })
+	defer func() { _ = screenBrowser.Close() }()
+
+	app = application.New(application.Options{
 		Name:        "Gul LiveKit",
 		Description: "Voice, chat and screen sharing with LiveKit",
 		// Wails logs binding arguments and results at DEBUG. Those may contain
@@ -255,7 +265,7 @@ func main() {
 			application.NewService(services.NewAudioService(coreApp)),
 			application.NewService(services.NewSettingsService(coreApp)),
 			application.NewService(services.NewUpdateService(coreApp)),
-			application.NewService(services.NewScreenShareService(manager)),
+			application.NewService(services.NewScreenShareService(manager, screenBrowser)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

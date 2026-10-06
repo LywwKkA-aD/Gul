@@ -63,9 +63,13 @@ grep -Fq 'github.com/godbus/dbus/v5@v5.2.2' \
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 
-# The desktop now uses LiveKit. Keeping retired source in the repository must
-# not make the generated runtime manifest claim those transports are shipped.
-test ! -e "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality"
+# LiveKit can use the embedded REALITY transport. Its modified MPL source
+# accompanies the binary; the retired Mumble/Hysteria transports remain absent.
+for covered_file in LICENSE VERSION handshake.go.txt; do
+  test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality/$covered_file"
+done
+cmp "$repo_root/internal/reality/handshake.go" \
+  "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality/handshake.go.txt"
 for retired_module in github.com/LywwKkA-aD/gumble github.com/apernet/hysteria/core/v2 github.com/apernet/hysteria/extras/v2; do
   test ! -e "$output_dir/THIRD_PARTY_LICENSES/go/$retired_module"
   if grep -Fq "  $retired_module@" "$output_dir/THIRD_PARTY_MANIFEST.txt"; then

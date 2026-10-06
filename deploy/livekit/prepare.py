@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 
@@ -45,7 +46,43 @@ def sfu_config(address, key, secret):
     }
 
 
-def proxy_config(address):
+def dns_name(value):
+    value = value.lower().rstrip('.')
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        raise ValueError('the REALITY server name must be a DNS name')
+    if len(value) > 253 or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part)
+                                   for part in value.split('.')):
+        raise ValueError('invalid REALITY server name')
+    return value
+
+
+def proxy_config(address, reality_sni=None):
+    ingress = ''
+    tls_bind = '0.0.0.0:443'
+    if reality_sni is not None:
+        reality_sni = dns_name(reality_sni)
+        tls_bind = '127.0.0.1:9443 accept-proxy'
+        ingress = '''frontend gul_ingress
+    bind 0.0.0.0:443
+    tcp-request inspect-delay 5s
+    acl tls_client_hello req.ssl_hello_type 1
+    acl reality_sni req.ssl_sni -i @SNI@
+    tcp-request content accept if tls_client_hello
+    tcp-request content reject if WAIT_END
+    use_backend gul_reality_transport if reality_sni
+    default_backend gul_tls_transport
+
+backend gul_reality_transport
+    server local_reality 127.0.0.1:8443
+
+backend gul_tls_transport
+    server local_tls 127.0.0.1:9443 send-proxy-v2
+
+'''.replace('@SNI@', reality_sni)
     return '''# TLS terminates once; HTTP/WebSocket and TURN share TCP 443.
 # Do not enable HTTP/access logs: signal URLs can contain participant JWTs.
 global
@@ -60,8 +97,8 @@ defaults
     timeout client 1h
     timeout server 1h
 
-frontend gul_tls
-    bind 0.0.0.0:443 ssl crt /etc/haproxy/gul.pem alpn http/1.1
+@INGRESS@frontend gul_tls
+    bind @TLS_BIND@ ssl crt /etc/haproxy/gul.pem alpn http/1.1
     tcp-request inspect-delay 5s
     acl turn_stun req.payload(4,4) -m bin 2112a442
     tcp-request content accept if HTTP
@@ -88,7 +125,7 @@ frontend gul_http
     http-request set-header X-Forwarded-For %[src]
     http-request set-header X-Forwarded-Proto https
     acl gul_api path_beg /api/gul/
-    acl rtc path /rtc /rtc/validate /rtc/v1
+    acl rtc path /rtc /rtc/validate /rtc/v1 /rtc/v1/validate
     acl health path /healthz
     acl root path /
     http-request deny deny_status 404 unless gul_api or rtc or health or root
@@ -105,7 +142,7 @@ backend gul_signal
     mode http
     timeout tunnel 1h
     server signal 127.0.0.1:7880
-'''.replace('@IP@', server_ip(address))
+'''.replace('@IP@', server_ip(address)).replace('@INGRESS@', ingress).replace('@TLS_BIND@', tls_bind)
 
 
 def write_private(path, content):
@@ -135,7 +172,7 @@ def generate(address, password, output):
     write_private(output / 'haproxy.cfg', proxy_config(address))
     write_private(output / 'address', 'https://' + address + '\n')
     write_private(output / 'Gul-LiveKit-server.txt',
-                  'Gul LiveKit 0.7.0-alpha.3\n\nАдрес: https://' + address +
+                  'Gul LiveKit\n\nАдрес: https://' + address +
                   '\nПароль сервера: ' + password + '\nНик: выберите свой.\n')
 
 

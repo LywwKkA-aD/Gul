@@ -301,7 +301,11 @@ func liveScreenSoundWithPolicy(t *testing.T, owner, listener *Manager, policy we
 		t.Fatal(err)
 	}
 	if policy == webrtc.ICETransportPolicyRelay {
-		assertTLSRelay(t, room)
+		if grant.Transport == "reality" {
+			assertGatewayRelay(t, room)
+		} else {
+			assertTLSRelay(t, room)
+		}
 	}
 	time.Sleep(200 * time.Millisecond)
 	drainVoice(owner)

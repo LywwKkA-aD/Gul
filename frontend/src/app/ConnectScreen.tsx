@@ -143,7 +143,7 @@ export function ConnectScreen() {
 
           <p className="text-xs leading-relaxed text-text-3">
             {localServer ? 'Локальный стенд LiveKit. Введите ник, пароль оставьте пустым.'
-              : 'Введите HTTPS-адрес сервера, ник и пароль от администратора.'}
+              : 'Вставьте адрес сервера от администратора, затем введите ник и пароль.'}
           </p>
 
           <Button size="lg" className="w-full" onClick={connect} disabled={!canConnect}>

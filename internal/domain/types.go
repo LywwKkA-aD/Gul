@@ -69,6 +69,9 @@ type ScreenGrant struct {
 	OwnerIdentity string `json:"ownerIdentity"`
 	ChannelID     uint32 `json:"channelId"`
 	Epoch         uint64 `json:"epoch"`
+	// These fields are set locally after the remote grant has been validated.
+	Transport string `json:"transport,omitempty"`
+	RelayOnly bool   `json:"relayOnly,omitempty"`
 }
 
 // SavedServer is one remembered server as the connect picker reads it. It
