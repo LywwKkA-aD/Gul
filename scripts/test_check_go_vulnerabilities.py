@@ -3,6 +3,7 @@ import io
 import json
 import pathlib
 import subprocess
+import sys
 import unittest
 
 
@@ -54,13 +55,45 @@ def graph(extra_packages=(), core_version="v2.13.0", extras_version="v2.13.0", r
     ])
 
 
+class SubprocessEncodingTest(unittest.TestCase):
+    @staticmethod
+    def windows_locale_run(command, **kwargs):
+        if kwargs.get("text") and not kwargs.get("encoding"):
+            kwargs = {**kwargs, "encoding": "cp1252"}
+        return subprocess.run(command, **kwargs)
+
+    def test_utf8_output_is_preserved_under_windows_locale(self):
+        expected = '{"details":"Unicode quotes: \u201cscan\u201d; path: /\u0442\u0435\u0441\u0442"}\n'
+        diagnostic = "Go diagnostic: \u201cpackage\u201d\n"
+        program = (f"import sys; sys.stdout.buffer.write({expected.encode('utf-8')!r}); "
+                   f"sys.stderr.buffer.write({diagnostic.encode('utf-8')!r})")
+        output = io.StringIO()
+        actual = CHECK.command_result([sys.executable, "-c", program], self.windows_locale_run, output)
+        self.assertEqual(actual, expected)
+        self.assertEqual(output.getvalue(), diagnostic)
+
+    def test_invalid_utf8_fails_closed_for_both_streams(self):
+        for target in ("stdout", "stderr"):
+            with self.subTest(target=target):
+                def run(command, **kwargs):
+                    program = f"import sys; sys.{target}.buffer.write(bytes([0xff]))"
+                    return self.windows_locale_run([sys.executable, "-c", program], **kwargs)
+
+                output = io.StringIO()
+                result = CHECK.check(["./internal/hysteria"], run=run, output=output)
+                self.assertEqual(result, 1)
+                self.assertIn("ERROR", output.getvalue())
+                self.assertNotIn("Go vulnerability scan:", output.getvalue())
+
+
 class VulnerabilityGateTest(unittest.TestCase):
     def run_gate(self, scan_output, dependency_output=None, scan_exit=0, go_exit=0):
         calls = []
         outputs = [
-            subprocess.CompletedProcess([], scan_exit, scan_output, "scanner error" if scan_exit else ""),
-            subprocess.CompletedProcess([], go_exit, dependency_output if dependency_output is not None else graph(),
-                                        "go list error" if go_exit else ""),
+            subprocess.CompletedProcess([], scan_exit, scan_output.encode("utf-8"), b"scanner error" if scan_exit else b""),
+            subprocess.CompletedProcess([], go_exit,
+                                        (dependency_output if dependency_output is not None else graph()).encode("utf-8"),
+                                        b"go list error" if go_exit else b""),
         ]
 
         def run(command, **kwargs):

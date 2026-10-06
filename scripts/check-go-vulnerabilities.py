@@ -191,12 +191,15 @@ def report(findings, eligible, output):
 
 
 def command_result(command, run, output):
-    result = run(command, text=True, capture_output=True, check=False)
-    if result.stderr.strip():
-        print(result.stderr.strip(), file=output)
+    # Go emits UTF-8 on every platform. Decode after capture so failures are
+    # raised here, not lost inside Windows subprocess reader threads.
+    result = run(command, capture_output=True, check=False)
+    stderr = result.stderr.decode("utf-8")
+    if stderr.strip():
+        print(stderr.strip(), file=output)
     if result.returncode != 0:
         raise AuditError(f"{command[0]} did not complete successfully (exit {result.returncode})")
-    return result.stdout
+    return result.stdout.decode("utf-8")
 
 
 def check(patterns, executable="govulncheck", *, run=None, output=None):
