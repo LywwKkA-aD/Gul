@@ -44,6 +44,8 @@ func candidatePairLatency(stats webrtc.ICECandidatePairStats, available bool) (f
 	if !available || stats.State != webrtc.StatsICECandidatePairStateSucceeded || !stats.Nominated || stats.ResponsesReceived == 0 {
 		return 0, false
 	}
+	// A real request/reply may fit inside one monotonic clock tick on Windows.
+	// ResponsesReceived distinguishes that measured zero from absent telemetry.
 	pingMS := stats.CurrentRoundTripTime * 1000 // Pion reports seconds.
 	return pingMS, validLatency(pingMS)
 }

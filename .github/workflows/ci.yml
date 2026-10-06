@@ -220,6 +220,7 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
+          python3 ../scripts/test_livekit_local.py
           npx playwright install --with-deps chromium
           trap 'bash ../scripts/livekit-local.sh down' EXIT
           bash ../scripts/livekit-local.sh up

@@ -29,12 +29,26 @@ broker_pid() {
   printf '%s\n' "$pid"
 }
 
+server_failed() {
+  local state
+  state="$(docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oomKilled={{.State.OOMKilled}}' "$CONTAINER" 2>/dev/null)" || state="state=unavailable"
+  # Raw logs can contain credentials. Retain them privately before CI cleanup,
+  # and expose only Docker's lifecycle metadata in the default console output.
+  touch "$STATE/server.log"
+  chmod 600 "$STATE/server.log"
+  docker logs --tail 80 "$CONTAINER" >"$STATE/server.log" 2>&1 || true
+  fail "Local LiveKit did not become ready ($state). Private diagnostic: bin/livekit-local/server.log."
+}
+
 start_server() {
   docker info >/dev/null 2>&1 || fail "Start Docker or OrbStack first."
   if owned_container; then
     docker start "$CONTAINER" >/dev/null
   else
+    # With all capabilities dropped, UID 0 cannot read another UID's 0600
+    # config on Linux. Match its owner instead of making API secrets readable.
     docker run -d --name "$CONTAINER" --label "$LABEL=$ROOT" \
+      --user "$(id -u):$(id -g)" \
       --restart no --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
       --cap-drop ALL --security-opt no-new-privileges:true \
       --pids-limit 128 --memory 512m \
@@ -44,14 +58,16 @@ start_server() {
       --mount "type=bind,source=$STATE/server.yaml,target=/etc/livekit.yaml,readonly" \
       "$IMAGE" --config /etc/livekit.yaml >/dev/null
   fi
-  local _attempt
-  for _attempt in {1..30}; do
+  local _attempt state
+  for _attempt in {1..150}; do
     if curl --noproxy '*' --silent --fail --max-time 1 http://127.0.0.1:7880/ >/dev/null; then
       return
     fi
+    state="$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null)" || state="unknown"
+    case "$state" in exited|dead) server_failed ;; esac
     sleep 0.2
   done
-  fail "Local LiveKit did not become ready; inspect container $CONTAINER."
+  server_failed
 }
 
 up() {

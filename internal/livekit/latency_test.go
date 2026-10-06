@@ -55,6 +55,7 @@ func TestCandidatePairLatencyRequiresAnActualSelectedPathMeasurement(t *testing.
 		{"seconds to milliseconds", true, func(*webrtc.ICECandidatePairStats) {}, 27.4, true},
 		{"unavailable", false, func(*webrtc.ICECandidatePairStats) {}, 0, false},
 		{"before first reply", true, func(s *webrtc.ICECandidatePairStats) { s.ResponsesReceived = 0 }, 0, false},
+		{"zero without a reply", true, func(s *webrtc.ICECandidatePairStats) { s.ResponsesReceived, s.CurrentRoundTripTime = 0, 0 }, 0, false},
 		{"failed pair", true, func(s *webrtc.ICECandidatePairStats) { s.State = webrtc.StatsICECandidatePairStateFailed }, 0, false},
 		{"not nominated", true, func(s *webrtc.ICECandidatePairStats) { s.Nominated = false }, 0, false},
 		{"NaN", true, func(s *webrtc.ICECandidatePairStats) { s.CurrentRoundTripTime = math.NaN() }, 0, false},

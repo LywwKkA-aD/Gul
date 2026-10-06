@@ -34,11 +34,14 @@ func TestPeerLatencyReadsRealLoopbackICECheckRTT(t *testing.T) {
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			if measured, ok := peerLatency(peer); ok {
-				if measured <= 0 || !validLatency(measured) {
-					t.Fatal("ICE reported no real round-trip measurement")
+				// A loopback request/reply can share one Windows monotonic
+				// clock tick. Zero is valid only with an actual ICE response;
+				// a positive lower bound tests clock resolution, not this API.
+				if !validLatency(measured) {
+					t.Fatal("ICE reported an invalid round-trip measurement")
 				}
 				stats, ok := peer.SCTP().Transport().ICETransport().GetSelectedCandidatePairStats()
-				if !ok || stats.ResponsesReceived == 0 {
+				if !ok || stats.ResponsesReceived == 0 || !stats.Nominated || stats.State != webrtc.StatsICECandidatePairStateSucceeded {
 					t.Fatal("RTT had no underlying ICE response")
 				}
 				break
