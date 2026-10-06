@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,7 @@ func init() {
 	// SDK 2.18.1 builds Pion's logger from this package default, even when a
 	// per-room logger is supplied. Initialize before any transport goroutines.
 	lksdk.SetLogger(lklog.GetDiscardLogger())
+	http.DefaultClient = guardSDKHTTPClient(http.DefaultClient)
 }
 
 type sdkMedia struct {
@@ -73,9 +75,16 @@ func participantID(identity string) (uint32, string, bool) {
 }
 
 func dialMedia(ctx context.Context, grant api.Grant, hooks mediaHooks) (mediaConnection, error) {
+	return dialMediaWithPolicy(ctx, grant, hooks, webrtc.ICETransportPolicyAll)
+}
+
+// The relay policy is injectable for opt-in transport tests. Production lets
+// ICE choose between direct media and the server's authenticated TURN relays.
+func dialMediaWithPolicy(ctx context.Context, grant api.Grant, hooks mediaHooks, policy webrtc.ICETransportPolicy) (mediaConnection, error) {
 	if !validGrant(grant, false) {
 		return nil, ErrBroker
 	}
+	grant.URL, _ = mediaAddress(grant.URL)
 	ctx, cancel := context.WithCancel(ctx)
 	c := &sdkMedia{ctx: ctx, cancel: cancel, grant: grant, hooks: hooks, streams: make(map[uint32]*remoteStream)}
 	cb := lksdk.NewRoomCallback()
@@ -98,9 +107,7 @@ func dialMedia(ctx context.Context, grant api.Grant, hooks mediaHooks) (mediaCon
 	}
 	c.room = lksdk.NewRoom(cb)
 	c.room.SetLogger(lklog.GetDiscardLogger())
-	if err := c.room.JoinWithContextAndToken(ctx, grant.URL, grant.Token,
-		lksdk.WithAutoSubscribe(false), lksdk.WithDisableRegionDiscovery(), lksdk.WithDisableTURN(),
-		lksdk.WithLogger(lklog.GetDiscardLogger()), lksdk.WithConnectTimeout(15*time.Second)); err != nil {
+	if err := c.room.JoinWithContextAndToken(ctx, grant.URL, grant.Token, mediaConnectOptions(grant.URL, policy)...); err != nil {
 		c.close()
 		return nil, ErrMedia
 	}
@@ -129,6 +136,18 @@ func dialMedia(ctx context.Context, grant api.Grant, hooks mediaHooks) (mediaCon
 		return nil, err
 	}
 	return c, nil
+}
+
+func mediaConnectOptions(address string, policy webrtc.ICETransportPolicy) []lksdk.ConnectOption {
+	options := []lksdk.ConnectOption{
+		lksdk.WithAutoSubscribe(false), lksdk.WithDisableRegionDiscovery(),
+		lksdk.WithLogger(lklog.GetDiscardLogger()), lksdk.WithConnectTimeout(15 * time.Second),
+		lksdk.WithICETransportPolicy(policy),
+	}
+	if endpoint, err := mediaAddress(address); err == nil && endpoint == "ws://127.0.0.1:7880" {
+		options = append(options, lksdk.WithDisableTURN())
+	}
+	return options
 }
 
 func waitBound(ctx context.Context, bound func() bool, timeout time.Duration) error {

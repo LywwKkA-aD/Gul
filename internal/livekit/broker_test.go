@@ -10,14 +10,14 @@ import (
 	"testing"
 )
 
-func TestBrokerAddressIsExplicitLocalOnly(t *testing.T) {
+func TestBrokerAddressKeepsExplicitLocalMode(t *testing.T) {
 	for _, address := range []string{"http://127.0.0.1:8787", "livekit://127.0.0.1:8787"} {
 		got, err := brokerAddress(address)
 		if err != nil || got != "http://127.0.0.1:8787" {
 			t.Fatalf("%s: %s %v", address, got, err)
 		}
 	}
-	for _, address := range []string{"https://example.com", "http://localhost:8787", "http://127.0.0.1:8787@evil.test", "http://127.0.0.1:8787/?token=secret", "http://127.0.0.1:8787/api", "http://127.0.0.1:8788"} {
+	for _, address := range []string{"http://example.com", "http://localhost:8787", "http://127.0.0.1:8787@evil.test", "http://127.0.0.1:8787/?token=secret", "http://127.0.0.1:8787/api", "http://127.0.0.1:8788"} {
 		if _, err := brokerAddress(address); err == nil {
 			t.Fatalf("accepted %s", address)
 		}

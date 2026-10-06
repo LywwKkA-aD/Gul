@@ -95,9 +95,9 @@ func TestVoiceRejectsObsoleteEpochAndResetsDecoderQueue(t *testing.T) {
 
 func TestConnectValidationAndCloseStaySafe(t *testing.T) {
 	m, _, _ := testManager(t)
-	m.Connect("https://example.com", "alice", "private")
-	if m.Status().Error != ErrLocalOnly.Error() {
-		t.Fatal("remote endpoint accepted")
+	m.Connect("http://example.com", "alice", "private")
+	if m.Status().Error != ErrInvalidAddress.Error() {
+		t.Fatal("plaintext remote endpoint accepted")
 	}
 	m.Connect("http://127.0.0.1:8787", "", "")
 	if m.Status().Error != ErrAuthentication.Error() {

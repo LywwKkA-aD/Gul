@@ -27,6 +27,7 @@ export function ConnectScreen() {
 
   const connecting = status.state === 'connecting';
   const canConnect = !connecting && address.trim() !== '' && username.trim() !== '';
+  const localServer = ['http://127.0.0.1:8787', 'livekit://127.0.0.1:8787'].includes(address.trim());
 
   const loadServers = useCallback(() => {
     ConnectionService.Servers()
@@ -114,7 +115,7 @@ export function ConnectScreen() {
               mono
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="http://127.0.0.1:8787"
+              placeholder="https://server.example"
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
@@ -134,14 +135,15 @@ export function ConnectScreen() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Для локального стенда оставьте пустым"
+              placeholder={localServer ? 'Для локального стенда оставьте пустым' : 'Пароль от администратора'}
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
           </Field>
 
           <p className="text-xs leading-relaxed text-text-3">
-            Локальный стенд LiveKit: http://127.0.0.1:8787. Введите ник, пароль оставьте пустым.
+            {localServer ? 'Локальный стенд LiveKit. Введите ник, пароль оставьте пустым.'
+              : 'Введите HTTPS-адрес сервера, ник и пароль от администратора.'}
           </p>
 
           <Button size="lg" className="w-full" onClick={connect} disabled={!canConnect}>

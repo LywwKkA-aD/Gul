@@ -1,5 +1,6 @@
-// Package livekitlab provides an explicitly local screen-sharing experiment.
-// It is not an authentication service suitable for public deployment.
+// Package livekitlab provides a local screen-sharing lab and an independently
+// configured password-protected Gul API. Only NewPublicHandler may be exposed
+// through the configured trusted TLS reverse proxy; NewHandler stays local.
 package livekitlab
 
 import (

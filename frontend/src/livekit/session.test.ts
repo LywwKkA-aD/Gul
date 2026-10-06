@@ -4,12 +4,12 @@ import { screenSession, sessionGrantProvider } from './session.ts';
 
 const connected = { state: 'connected', server: 'https://gul.example', epoch: 7, selfChannel: 0 };
 const validGrant = {
-  url: 'wss://gul.example/rtc', token: 'private-token', identity: 'screen-alice',
+  url: 'wss://gul.example', token: 'private-token', identity: 'screen-alice',
   room: 'channel-0', ownerIdentity: 'alice', channelId: 0, epoch: 7,
 };
 
 test('screen session exists only for a confirmed connected epoch and channel, including channel zero', () => {
-  assert.deepEqual(screenSession(connected), { epoch: 7, channelId: 0, key: '7:0' });
+  assert.deepEqual(screenSession(connected), { epoch: 7, channelId: 0, serverOrigin: 'https://gul.example', key: 'https://gul.example|7:0' });
   for (const patch of [
     { state: 'connecting' }, { state: 'reconnecting' }, { state: 'disconnected' },
     { epoch: undefined }, { epoch: 0 }, { epoch: -1 }, { epoch: NaN },
@@ -54,4 +54,34 @@ test('stale, malformed or credential-bearing grants are rejected without exposin
 test('broker errors cannot leak into screen session errors', async () => {
   const provider = sessionGrantProvider(screenSession(connected), async () => { throw new Error('private-token'); });
   await assert.rejects(provider(), { message: 'Screen session is no longer available' });
+});
+
+test('remote screen grants must stay on authenticated broker authority and use WSS', async () => {
+  for (const url of ['ws://gul.example', 'wss://other.example', 'wss://gul.example:444', 'wss://gul.example/other', 'ws://127.0.0.1:7880']) {
+    const provider = sessionGrantProvider(screenSession(connected), async () => ({ ...validGrant, url }));
+    await assert.rejects(provider(), { message: 'Screen session is no longer available' });
+  }
+  const provider = sessionGrantProvider(screenSession({ ...connected, server: 'https://GUL.example:443/' }),
+    async () => ({ ...validGrant, url: 'wss://gul.example:443/' }));
+  assert.equal((await provider()).identity, validGrant.identity);
+  const explicitPort = sessionGrantProvider(screenSession({ ...connected, server: 'https://gul.example:8443' }),
+    async () => ({ ...validGrant, url: 'wss://gul.example:8443' }));
+  assert.equal((await explicitPort()).identity, validGrant.identity);
+});
+
+test('local screens use only the pinned local broker and SFU ports', async () => {
+  const local = screenSession({ ...connected, server: 'http://127.0.0.1:8787' });
+  assert.ok(local);
+  const provider = sessionGrantProvider(local, async () => ({ ...validGrant, url: 'ws://127.0.0.1:7880' }));
+  await provider();
+  for (const url of ['ws://127.0.0.1:7881', 'ws://localhost:7880', 'wss://gul.example', 'ws://127.0.0.1:7880/rtc']) {
+    await assert.rejects(sessionGrantProvider(local, async () => ({ ...validGrant, url }))());
+  }
+});
+
+test('invalid broker origins cannot create a screen session and a server switch changes its key', () => {
+  for (const server of ['http://gul.example', 'https://user:private-token@gul.example', 'https://gul.example/path', 'https://gul.example/?token=private-token', 'invalid']) {
+    assert.equal(screenSession({ ...connected, server }), null);
+  }
+  assert.notEqual(screenSession(connected).key, screenSession({ ...connected, server: 'https://other.example' }).key);
 });

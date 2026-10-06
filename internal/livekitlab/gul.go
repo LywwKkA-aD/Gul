@@ -20,28 +20,36 @@ const (
 )
 
 type gulSession struct {
+	opMu      sync.Mutex
 	ID        uint32
 	Name      string
 	ChannelID uint32
 	Revision  uint64
 	Audio     livekitapi.AudioState
 	ExpiresAt time.Time
+	Revoked   bool
 }
 
 // gulBroker is a local application state service. It trusts local processes;
 // a lease authenticates one logical client but is not a remote user account.
 type gulBroker struct {
-	mu       sync.Mutex
-	cfg      Config
-	now      func() time.Time
-	newID    func() uint32
-	sessions map[[32]byte]*gulSession
+	mu            sync.Mutex
+	cfg           Config
+	now           func() time.Time
+	newID         func() uint32
+	sessions      map[[32]byte]*gulSession
+	serverURL     string
+	grantLifetime time.Duration
+	maxSessions   int
+	passwordHash  *[32]byte
+	remover       ParticipantRemover
 }
 
 func newGulBroker(cfg Config, now func() time.Time) *gulBroker {
 	return &gulBroker{
 		cfg: cfg, now: now, newID: randomSessionID,
-		sessions: make(map[[32]byte]*gulSession),
+		sessions:  make(map[[32]byte]*gulSession),
+		serverURL: ServerURL, grantLifetime: tokenLifetime, maxSessions: gulMaxSessions,
 	}
 }
 
@@ -75,7 +83,11 @@ func (b *gulBroker) nextIDLocked() uint32 {
 func (b *gulBroker) expireLocked(now time.Time) {
 	for key, session := range b.sessions {
 		if !now.Before(session.ExpiresAt) {
-			delete(b.sessions, key)
+			if b.remover == nil {
+				delete(b.sessions, key)
+			} else {
+				session.Revoked = true
+			}
 		}
 	}
 }
@@ -105,6 +117,9 @@ func (b *gulBroker) stateLocked(self *gulSession) livekitapi.State {
 		},
 	}
 	for _, session := range b.sessions {
+		if session.Revoked {
+			continue
+		}
 		user := domain.UserInfo{
 			Session: session.ID, Key: "s:livekit:" + strconv.FormatUint(uint64(session.ID), 10),
 			Name: session.Name, ChannelID: session.ChannelID,

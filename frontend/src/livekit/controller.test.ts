@@ -50,6 +50,17 @@ class FakeRoom extends EventEmitter {
 }
 
 const grant = { url: 'ws://127.0.0.1:7880', token: 'private-test-token', identity: 'alice', room: 'local' };
+
+test('relay-only remote verification preserves server-issued ICE and keeps local ICE fenced', async () => {
+  const remote = setup(async () => ({ ...grant, url: 'wss://gul.example' }), { allowServerIce: true, forceRelay: true });
+  await remote.controller.join('alice');
+  assert.deepEqual(remote.room.connections[0][2].rtcConfig, { iceTransportPolicy: 'relay' });
+  await remote.controller.leave();
+  const local = setup(undefined, { allowServerIce: true, forceRelay: true });
+  await local.controller.join('alice');
+  assert.deepEqual(local.room.connections[0][2].rtcConfig, { iceServers: [], iceTransportPolicy: 'relay' });
+  await local.controller.leave();
+});
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function setup(provider = async () => grant, options = {}) {
   const room = new FakeRoom();

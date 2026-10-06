@@ -219,9 +219,10 @@ func (m *Manager) ScreenGrant(ctx context.Context, epoch uint64, channelID uint3
 	if err != nil {
 		return domain.ScreenGrant{}, safeError(err)
 	}
-	if !validGrant(grant, true) || grant.Revision != login.Revision || grant.SessionID != login.SessionID || grant.ChannelID != channelID {
+	if !validGrantForBroker(r.address, grant, true) || grant.Revision != login.Revision || grant.SessionID != login.SessionID || grant.ChannelID != channelID {
 		return domain.ScreenGrant{}, ErrBroker
 	}
+	grant.URL, _ = mediaAddress(grant.URL)
 	return domain.ScreenGrant{URL: grant.URL, Token: grant.Token, Identity: grant.Identity, Room: grant.Room, OwnerIdentity: grant.OwnerIdentity, ChannelID: channelID, Epoch: epoch}, nil
 }
 
@@ -291,8 +292,8 @@ func (m *Manager) active(r *connectionRun) bool {
 }
 func safeError(err error) error {
 	switch {
-	case errors.Is(err, ErrLocalOnly):
-		return ErrLocalOnly
+	case errors.Is(err, ErrInvalidAddress):
+		return ErrInvalidAddress
 	case errors.Is(err, ErrAuthentication):
 		return ErrAuthentication
 	case errors.Is(err, ErrStaleSession):

@@ -39,6 +39,8 @@ interface Dependencies {
   subscribeAudio?: boolean;
   /** The isolated lab disables external ICE; authenticated sessions use the server's configuration. */
   allowServerIce?: boolean;
+  /** Opt-in transport verification; ICE servers still come from the authenticated SFU. */
+  forceRelay?: boolean;
   stopSharingOnReconnect?: boolean;
 }
 
@@ -57,6 +59,7 @@ export class LiveKitController {
   private readonly roomFactory: () => Room;
   private readonly subscribeAudio: boolean;
   private readonly allowServerIce: boolean;
+  private readonly forceRelay: boolean;
   private readonly stopSharingOnReconnect: boolean;
   private readonly listeners = new Set<() => void>();
   private snapshot = emptySnapshot();
@@ -70,6 +73,7 @@ export class LiveKitController {
     this.grantProvider = grantProvider;
     this.subscribeAudio = dependencies.subscribeAudio !== false;
     this.allowServerIce = dependencies.allowServerIce === true;
+    this.forceRelay = dependencies.forceRelay === true;
     this.stopSharingOnReconnect = dependencies.stopSharingOnReconnect === true;
     this.roomFactory = dependencies.roomFactory ?? (() => new Room({
       adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true,
@@ -109,9 +113,12 @@ export class LiveKitController {
       room = this.roomFactory();
       this.room = room;
       this.bind(room);
+      const rtcConfig: RTCConfiguration = {};
+      if (!this.allowServerIce || loopbackEndpoint(grant.url)) rtcConfig.iceServers = [];
+      if (this.forceRelay) rtcConfig.iceTransportPolicy = 'relay';
       await room.connect(grant.url, grant.token, {
         autoSubscribe: false,
-        ...(this.allowServerIce && !loopbackEndpoint(grant.url) ? {} : { rtcConfig: { iceServers: [] } }),
+        ...(Object.keys(rtcConfig).length ? { rtcConfig } : {}),
       });
       if (generation !== this.connectionGeneration || this.room !== room) {
         await disconnect(room);

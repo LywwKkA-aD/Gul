@@ -18,7 +18,7 @@ func (m *Manager) runConnection(r *connectionRun, username, password string) {
 		return
 	}
 	defer logout(r.broker, login.SessionToken)
-	if !validLogin(login) {
+	if !validLogin(r.address, login) {
 		m.setStatus(r, domain.StateDisconnected, ErrBroker.Error())
 		return
 	}
@@ -134,7 +134,7 @@ func (m *Manager) runConnection(r *connectionRun, username, password string) {
 			return
 		}
 		login, err = r.broker.channel(r.ctx, login.SessionToken, login.ChannelID)
-		if err != nil || !validLogin(login) {
+		if err != nil || !validLogin(r.address, login) {
 			m.setStatus(r, domain.StateDisconnected, ErrBroker.Error())
 			return
 		}
@@ -146,8 +146,8 @@ func (m *Manager) runConnection(r *connectionRun, username, password string) {
 	}
 }
 
-func validLogin(login api.LoginResponse) bool {
-	return login.SessionToken != "" && validGrant(login.Grant, false) && login.SessionID == login.Grant.SessionID && login.Identity == login.Grant.Identity && login.ChannelID == login.Grant.ChannelID && login.Revision == login.Grant.Revision
+func validLogin(base string, login api.LoginResponse) bool {
+	return login.SessionToken != "" && validGrantForBroker(base, login.Grant, false) && login.SessionID == login.Grant.SessionID && login.Identity == login.Grant.Identity && login.ChannelID == login.Grant.ChannelID && login.Revision == login.Grant.Revision
 }
 
 func (m *Manager) connected(r *connectionRun, media mediaConnection, login api.LoginResponse, reconnect <-chan struct{}) (api.LoginResponse, bool, error) {
@@ -197,7 +197,7 @@ func (m *Manager) connected(r *connectionRun, media mediaConnection, login api.L
 				request.reply <- safeError(err)
 				continue
 			}
-			if !validLogin(next) {
+			if !validLogin(r.address, next) {
 				request.reply <- ErrBroker
 				return login, false, ErrBroker
 			}

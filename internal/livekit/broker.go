@@ -7,9 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	api "github.com/LywwKkA-aD/Gul/internal/livekitapi"
@@ -17,9 +15,9 @@ import (
 
 var (
 	ErrNotConnected   = errors.New("LiveKit: нет активного подключения")
-	ErrLocalOnly      = errors.New("LiveKit: локальный стенд доступен только по адресу http://127.0.0.1:8787")
-	ErrBroker         = errors.New("LiveKit: локальный сервер не ответил корректно")
-	ErrAuthentication = errors.New("LiveKit: имя или пароль не приняты локальным сервером")
+	ErrInvalidAddress = errors.New("LiveKit: укажите HTTPS-адрес сервера или http://127.0.0.1:8787 для локального стенда")
+	ErrBroker         = errors.New("LiveKit: сервер не ответил корректно")
+	ErrAuthentication = errors.New("LiveKit: имя или пароль не приняты сервером")
 	ErrStaleSession   = errors.New("LiveKit: комната изменилась; повторите действие")
 	ErrMedia          = errors.New("LiveKit: не удалось установить медиасоединение")
 )
@@ -39,18 +37,8 @@ type broker struct {
 	client *http.Client
 }
 
-func brokerAddress(address string) (string, error) {
-	switch strings.TrimSpace(address) {
-	case "http://127.0.0.1:8787", "livekit://127.0.0.1:8787":
-		return "http://127.0.0.1:8787", nil
-	default:
-		return "", ErrLocalOnly
-	}
-}
-
 func validGrant(g api.Grant, screen bool) bool {
-	u, err := url.Parse(g.URL)
-	if err != nil || (u.Scheme != "ws" && u.Scheme != "http") || u.Hostname() != "127.0.0.1" || u.Port() != "7880" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if _, err := mediaAddress(g.URL); err != nil {
 		return false
 	}
 	id, role, ok := participantID(g.Identity)

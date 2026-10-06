@@ -3,6 +3,7 @@ package livekitlab
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -34,7 +35,14 @@ func (b *gulBroker) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(input.Username)
-	if input.Password != "" {
+	if b.passwordHash != nil {
+		hash := sha256.Sum256([]byte(input.Password))
+		valid := subtle.ConstantTimeCompare(hash[:], b.passwordHash[:]) == 1
+		if !valid || len(input.Password) < 16 || len(input.Password) > 256 {
+			http.Error(w, "authentication failed", http.StatusUnauthorized)
+			return
+		}
+	} else if input.Password != "" {
 		http.Error(w, "local broker requires an empty password", http.StatusBadRequest)
 		return
 	}
@@ -45,7 +53,7 @@ func (b *gulBroker) login(w http.ResponseWriter, r *http.Request) {
 	now := b.now()
 	b.mu.Lock()
 	b.expireLocked(now)
-	if len(b.sessions) >= gulMaxSessions {
+	if len(b.sessions) >= b.maxSessions {
 		b.mu.Unlock()
 		http.Error(w, "local session limit reached", http.StatusTooManyRequests)
 		return
@@ -88,6 +96,10 @@ func (b *gulBroker) channel(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.ChannelID == nil || *input.ChannelID > 3 {
 		http.Error(w, "unknown channel", http.StatusBadRequest)
+		return
+	}
+	if b.remover != nil {
+		b.publicTransition(w, r, input.ChannelID)
 		return
 	}
 	b.withSession(w, r, func(session *gulSession, token string, now time.Time) (int, any) {
@@ -155,6 +167,10 @@ func (b *gulBroker) logout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if b.remover != nil {
+		b.publicTransition(w, r, nil)
+		return
+	}
 	b.withSession(w, r, func(_ *gulSession, token string, _ time.Time) (int, any) {
 		delete(b.sessions, sha256.Sum256([]byte(token)))
 		return http.StatusNoContent, nil
@@ -174,7 +190,7 @@ func (b *gulBroker) withSession(w http.ResponseWriter, r *http.Request, fn func(
 	b.mu.Lock()
 	b.expireLocked(now)
 	session := b.sessions[key]
-	if session == nil {
+	if session == nil || session.Revoked {
 		b.mu.Unlock()
 		http.Error(w, "local session expired or unavailable", http.StatusUnauthorized)
 		return

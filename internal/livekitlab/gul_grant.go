@@ -15,7 +15,7 @@ func (b *gulBroker) grantLocked(session *gulSession, role string, now time.Time)
 	id := strconv.FormatUint(uint64(session.ID), 10)
 	channel := strconv.FormatUint(uint64(session.ChannelID), 10)
 	grant := livekitapi.Grant{
-		URL: ServerURL, Identity: role + "." + id, Room: "gul-channel-" + channel,
+		URL: b.serverURL, Identity: role + "." + id, Room: "gul-channel-" + channel,
 		OwnerIdentity: nativeIdentity(session.ID), SessionID: session.ID,
 		ChannelID: session.ChannelID, Revision: session.Revision,
 	}
@@ -27,7 +27,7 @@ func (b *gulBroker) grantLocked(session *gulSession, role string, now time.Time)
 	// owner. Tokens cannot change metadata or obtain room administration.
 	claims, _ := json.Marshal(map[string]any{
 		"iss": b.cfg.APIKey, "sub": grant.Identity, "name": session.Name,
-		"iat": now.Unix(), "nbf": now.Add(-10 * time.Second).Unix(), "exp": now.Add(tokenLifetime).Unix(),
+		"iat": now.Unix(), "nbf": now.Add(-10 * time.Second).Unix(), "exp": now.Add(b.grantLifetime).Unix(),
 		"attributes": map[string]string{
 			"ownerIdentity": grant.OwnerIdentity, "role": role, "sessionId": id,
 			"channelId": channel, "revision": strconv.FormatUint(session.Revision, 10),

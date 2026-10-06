@@ -273,6 +273,10 @@ func liveNoVoice(t *testing.T, m *Manager, owner uint32, duration time.Duration)
 }
 
 func liveScreenSound(t *testing.T, owner, listener *Manager) {
+	liveScreenSoundWithPolicy(t, owner, listener, webrtc.ICETransportPolicyAll)
+}
+
+func liveScreenSoundWithPolicy(t *testing.T, owner, listener *Manager, policy webrtc.ICETransportPolicy) {
 	t.Helper()
 	status := owner.Status()
 	grant, err := owner.ScreenGrant(context.Background(), status.Epoch, status.SelfChannel)
@@ -281,7 +285,7 @@ func liveScreenSound(t *testing.T, owner, listener *Manager) {
 	}
 	room := lksdk.NewRoom(lksdk.NewRoomCallback())
 	room.SetLogger(lklog.GetDiscardLogger())
-	if err := room.JoinWithContextAndToken(context.Background(), grant.URL, grant.Token, lksdk.WithAutoSubscribe(false), lksdk.WithDisableRegionDiscovery(), lksdk.WithDisableTURN(), lksdk.WithLogger(lklog.GetDiscardLogger())); err != nil {
+	if err := room.JoinWithContextAndToken(context.Background(), grant.URL, grant.Token, mediaConnectOptions(grant.URL, policy)...); err != nil {
 		t.Fatal("screen companion could not join")
 	}
 	defer room.Disconnect()
@@ -295,6 +299,9 @@ func liveScreenSound(t *testing.T, owner, listener *Manager) {
 	}
 	if err := waitBound(context.Background(), track.IsBound, 15*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if policy == webrtc.ICETransportPolicyRelay {
+		assertTLSRelay(t, room)
 	}
 	time.Sleep(200 * time.Millisecond)
 	drainVoice(owner)
