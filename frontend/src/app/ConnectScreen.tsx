@@ -114,7 +114,7 @@ export function ConnectScreen() {
               mono
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="voice.example.com или hy2://host:443"
+              placeholder="Адрес или ссылка от администратора"
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
@@ -140,7 +140,7 @@ export function ConnectScreen() {
           </Field>
 
           <p className="text-xs leading-relaxed text-text-3">
-            Введите адрес и пароль от администратора. Hysteria уже встроена в Gul.
+            Введите адрес и пароль от администратора. Всё для подключения уже встроено в Gul.
           </p>
 
           <Button size="lg" className="w-full" onClick={connect} disabled={!canConnect}>

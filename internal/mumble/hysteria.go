@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 
 	"github.com/LywwKkA-aD/Gul/internal/hysteria"
 	"github.com/LywwKkA-aD/Gul/internal/identity"
 )
 
-// The official Hysteria server and Murmur share a network namespace. Its ACL
-// permits only this destination, so a Gul invitation cannot proxy arbitrary
-// traffic through the voice server.
+// Both proxy deployments permit only this destination, so a Gul invitation
+// cannot proxy arbitrary traffic through the voice server.
 const mumbleTarget = "127.0.0.1:64738"
 
 func dialHysteria(ctx context.Context, cfg DialConfig, ep endpoint, tofu *TOFUStore) (net.Conn, error) {
@@ -42,9 +42,15 @@ func dialHysteria(ctx context.Context, cfg DialConfig, ep endpoint, tofu *TOFUSt
 	return mumbleTLS(ctx, stream, cfg, ep, tofu)
 }
 
-// Mumble's TLS runs end to end inside Hysteria. Existing pins and the derived
+// Mumble's TLS runs end to end inside the proxy. Existing pins and the derived
 // client certificate retain their meaning; no identity key leaves the client.
 func mumbleTLS(ctx context.Context, stream net.Conn, cfg DialConfig, ep endpoint, tofu *TOFUStore) (net.Conn, error) {
+	if nilStream(stream) {
+		return nil, errors.New("proxy returned no stream")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if tofu == nil {
 		_ = stream.Close()
 		return nil, errors.New("TOFU store is required")
@@ -68,4 +74,17 @@ func mumbleTLS(ctx context.Context, stream net.Conn, cfg DialConfig, ep endpoint
 		return nil, fmt.Errorf("mumble TLS: %w", err)
 	}
 	return secured, nil
+}
+
+func nilStream(stream net.Conn) bool {
+	if stream == nil {
+		return true
+	}
+	value := reflect.ValueOf(stream)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

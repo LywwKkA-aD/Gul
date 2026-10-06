@@ -1,6 +1,6 @@
 // What the sidebar calls the server we are on.
 //
-// The address can include a Hysteria scheme, port and obfuscation mode. The
+// The address can include a Hysteria or REALITY scheme and private options. The
 // header shows the host; historical Mumble/relay addresses remain readable in
 // the saved-server list until the user replaces them.
 //
@@ -14,6 +14,7 @@ export const MUMBLE_DEFAULT_PORT = '64738';
 const SCHEME_DEFAULT_PORT: Record<string, string> = {
   hysteria2: '443',
   hy2: '443',
+  vless: '443',
   wss: '443',
   https: '443',
   ws: '80',
@@ -69,9 +70,9 @@ export function serverHost(address: string): string {
   if (host === '') return value;
 
   const schemeName = scheme?.[1].toLowerCase();
-  const hysteria = schemeName === 'hy2' || schemeName === 'hysteria2';
+  const proxy = schemeName === 'hy2' || schemeName === 'hysteria2' || schemeName === 'vless';
   const implied = schemeName ? SCHEME_DEFAULT_PORT[schemeName] : '443';
-  const historicalDefault = !hysteria && port === MUMBLE_DEFAULT_PORT;
+  const historicalDefault = !proxy && port === MUMBLE_DEFAULT_PORT;
   const noise = port === '' || historicalDefault || port === implied;
   return noise ? trimRootDot(host) : `${trimRootDot(host)}:${port}`;
 }

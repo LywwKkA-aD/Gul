@@ -1,0 +1,5 @@
+private/
+.env*
+xray
+*.zip
+*.dgst

@@ -11,15 +11,21 @@ import (
 
 type endpointKind uint8
 
-const endpointHysteria endpointKind = iota
+const (
+	endpointHysteria endpointKind = iota
+	endpointReality
+)
 
 const hysteriaDefaultPort = "443"
 
 type endpoint struct {
-	kind        endpointKind
-	address     string
-	host        string
-	obfuscation string
+	kind              endpointKind
+	address           string
+	host              string
+	obfuscation       string
+	realityServerName string
+	realityPublicKey  string
+	realityShortID    string
 }
 
 func parseEndpoint(value string) (endpoint, error) {
@@ -36,6 +42,9 @@ func parseEndpoint(value string) (endpoint, error) {
 			value = "[" + value + "]"
 		}
 		value = "hysteria2://" + value
+	}
+	if strings.HasPrefix(strings.ToLower(value), "vless://") {
+		return parseRealityEndpoint(value)
 	}
 	return parseHysteriaEndpoint(value)
 }

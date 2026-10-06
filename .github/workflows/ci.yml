@@ -240,9 +240,11 @@ jobs:
       - name: Run tests with race detector
         run: go test -race -count=1 . ./cmd/... ./internal/... ./services/...
 
-      - name: Verify Hysteria deployment configuration
+      - name: Verify transport deployment configurations
         if: runner.os == 'Linux'
-        run: python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
+        run: |
+          python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
+          python3 -m unittest discover -s deploy/reality -p 'test_*.py'
 
       - name: Scan reachable Go vulnerabilities
         run: |

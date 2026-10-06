@@ -20,7 +20,7 @@ type Callbacks struct {
 	OnTree    func(domain.ChannelNode)
 	OnMessage func(RawMessage)
 	OnTofu    func(domain.TofuPrompt)
-	// OnTransport records a Hysteria connection after a Mumble round trip.
+	// OnTransport records a proxy connection after a Mumble round trip.
 	OnTransport func(address, transport string)
 }
 
@@ -54,7 +54,7 @@ type Controller interface {
 	// packet reaches the socket long before the room answers, and a tree that
 	// arrives in between still carries our previous flags.
 	SelfAudioSettled(muted, deafened bool) bool
-	// PreferTransport restores a previously verified Hysteria hint. Legacy
+	// PreferTransport restores a previously verified transport hint. Legacy
 	// transport values are ignored; they cannot enable another protocol.
 	PreferTransport(address, transport string)
 	// AcceptFingerprint confirms the pending TOFU mismatch (OnTofu) and

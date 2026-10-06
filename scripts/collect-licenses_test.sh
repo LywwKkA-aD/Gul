@@ -63,6 +63,13 @@ grep -Fq 'github.com/godbus/dbus/v5@v5.2.2' \
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 
+for name in LICENSE VERSION handshake.go; do
+  bundled_name="$name"
+  if [[ "$name" == "handshake.go" ]]; then bundled_name="$name.txt"; fi
+  cmp "$repo_root/internal/reality/$name" \
+    "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality/$bundled_name"
+done
+
 test -f "$output_dir/LICENSE"
 test -f "$output_dir/copyright"
 test -f "$output_dir/NOTICE"

@@ -78,6 +78,18 @@ if [[ "$vendored_licenses" -eq 0 ]]; then
   exit 1
 fi
 
+# The adapted MPL handshake is compiled from our internal tree. Preserve its
+# exact source alongside the license in every binary distribution.
+for name in LICENSE VERSION handshake.go; do
+  relative_path="internal/reality/$name"
+  destination="$licenses_dir/vendored/$relative_path"
+  if [[ "$name" == "handshake.go" ]]; then destination="$destination.txt"; fi
+  mkdir -p "$(dirname "$destination")"
+  cp "$repo_root/$relative_path" "$destination"
+  printf '  %s\n' "$relative_path" >>"$manifest"
+done
+
+
 {
   echo
   echo "Go toolchain and modules"

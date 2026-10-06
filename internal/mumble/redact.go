@@ -79,6 +79,15 @@ func serverSpellings(address string) []string {
 	spellings := []string{address}
 	if ep, err := parseEndpoint(address); err == nil {
 		spellings = append(spellings, ep.address, ep.host)
+		if ep.kind == endpointReality {
+			spellings = append(spellings, ep.realityServerName, ep.realityPublicKey, ep.realityShortID)
+			// Error text may retain the user's spelling while the stored
+			// profile already uses canonical DNS case and short-ID hex.
+			if raw, err := url.Parse(address); err == nil {
+				query := raw.Query()
+				spellings = append(spellings, raw.Hostname(), query.Get("sni"), query.Get("pbk"), query.Get("sid"))
+			}
+		}
 	} else if host := rawHost(address); host != "" {
 		spellings = append(spellings, host)
 	}

@@ -85,14 +85,14 @@ func (m *Manager) run(ctx context.Context, c credentials, stop <-chan struct{}, 
 		case silent:
 			// A session without a round trip is rebuilt from a fresh tunnel.
 			m.transports.failed(c.key)
-			m.log.Info("Hysteria session did not answer, reconnecting",
+			m.log.Info("proxy session did not answer, reconnecting",
 				"transport", string(transport))
 			reason, terminal = reasonNoRoundTrip, false
 			note = reasonNoRoundTrip
 		case session.stalledUplink():
 			// Rebuild the tunnel when only the outgoing direction stops.
 			m.transports.failed(c.key)
-			m.log.Info("Hysteria uplink stalled, reconnecting",
+			m.log.Info("proxy uplink stalled, reconnecting",
 				"transport", string(transport))
 			reason = reasonUplinkStalled
 			note = reasonUplinkStalled
@@ -170,9 +170,9 @@ func (m *Manager) waitSession(
 			if m.roundTripFn != nil && !m.roundTripFn(client) {
 				return nil, false, true
 			}
-			// Remember Hysteria only after a Mumble round trip succeeds.
+			// Remember a transport only after a Mumble round trip succeeds.
 			if m.transports.succeeded(address, transport) {
-				m.log.Info("Hysteria round trip verified", "transport", string(transport))
+				m.log.Info("proxy round trip verified", "transport", string(transport))
 				if cb := m.cb.OnTransport; cb != nil {
 					cb(address, string(transport))
 				}

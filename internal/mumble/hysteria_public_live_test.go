@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,9 +27,33 @@ func TestPublicHysteriaChatAndVoice(t *testing.T) {
 	if address == "" || passwordFile == "" {
 		t.Skip("GUL_HYSTERIA_LIVE_ADDRESS and GUL_HYSTERIA_LIVE_PASSWORD_FILE are required")
 	}
+	publicProxyChatAndVoice(t, address, passwordFile, endpointHysteria, TransportHysteria)
+}
+
+func TestPublicRealityChatAndVoice(t *testing.T) {
+	address, passwordFile := publicRealityProfile(t)
+	publicProxyChatAndVoice(t, address, passwordFile, endpointReality, TransportReality)
+}
+
+func publicRealityProfile(t *testing.T) (string, string) {
+	t.Helper()
+	addressFile := os.Getenv("GUL_REALITY_LIVE_ADDRESS_FILE")
+	passwordFile := os.Getenv("GUL_REALITY_LIVE_PASSWORD_FILE")
+	if addressFile == "" || passwordFile == "" {
+		t.Skip("GUL_REALITY_LIVE_ADDRESS_FILE and GUL_REALITY_LIVE_PASSWORD_FILE are required")
+	}
+	data, err := os.ReadFile(addressFile)
+	if err != nil {
+		t.Fatal("could not read the private REALITY profile")
+	}
+	return strings.TrimSpace(string(data)), passwordFile
+}
+
+func publicProxyChatAndVoice(t *testing.T, address, passwordFile string, kind endpointKind, transport Transport) {
+	t.Helper()
 	ep, err := parseEndpoint(address)
-	if err != nil || ep.kind != endpointHysteria {
-		t.Fatal("the public test requires a valid Hysteria endpoint")
+	if err != nil || ep.kind != kind {
+		t.Fatal("the public test requires a valid endpoint of the requested transport")
 	}
 	password := readLivePassword(t, passwordFile)
 	defer clear(password)
@@ -58,19 +83,19 @@ func TestPublicHysteriaChatAndVoice(t *testing.T) {
 		t.Fatal("the server did not report two distinct client certificate identities")
 	}
 
-	publicHysteriaChat(t, a, b, nameA, root, "Gul Hysteria check A to B "+suffix)
-	publicHysteriaChat(t, b, a, nameB, root, "Gul Hysteria check B to A "+suffix)
+	publicHysteriaChat(t, a, b, nameA, root, "Gul transport check A to B "+suffix)
+	publicHysteriaChat(t, b, a, nameB, root, "Gul transport check B to A "+suffix)
 	publicHysteriaVoice(t, a, b, peerA.Session, "A to B")
 	publicHysteriaVoice(t, b, a, peerB.Session, "B to A")
 
 	for _, client := range []*publicHysteriaClient{a, b} {
 		select {
-		case transport := <-client.proven:
-			if transport != TransportHysteria {
-				t.Fatal("a test client used a transport other than Hysteria")
+		case proven := <-client.proven:
+			if proven != transport {
+				t.Fatal("a test client used an unexpected transport")
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatal("Hysteria did not prove a Mumble round trip")
+			t.Fatal("the transport did not prove a Mumble round trip")
 		}
 		if client.unstable.Load() || client.state() != domain.StateConnected {
 			t.Fatal("a client disconnected or reconnected during the public test")
@@ -81,7 +106,7 @@ func TestPublicHysteriaChatAndVoice(t *testing.T) {
 				stats.TXErrors, stats.TXOffline, stats.TXDrops)
 		}
 	}
-	t.Log("two independent clients exchanged chat and decoded audible Opus in both directions through Hysteria")
+	t.Log("two independent clients exchanged chat and decoded audible Opus in both directions through the requested transport")
 }
 
 type publicHysteriaClient struct {

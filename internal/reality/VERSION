@@ -1,0 +1,15 @@
+REALITY client handshake adaptation
+Upstream: https://github.com/XTLS/Xray-core
+Release: v26.3.27
+Commit: d2758a023cd7f4174a5a5fa4ff66e487d4342ba0
+Source: transport/internet/reality/reality.go
+License: MPL-2.0 (LICENSE)
+Covered Gul file: handshake.go
+Changes: public x509 certificate parsing instead of unsafe reflection;
+fixed Chrome fingerprint; authenticated certificate required with no cover-site
+fallback; no logging, Vision, or optional ML-DSA; context-bounded setup.
+
+The exact modified source accompanies binary distributions in
+THIRD_PARTY_LICENSES/vendored/internal/reality/handshake.go.txt.
+The application source for each release is also published at
+https://github.com/LywwKkA-aD/Gul/tree/v0.6.0-alpha.3/internal/reality

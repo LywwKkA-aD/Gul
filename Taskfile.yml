@@ -88,6 +88,7 @@ tasks:
       - go test -race {{.GO_PACKAGES}}
       - cd frontend && npm test
       - python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
+      - python3 -m unittest discover -s deploy/reality -p 'test_*.py'
       - python3 -m unittest discover -s scripts -p 'test_check_go_vulnerabilities.py'
 
   test:live:

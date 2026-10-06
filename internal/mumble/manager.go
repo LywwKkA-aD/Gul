@@ -17,6 +17,7 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/hysteria"
 	"github.com/LywwKkA-aD/Gul/internal/identity"
+	"github.com/LywwKkA-aD/Gul/internal/reality"
 )
 
 // ErrNotConnected is returned by actions that need a live session.
@@ -102,7 +103,7 @@ type Manager struct {
 	selfAudioWake   chan struct{}
 	selfAudioDone   chan struct{}
 	selfAudioBudget *sendBudget
-	// transports remembers which saved servers completed a Hysteria round trip.
+	// transports remembers which saved servers completed a proxy round trip.
 	transports *transportChooser
 
 	mu         sync.Mutex
@@ -462,8 +463,8 @@ func (m *Manager) publishConnected(session *Session, server string) {
 	}
 }
 
-// PreferTransport restores a verified Hysteria hint for one server. Anything the
-// chooser does not recognise is ignored; Hysteria remains the only transport.
+// PreferTransport restores a verified hint for one server. Conflicting hints
+// are ignored: only the transport explicitly selected by its URL can be used.
 func (m *Manager) PreferTransport(address, transport string) {
 	ep, err := parseEndpoint(address)
 	if err != nil {
@@ -776,7 +777,8 @@ func joinReason(prefix, detail string) string {
 // first is the common race where the server has not yet reaped our previous
 // session after a drop, the second clears on its own.
 func isTerminalDialError(err error) bool {
-	if errors.Is(err, hysteria.ErrAuthentication) || errors.Is(err, hysteria.ErrPasswordRequired) {
+	if errors.Is(err, hysteria.ErrAuthentication) || errors.Is(err, hysteria.ErrPasswordRequired) ||
+		errors.Is(err, reality.ErrPasswordRequired) || errors.Is(err, reality.ErrAuthentication) {
 		return true
 	}
 	var reject *gumble.RejectError

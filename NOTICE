@@ -43,6 +43,14 @@ Hysteria core/v2 and extras/v2 v2.13.0 (github.com/apernet/hysteria)
   License: MIT - each module's LICENSE.md is included in the generated bundle.
   These official modules provide the embedded client and packet obfuscation.
 
+REALITY client handshake (internal/reality/handshake.go)
+  Adapted from XTLS/Xray-core v26.3.27, commit
+  d2758a023cd7f4174a5a5fa4ff66e487d4342ba0,
+  transport/internet/reality/reality.go, by the XTLS/Xray-core contributors.
+  License: MPL-2.0. The complete license, provenance, and exact modified source
+  accompany every binary under THIRD_PARTY_LICENSES/vendored/internal/reality.
+  See internal/reality/VERSION for source availability and changes.
+
 Other Go runtime dependencies include the Go standard library, Wails v3,
 coder/websocket, adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty,
 golang.org/x/net, golang.org/x/sys, google.golang.org/protobuf and, on

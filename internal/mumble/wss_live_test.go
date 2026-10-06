@@ -29,9 +29,6 @@ func TestPublicHysteriaStaysConnected(t *testing.T) {
 	if passwordFile == "" {
 		t.Skip("GUL_HYSTERIA_LIVE_PASSWORD_FILE is not set")
 	}
-	password := readLivePassword(t, passwordFile)
-	defer clear(password)
-
 	address := os.Getenv("GUL_HYSTERIA_LIVE_ADDRESS")
 	if address == "" {
 		t.Skip("GUL_HYSTERIA_LIVE_ADDRESS is not set")
@@ -40,6 +37,19 @@ func TestPublicHysteriaStaysConnected(t *testing.T) {
 	if username == "" {
 		username = "gul-hysteria-smoke"
 	}
+
+	publicProxyStaysConnected(t, address, passwordFile, username)
+}
+
+func TestPublicRealityStaysConnected(t *testing.T) {
+	address, passwordFile := publicRealityProfile(t)
+	publicProxyStaysConnected(t, address, passwordFile, "gul-reality-smoke")
+}
+
+func publicProxyStaysConnected(t *testing.T, address, passwordFile, username string) {
+	t.Helper()
+	password := readLivePassword(t, passwordFile)
+	defer clear(password)
 
 	var mu sync.Mutex
 	state := domain.StateDisconnected
@@ -67,7 +77,7 @@ func TestPublicHysteriaStaysConnected(t *testing.T) {
 	t.Cleanup(mgr.Close)
 
 	mgr.Connect(address, username, string(password))
-	connectDeadline := time.NewTimer(15 * time.Second)
+	connectDeadline := time.NewTimer(25 * time.Second)
 	defer connectDeadline.Stop()
 	for {
 		select {
@@ -76,10 +86,10 @@ func TestPublicHysteriaStaysConnected(t *testing.T) {
 				goto connected
 			}
 			if status.State == domain.StateDisconnected && status.Error != "" {
-				t.Fatalf("Hysteria connection failed: %s", RedactServer(status.Error, address))
+				t.Fatalf("public connection failed: %s", RedactServer(status.Error, address))
 			}
 		case <-connectDeadline.C:
-			t.Fatal("Hysteria did not connect within 15 seconds")
+			t.Fatal("public client did not connect within 25 seconds")
 		}
 	}
 
@@ -90,7 +100,7 @@ connected:
 		select {
 		case status := <-updates:
 			if status.State != domain.StateConnected {
-				t.Fatalf("Hysteria session changed state during stability window: %s", status.State)
+				t.Fatalf("public session changed state during stability window: %s", status.State)
 			}
 		case <-hold.C:
 			mu.Lock()
@@ -103,7 +113,7 @@ connected:
 			if lastLatency == nil || math.IsNaN(lastLatency.PingMS) || math.IsInf(lastLatency.PingMS, 0) || lastLatency.PingMS < 0 {
 				t.Fatal("no valid TLS/TCP RTT sample arrived during stability window")
 			}
-			t.Logf("public Hysteria session stayed connected for 90s; RTT %.0f ms", lastLatency.PingMS)
+			t.Logf("public session stayed connected for 90s; RTT %.0f ms", lastLatency.PingMS)
 			return
 		}
 	}

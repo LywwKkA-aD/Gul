@@ -15,9 +15,9 @@ import (
 )
 
 // dialTimeout bounds getting the connection open: the transport dial, the TLS
-// handshake and Hysteria TCP stream setup. All of that is small and fixed in
-// size, so a fixed budget fits it.
-const dialTimeout = 10 * time.Second
+// handshake and proxy stream setup. Both encrypted handshakes share a budget
+// with room for TCP retransmission on a slow connection.
+const dialTimeout = 20 * time.Second
 
 // syncSilence bounds what happens next, and it is measured differently on
 // purpose.
@@ -40,7 +40,7 @@ type DialConfig struct {
 	// Context cancels connection setup and initial Mumble synchronization.
 	// Canceling it after Dial succeeds does not close the live session.
 	Context  context.Context
-	Address  string // hysteria2://host[:port] (bare hosts default to UDP 443)
+	Address  string // hysteria2://host[:port] or a VLESS REALITY profile
 	Username string
 	Password string
 	// Certificate is used only by callers without a derived IdentitySeed.
@@ -52,7 +52,7 @@ type DialConfig struct {
 	// the system trust store, which is what production uses; a live test
 	// supplies a CA for its local Hysteria server.
 	OuterRoots *tls.Config
-	// Transport identifies the embedded Hysteria transport in diagnostics.
+	// Transport identifies the embedded proxy transport in diagnostics.
 	Transport Transport
 }
 
@@ -164,11 +164,15 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 		parent = context.Background()
 	}
 	dialCtx, cancelDial := context.WithTimeout(parent, dialTimeout)
-	conn, dialErr := dialHysteria(dialCtx, cfg, ep, tofu)
+	connect := dialHysteria
+	if ep.kind == endpointReality {
+		connect = dialReality
+	}
+	conn, dialErr := connect(dialCtx, cfg, ep, tofu)
 	// A completed tunnel no longer depends on the setup context.
 	cancelDial()
 	if dialErr != nil {
-		return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
+		return nil, sessionDialError(cfg, ep, dialErr)
 	}
 	// Frame application packets above TLS so protocol keepalives and QUIC
 	// handshakes never count as Mumble activity for the silence watchdog.
@@ -179,7 +183,7 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	client, err := gumble.DialWithConn(syncCtx, packets, gc)
 	if err != nil {
 		_ = packets.Close()
-		return nil, fmt.Errorf("dial %s: %w", ep.address, err)
+		return nil, sessionDialError(cfg, ep, err)
 	}
 	if err := checkIdentity(client, ep.host, cfg.IdentitySeed, log); err != nil {
 		_ = packets.Close()
@@ -187,6 +191,13 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	}
 	s.client = client
 	return s, nil
+}
+
+func sessionDialError(cfg DialConfig, ep endpoint, err error) error {
+	if ep.kind == endpointReality {
+		return fmt.Errorf("dial VLESS REALITY: %w", sanitizedRealityError(err, cfg.Password, ep))
+	}
+	return fmt.Errorf("dial %s: %w", ep.address, err)
 }
 
 // checkIdentity verifies that Murmur reports the identity presented by the
@@ -242,7 +253,7 @@ func syncingContextWithParent(parent context.Context, packets *packetConn, start
 }
 
 // Disconnect closes the connection exactly once; later calls are no-ops.
-// Closing the owned stream also releases Hysteria after a remote EOF.
+// Closing the owned stream also releases the proxy after a remote EOF.
 func (s *Session) Disconnect() error {
 	if s == nil {
 		return nil
@@ -250,7 +261,7 @@ func (s *Session) Disconnect() error {
 	var err error
 	s.closeOnce.Do(func() {
 		// gumble marks a read failure disconnected without closing its Conn.
-		// Always release the owned stream and Hysteria client, including after
+		// Always release the owned stream and proxy client, including after
 		// a remote EOF. Closing the socket also avoids Client.Disconnect's
 		// unsynchronized write to the read loop's disconnect event.
 		if s.packets != nil {

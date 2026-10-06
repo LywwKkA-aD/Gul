@@ -8,8 +8,10 @@
 Команды: task dev · task murmur:up · task test · task lint · task package
 Стенд: mumblevoip/mumble-server:v1.5.915 в докере; отладка AEC — VoiceTargetLoopback (ID 31).
 
-Транспорт GUI с M7.9: встроенный Hysteria v2.13.0 -> Mumble TLS/TCP; голос —
-UDPTunnel. Прямой и WSS-дозвон заменены. Текущий серверный стенд — `deploy/hysteria/`.
+Транспорт GUI: Hysteria v2.13.0 по умолчанию (M7.9) либо явный профиль
+VLESS + REALITY / TCP без Vision (M7.10). Оба встроены и несут Mumble TLS/UDPTunnel.
+Прямой и WSS-дозвон заменены. Стенды: `deploy/hysteria/`, `deploy/reality/`.
+REALITY handshake — адаптация MPL-2.0 из Xray v26.3.27; полный Xray только на VPS.
 
 Стек (пины жёсткие, @latest запрещён): Wails v3.0.0-beta.11 · Go ≥1.25 ·
 форк stieneee/gumble (с M2 — свой форк + OpusPassthrough) · вендоренные libopus 1.6.1,

@@ -30,6 +30,12 @@ test('a Hysteria endpoint keeps any nondefault port', () => {
   assert.equal(serverHost('hy2://voice.example.com:64738'), 'voice.example.com:64738');
 });
 
+test('a REALITY profile shows only the host and any nondefault port', () => {
+  assert.equal(serverHost('vless://voice.example.com:443?pbk=private-profile&sid=0123'), 'voice.example.com');
+  assert.equal(serverHost('vless://voice.example.com:64738?security=reality'), 'voice.example.com:64738');
+  assert.equal(serverHost('vless://[2001:db8::1]:443?security=reality'), '[2001:db8::1]');
+});
+
 test('a relay URL loses its scheme and its path', () => {
   assert.equal(serverHost('wss://murmur.gulvox.com/mumble'), 'murmur.gulvox.com');
 });
