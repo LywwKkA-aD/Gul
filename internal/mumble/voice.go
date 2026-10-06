@@ -2,6 +2,7 @@ package mumble
 
 import (
 	"errors"
+	"github.com/LywwKkA-aD/Gul/internal/session"
 	"log/slog"
 	"math"
 	"sync"
@@ -54,16 +55,7 @@ const (
 )
 
 // VoicePacket is one incoming raw Opus packet (passthrough mode).
-type VoicePacket struct {
-	Session uint32 // sender session id
-	// Key is what this client files the sender's audio settings under: the
-	// certificate hash when there is one, something weaker when there is not
-	// (peerkey.go). Two anonymous peers must not become one entry.
-	Key      string
-	Sequence int64 // wire frame number (10 ms units)
-	Opus     []byte
-	Final    bool
-}
+type VoicePacket = session.VoicePacket
 
 // VoiceStats are the voice transport counters. Every field is monotonic for
 // the life of the Manager and survives reconnects.

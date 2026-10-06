@@ -26,9 +26,10 @@ package audio
 type JitterResult int
 
 const (
-	JitterFrame   JitterResult = iota // dst filled with the next frame
-	JitterConceal                     // gap: caller must run PLC for this slot
-	JitterIdle                        // no active stream, caller outputs nothing
+	JitterFrame           JitterResult = iota // dst filled with the next frame
+	JitterConceal                             // gap: caller must run PLC for this slot
+	JitterIdle                                // no active stream, caller outputs nothing
+	JitterBufferedConceal                     // dst contains PLC decoded before future Opus
 )
 
 const (
@@ -69,8 +70,9 @@ const (
 
 // Jitter reorders, de-duplicates and paces decoded 10 ms frames of one sender.
 type Jitter struct {
-	ring    [][]int16 // slot i holds the frame whose sequence is i mod len(ring)
-	present []bool
+	ring      [][]int16 // slot i holds the frame whose sequence is i mod len(ring)
+	present   []bool
+	concealed []bool
 
 	state jitterState
 
@@ -83,6 +85,10 @@ type Jitter struct {
 
 	final    bool
 	finalSeq int64
+	// Completed phrases can precede an open phrase in the same ring. Their
+	// prefix must drain even below target depth, without trimming its tail.
+	drainThrough int64
+	hasDrain     bool
 
 	sincePush     int // ticks since the last accepted arrival
 	sinceUnderrun int // ticks of clean playout
@@ -101,9 +107,10 @@ func (j *Jitter) Counts() JitterCounts { return j.counts }
 // frames. Single-goroutine use (the DSP goroutine), no locks needed.
 func NewJitter() *Jitter {
 	j := &Jitter{
-		ring:    make([][]int16, jitterRingFrames),
-		present: make([]bool, jitterRingFrames),
-		target:  jitterStartFrames,
+		ring:      make([][]int16, jitterRingFrames),
+		present:   make([]bool, jitterRingFrames),
+		concealed: make([]bool, jitterRingFrames),
+		target:    jitterStartFrames,
 	}
 	// One backing array, sliced into fixed frames: the ring never grows, so a
 	// deeper target costs latency but no allocation.
@@ -119,14 +126,22 @@ func NewJitter() *Jitter {
 // (Mumble sequence is counted in 10 ms frame units; the RX pipeline derives
 // per-frame numbers when repacking 20/40/60 ms packets).
 func (j *Jitter) Push(seq int64, frame []int16) {
+	j.push(seq, frame, false)
+}
+
+// PushConcealed queues PCM recovered before decoding subsequent RTP packets.
+func (j *Jitter) PushConcealed(seq int64, frame []int16) {
+	j.push(seq, frame, true)
+}
+
+func (j *Jitter) push(seq int64, frame []int16, concealed bool) {
 	if seq < 0 {
 		return
 	}
 	if j.state == jitterIdleState {
 		j.startStream(seq)
 	} else if j.isRestart(seq) {
-		j.clear()
-		j.startStream(seq)
+		j.restart(seq)
 	}
 	if seq < j.next {
 		if j.state != jitterPrimeState || j.highest-seq > jitterRingFrames {
@@ -151,6 +166,7 @@ func (j *Jitter) Push(seq int64, frame []int16) {
 	}
 	copyIntoSlot(j.ring[idx], frame)
 	j.present[idx] = true
+	j.concealed[idx] = concealed
 	j.count++
 	if seq >= j.highest {
 		j.highest = seq + 1
@@ -165,13 +181,33 @@ func (j *Jitter) PushFinal(seq int64) {
 		return
 	}
 	j.final = true
-	j.finalSeq = seq
-	if seq >= j.highest {
+	// A stale terminator must not discard frames already accepted beyond it.
+	j.finalSeq = max(seq, j.highest-1)
+	j.drainThrough = j.finalSeq
+	j.hasDrain = true
+	if j.finalSeq >= j.highest {
 		// Slots up to the terminator were sent; anything missing gets concealed
 		// rather than silently skipped.
-		j.highest = seq + 1
+		j.highest = j.finalSeq + 1
 	}
 	j.sincePush = 0
+}
+
+// BeginPhrase appends a phrase after the queued PCM in local sequence space.
+// RX calls it on the first decoded packet after an ordered wire terminator.
+// Clearing the stop flag must not clear the previous phrase's unplayed tail
+// or its permission to drain. No extra priming delay is inserted between
+// phrases already buffered together.
+func (j *Jitter) BeginPhrase() int64 {
+	j.final = false
+	return j.highest
+}
+
+// restart handles a discontinuity without a wire terminator. Unlike a normal
+// phrase boundary it abandons the old sequence window, retaining link depth.
+func (j *Jitter) restart(seq int64) {
+	j.clear()
+	j.startStream(seq)
 }
 
 // Pop is called exactly once per 10 ms tick. dst has FrameSamples length.
@@ -186,7 +222,7 @@ func (j *Jitter) Pop(dst []int16) JitterResult {
 	switch result {
 	case JitterFrame:
 		j.counts.Played++
-	case JitterConceal:
+	case JitterConceal, JitterBufferedConceal:
 		j.counts.Concealed++
 	}
 	return result
@@ -256,7 +292,11 @@ func (j *Jitter) play(dst []int16) JitterResult {
 		copy(dst, j.ring[idx])
 		j.present[idx] = false
 		j.count--
+		concealed := j.concealed[idx]
 		j.advance()
+		if concealed {
+			return JitterBufferedConceal
+		}
 		return JitterFrame
 	}
 	if j.next < j.highest {
@@ -298,7 +338,7 @@ func (j *Jitter) play(dst []int16) JitterResult {
 
 // ready reports whether enough audio is queued to (re)start playout.
 func (j *Jitter) ready() bool {
-	if j.final {
+	if j.final || (j.hasDrain && j.next <= j.drainThrough) {
 		// The transmission is over: drain whatever is left, do not wait.
 		return true
 	}
@@ -313,7 +353,7 @@ func (j *Jitter) ready() bool {
 // trimExcess gives back latency accumulated above the target, one frame at a
 // time and rarely enough that the skip stays inaudible.
 func (j *Jitter) trimExcess() {
-	if j.final {
+	if j.final || (j.hasDrain && j.next <= j.drainThrough) {
 		// Draining anyway; dropping tail audio would only truncate the phrase.
 		j.sinceDrop = 0
 		return
@@ -374,6 +414,8 @@ func (j *Jitter) startStream(seq int64) {
 	j.highest = seq
 	j.final = false
 	j.finalSeq = 0
+	j.hasDrain = false
+	j.drainThrough = 0
 	j.sincePush = 0
 	j.sinceUnderrun = 0
 	j.sinceDrop = 0
@@ -388,6 +430,8 @@ func (j *Jitter) endStream() {
 	j.highest = 0
 	j.final = false
 	j.finalSeq = 0
+	j.hasDrain = false
+	j.drainThrough = 0
 }
 
 // dropUntil discards queued frames below seq.

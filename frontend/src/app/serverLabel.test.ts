@@ -36,6 +36,13 @@ test('a REALITY profile shows only the host and any nondefault port', () => {
   assert.equal(serverHost('vless://[2001:db8::1]:443?security=reality'), '[2001:db8::1]');
 });
 
+test('a LiveKit address hides connection options and only its own default port', () => {
+  assert.equal(serverHost('livekit://voice.example.com:443/rooms?private=option'), 'voice.example.com');
+  assert.equal(serverHost('livekit://127.0.0.1:8788'), '127.0.0.1:8788');
+  assert.equal(serverHost('livekit://voice.example.com:64738'), 'voice.example.com:64738');
+  assert.equal(serverHost('livekit://[2001:db8::1]:443'), '[2001:db8::1]');
+});
+
 test('a relay URL loses its scheme and its path', () => {
   assert.equal(serverHost('wss://murmur.gulvox.com/mumble'), 'murmur.gulvox.com');
 });

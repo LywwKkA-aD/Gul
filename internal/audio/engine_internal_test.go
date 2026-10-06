@@ -72,13 +72,13 @@ func TestEngineLoopback(t *testing.T) {
 	send := func(opus []byte, final bool) error {
 		if final {
 			finals.Add(1)
-			return nil
 		}
 		p := mumble.VoicePacket{
 			Session:  7,
 			Key:      "peer-hash",
 			Sequence: seq.Add(1) - 1,
 			Opus:     opus,
+			Final:    final,
 		}
 		select {
 		case packets <- p:
@@ -123,6 +123,7 @@ func TestEngineLoopback(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	e.SetMute(true)
 	time.Sleep(400 * time.Millisecond)
+	endedBeforeClose := talkingOff.Load() == 1
 	close(stop)
 	<-done
 
@@ -138,6 +139,9 @@ func TestEngineLoopback(t *testing.T) {
 	if talkingOn.Load() != 1 || talkingOff.Load() != 1 {
 		t.Fatalf("talking transitions on=%d off=%d, want 1/1",
 			talkingOn.Load(), talkingOff.Load())
+	}
+	if !endedBeforeClose {
+		t.Fatal("looped-back terminator did not end talking before engine shutdown")
 	}
 }
 

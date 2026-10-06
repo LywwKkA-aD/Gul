@@ -78,18 +78,6 @@ if [[ "$vendored_licenses" -eq 0 ]]; then
   exit 1
 fi
 
-# The adapted MPL handshake is compiled from our internal tree. Preserve its
-# exact source alongside the license in every binary distribution.
-for name in LICENSE VERSION handshake.go; do
-  relative_path="internal/reality/$name"
-  destination="$licenses_dir/vendored/$relative_path"
-  if [[ "$name" == "handshake.go" ]]; then destination="$destination.txt"; fi
-  mkdir -p "$(dirname "$destination")"
-  cp "$repo_root/$relative_path" "$destination"
-  printf '  %s\n' "$relative_path" >>"$manifest"
-done
-
-
 {
   echo
   echo "Go toolchain and modules"
@@ -199,6 +187,9 @@ for module_path in "${go_modules[@]}"; do
   while IFS= read -r source_file; do
     module_relative_path=${source_file#"$module_dir/"}
     destination="$module_destination/$module_relative_path"
+    # Some modules include matching Go sources (for example license_test.go).
+    # Retain their text without adding packages to later `go mod tidy` scans.
+    if [[ "$destination" == *.go ]]; then destination="$destination.txt"; fi
     mkdir -p "$(dirname "$destination")"
     cp "$source_file" "$destination"
     found_license=1
@@ -263,6 +254,33 @@ while IFS='|' read -r package_name package_version package_dir; do
     continue
   fi
 
+  # protobuf-es 1.10.1 declares Apache-2.0 AND BSD-3-Clause but its npm
+  # tarball omits the root LICENSE. Use the audited upstream-tag copy and
+  # preserve Google's complete inline BSD text, plus Buf's copyright notice.
+  # A dependency upgrade must review these attributions before shipping.
+  if [[ "$package_name" == "@bufbuild/protobuf" ]]; then
+    if [[ "$package_version" != "1.10.1" ]]; then
+      echo "Unsupported protobuf license attribution version: $package_version" >&2
+      exit 1
+    fi
+    protobuf_google="$package_dir/dist/esm/google/varint.js"
+    protobuf_buf="$package_dir/dist/esm/index.js"
+    if [[ ! -f "$protobuf_google" || ! -f "$protobuf_buf" ]] || \
+      ! grep -Fq 'Copyright 2008 Google Inc.' "$protobuf_google" || \
+      ! grep -Fq 'OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.' "$protobuf_google" || \
+      ! grep -Fq 'Copyright 2021-2024 Buf Technologies, Inc.' "$protobuf_buf"; then
+      echo "Missing inline protobuf license attribution" >&2
+      exit 1
+    fi
+    package_destination="$licenses_dir/npm/$package_name"
+    attribution_dir="$repo_root/third_party/npm-attributions/bufbuild-protobuf-1.10.1"
+    mkdir -p "$package_destination"
+    cp "$attribution_dir/LICENSE-APACHE-2.0" "$attribution_dir/VERSION" "$package_destination/"
+    cp "$protobuf_google" "$package_destination/Google-BSD-3-Clause-LICENSE-and-source.js"
+    cp "$protobuf_buf" "$package_destination/Buf-NOTICE-and-source.js"
+    continue
+  fi
+
   package_destination="$licenses_dir/npm/$package_name"
   mkdir -p "$package_destination"
   found_license=0
@@ -293,6 +311,12 @@ for (const [packagePath, metadata] of Object.entries(lock.packages ?? {})) {
     continue;
   }
   const name = metadata.name ?? packagePath.slice("node_modules/".length);
+  // Some SDKs list declaration-only packages in production dependencies.
+  // @types/dom-mediacapture-record is one such LiveKit dependency; TypeScript
+  // consumes it at build time, and no declaration files enter the JS bundle.
+  if (name.startsWith("@types/")) {
+    continue;
+  }
   const directory = path.resolve("frontend", packagePath);
   process.stdout.write(`${name}|${metadata.version ?? "unknown"}|${directory}\n`);
 }

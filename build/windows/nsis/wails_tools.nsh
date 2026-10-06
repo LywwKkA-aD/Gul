@@ -11,10 +11,10 @@
     !define INFO_COMPANYNAME "Gul contributors"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "Gul"
+    !define INFO_PRODUCTNAME "Gul LiveKit"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.6.0"
+    !define INFO_PRODUCTVERSION "0.7.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2026 Gul contributors"

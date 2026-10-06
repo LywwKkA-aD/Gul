@@ -3,7 +3,7 @@ package audio
 import (
 	"sync"
 
-	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/session"
 )
 
 // How this client treats one other person's voice: the gain the listener
@@ -102,7 +102,7 @@ func (s *userAudioState) keep(present map[string]bool) {
 	defer s.writes.Unlock()
 	s.values.Range(func(key, _ any) bool {
 		name, _ := key.(string)
-		if mumble.PeerKeyIsMortal(name) && !present[name] {
+		if session.PeerKeyIsMortal(name) && !present[name] {
 			s.values.Delete(key)
 		}
 		return true

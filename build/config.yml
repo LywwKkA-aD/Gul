@@ -6,12 +6,12 @@ version: '3'
 # This information is used to generate the build assets.
 info:
   companyName: "Gul contributors" # The name of the company
-  productName: "Gul" # The name of the application
-  productIdentifier: "io.github.lywwkkaad.gul" # The unique product identifier
-  description: "A desktop Mumble voice client for friends" # The application description
+  productName: "Gul LiveKit" # The name of the application
+  productIdentifier: "io.github.lywwkkaad.gul.livekit" # Separate identity for the LiveKit prerelease.
+  description: "A desktop LiveKit voice client for friends" # The application description
   copyright: "© 2026 Gul contributors" # Copyright text
-  comments: "Private voice chat over Mumble" # Comments
-  version: "0.6.0" # Numeric platform version; prerelease label lives in core.Version/tag.
+  comments: "Voice chat and screen sharing over LiveKit" # Comments
+  version: "0.7.0" # Numeric platform version; prerelease label lives in core.Version/tag.
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

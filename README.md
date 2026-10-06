@@ -1,22 +1,24 @@
 # Gul
 
-Десктопный голосовой клиент «как Discord» для компании друзей поверх готового
-Mumble-сервера. Wails v3 + Go (cgo DSP) + React/TypeScript.
+Десктопный голосовой клиент для компании друзей: Wails v3 + Go (cgo DSP) +
+React/TypeScript. Тестовая версия **0.7.0-alpha.1** переведена на **LiveKit**: голос,
+каналы, текстовый чат и демонстрация экрана работают в обычном интерфейсе Gul.
+Нативные WebRTC AEC3, RNNoise, VAD/PTT и выбор устройств сохранены.
 
-Главный документ — [PLAN.md](PLAN.md) (архитектура, милстоуны, правила).
-Журнал решений — [docs/DECISIONS.md](docs/DECISIONS.md). Статус: **alpha**:
-двусторонний голос с Gul и официальным Mumble-клиентом, WebRTC AEC3, шумоподавление,
-RNNoise, VAD и Push-to-talk при фокусе окна.
+Главный документ — [PLAN.md](PLAN.md), решения — [docs/DECISIONS.md](docs/DECISIONS.md).
+Запуск полного локального клиента и ограничения — [docs/LIVEKIT-LOCAL.md](docs/LIVEKIT-LOCAL.md).
+Серверный стенд работает только на компьютере, где его запустили; удалённое
+подключение и авторизация LiveKit требуют отдельного этапа. Windows/game audio
+ещё не проверены. На macOS возможны зависание запуска аудио и ошибка первого
+подключения панели демонстраций; это пока версия для испытаний.
 
-В Gul встроены два транспорта: **Hysteria 2** (QUIC/UDP) и **VLESS + REALITY**
-(TCP). Пользователям не нужно отдельно устанавливать прокси или VPN.
-Голос, чат и управление идут внутри Mumble TLS; аудиодвижок работает локально.
-
-Версия **0.6.0-alpha.3** добавляет REALITY для проверки сетей, где UDP не проходит.
-Транспорт выбирается адресом сервера: Hysteria остаётся вариантом по умолчанию.
-Публичные alpha-сборки находятся во вкладке
-[Releases](https://github.com/LywwKkA-aD/Gul/releases). Это prerelease для тестов,
-а не окончательно подписанный установщик.
+**0.7.0-alpha.1** выпускается как prerelease для локальных тестов. Этот клиент
+не подключается к действующему Mumble/VLESS-серверу. Для текущего общения
+сохраните **[0.6.0-alpha.3](https://github.com/LywwKkA-aD/Gul/releases/tag/v0.6.0-alpha.3)**
+со встроенными Hysteria 2 и VLESS + REALITY и запускайте новую сборку отдельно.
+Удалённый сервер этой публикацией не переносится. Описание тестовой версии —
+[release notes](.github/release-notes/v0.7.0-alpha.1.md), сборки —
+[Releases](https://github.com/LywwKkA-aD/Gul/releases).
 
 ## Версии (пины жёсткие, `@latest` запрещён)
 
@@ -27,9 +29,10 @@ RNNoise, VAD и Push-to-talk при фокусе окна.
 | Node | ≥ 22 (разработка ведётся на 24) |
 | React / TypeScript | 19.2.x / 6.0.2 (не 7.x) |
 | Vite / Tailwind / zustand | 8.x / 4.x / 5.x |
-| gumble (форк Gul) | v0.0.0-20260824160029-7999640c1fef |
-| Hysteria core / extras | v2.13.0 |
-| REALITY handshake / Xray server | v26.3.27 (адаптация MPL-2.0 / отдельный сервер) |
+| LiveKit SFU / Go SDK / JS SDK | 1.13.8 / 2.18.1 / 2.22.3 |
+| gumble (legacy, форк Gul) | v0.0.0-20260824160029-7999640c1fef |
+| Hysteria core / extras (legacy) | v2.13.0 |
+| REALITY handshake / Xray server (legacy) | v26.3.27 (адаптация MPL-2.0 / отдельный сервер) |
 | mumble-server (стенд) | mumblevoip/mumble-server:v1.5.915 |
 | golangci-lint | v2.13.1 |
 
@@ -54,25 +57,20 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ## Разработка
 
 ```sh
-task murmur:up      # Mumble для автоматических live-тестов (loopback 64738)
-task dev            # приложение в dev-режиме
-task lint           # версии + заголовки + gofmt + go vet + golangci-lint + eslint
-task test           # go test -race (без устройств и сети)
-task test:live      # тестовый Hysteria перед запущенным Mumble
-task murmur:logs    # логи сервера
-task package        # упаковка под текущую ОС
+bash scripts/livekit-local.sh up       # локальный SFU и broker
+bash scripts/livekit-client.sh         # полный macOS-клиент, отдельный bundle
+# либо task dev для разработки под текущую ОС
+task lint
+task test
+GUL_LIVEKIT_LIVE=1 GOTOOLCHAIN=go1.26.7 go test -race -tags live ./internal/livekit
 ```
 
-Для ручного запуска `task dev` нужен Hysteria- или REALITY-сервер из инструкции ниже.
-Прямое подключение GUI к `127.0.0.1:64738` больше не используется; локальный
-Mumble-стенд служит для live-тестов. Отпечаток внутреннего Mumble-сертификата
-пинится по TOFU при первом подключении. Лог приложения лежит в конфиг-папке ОС, например
-`~/Library/Application Support/gul/gul.log` на macOS и `%AppData%\gul\gul.log` на Windows.
+Адрес: `http://127.0.0.1:8787`, любой ник, пароль пустой. Настройки и лог текущего
+клиента находятся в конфиг-папке `gul-livekit`; рабочая папка `gul` не используется.
+Стенд не предназначен для публикации в интернете. `task murmur:up` и
+`task test:live` сохраняются для регрессий legacy-транспорта.
 
-Dev-стенд доступен только с этого компьютера и отключает autoban для тестов;
-не публикуйте его напрямую в интернет.
-
-## Публичное подключение
+## Публичное подключение в опубликованной Mumble-версии
 
 Владелец сервера разворачивает официальный Hysteria v2.13.0 и Mumble:
 [готовый стенд для VPS 1 vCPU / 1 ГБ](deploy/hysteria/README.md). Собственный Gul
@@ -113,6 +111,13 @@ Workflow `CI` можно запустить вручную во вкладке A
 подписанные установщики остаются задачей M4. На Windows также нужен WebView2 Runtime
 (в Windows 11 он уже входит в систему). Linux-пакет устанавливается вместе с зависимостями:
 `sudo apt install ./gul-linux-amd64.deb`.
+
+Для `0.7.0-alpha.1` на том же компьютере нужно отдельно запустить локальный
+[LiveKit-стенд](docs/LIVEKIT-LOCAL.md); одного скачанного клиента для подключения
+к друзьям через прежний VPS недостаточно. macOS-сборка имеет отдельный bundle ID
+`io.github.lywwkkaad.gul.livekit`, настройки хранятся в `gul-livekit`.
+Имя исполняемого файла и Linux-пакета остаётся `gul`: не заменяйте рабочую
+установку `0.6.0-alpha.3`, если она нужна для текущего разговора.
 
 ### Значок в трее на Linux
 

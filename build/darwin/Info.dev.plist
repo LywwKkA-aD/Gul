@@ -5,17 +5,17 @@
 		<key>CFBundleExecutable</key>
 		<string>gul</string>
 		<key>CFBundleGetInfoString</key>
-		<string>Private voice chat over Mumble</string>
+		<string>Voice chat and screen sharing over LiveKit</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
 		<key>CFBundleIdentifier</key>
-		<string>io.github.lywwkkaad.gul</string>
+		<string>io.github.lywwkkaad.gul.livekit</string>
 		<key>CFBundleName</key>
-		<string>Gul</string>
+		<string>Gul LiveKit</string>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>
-		<string>0.6.0</string>
+		<string>0.7.0</string>
 		<key>CFBundleVersion</key>
 		<string>1</string>
 		<key>LSMinimumSystemVersion</key>

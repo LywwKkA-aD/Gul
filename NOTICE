@@ -31,29 +31,18 @@ The WebRTC subset also contains separately attributed Ooura FFT, SPL sqrt,
 PFFFT, FFT and RNNoise components. Their upstream license files and WebRTC's
 PATENTS grant are included in THIRD_PARTY_LICENSES.
 
-The Mumble protocol implementation is the project's public fork of gumble,
-version v0.0.0-20260824160029-7999640c1fef, licensed MPL-2.0. The exact source
-for the binary form is available at:
-https://github.com/LywwKkA-aD/gumble/commit/7999640c1fef
-Generated Mumble protocol bindings within gumble retain the Mumble Developers'
-BSD-3-Clause license in the generated bundle.
+LiveKit Go SDK v2.18.1 (github.com/livekit/server-sdk-go/v2), protocol v1.49.0,
+mediatransportutil and psrpc provide the desktop's LiveKit transport.
+  Copyright LiveKit contributors
+  License: Apache-2.0 - each module's LICENSE is included in the bundle.
 
-Hysteria core/v2 and extras/v2 v2.13.0 (github.com/apernet/hysteria)
-  Copyright 2023 Toby
-  License: MIT - each module's LICENSE.md is included in the generated bundle.
-  These official modules provide the embedded client and packet obfuscation.
-
-REALITY client handshake (internal/reality/handshake.go)
-  Adapted from XTLS/Xray-core v26.3.27, commit
-  d2758a023cd7f4174a5a5fa4ff66e487d4342ba0,
-  transport/internet/reality/reality.go, by the XTLS/Xray-core contributors.
-  License: MPL-2.0. The complete license, provenance, and exact modified source
-  accompany every binary under THIRD_PARTY_LICENSES/vendored/internal/reality.
-  See internal/reality/VERSION for source availability and changes.
+The LiveKit transport uses Pion WebRTC and its RTP, RTCP, ICE, DTLS, SRTP,
+SCTP and data-channel dependencies, licensed MIT by the Pion community.
+Their exact versions and license texts are included in the generated bundle.
 
 Other Go runtime dependencies include the Go standard library, Wails v3,
-coder/websocket, adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty,
-golang.org/x/net, golang.org/x/sys, google.golang.org/protobuf and, on
+adrg/xdg, godbus/dbus, go-ole, golang.org/x/net, golang.org/x/sys,
+google.golang.org/protobuf and, on
 Windows only, go-toast (Unlicense or MIT), which Wails' notification service
 uses to raise toasts. Their
 versions and complete license texts are included in the generated bundle.
@@ -64,12 +53,22 @@ licenses, notices and licensed source are preserved. Wails' Windows layer also
 retains winc and w32 project copyrights; both upstream license texts are
 included.
 
+The separate gul-relay utility uses coder/websocket and quic-go. The generated
+bundle includes the union of dependencies of the shipped desktop targets and
+this utility; it excludes test-only dependencies and retired transports.
+
 The embedded web frontend includes IBM Plex Sans, IBM Plex Mono and Martian
 Mono (SIL Open Font License 1.1), Phosphor Icons, React, React DOM, Scheduler,
 Zustand and the Wails JavaScript runtime. The Wails runtime contains attributed
 code derived from Nano ID, is-callable and HTMX; their complete licensed source
 is preserved separately because production minification removes comments.
 Vite's injected modulepreload runtime is covered by its aggregate license file.
+
+The screen-sharing frontend uses livekit-client 2.22.3
+(Apache-2.0, LiveKit contributors) and its runtime dependencies. Their versions
+and license texts are included by the npm production dependency collector.
+LiveKit server 1.13.8 (Apache-2.0) runs separately as a local Docker container;
+it is not embedded in the desktop binary.
 
 The portable Windows build is produced with GCC 15.2.0 and MinGW-w64 runtime
 v13 (POSIX threads, SEH, UCRT) and statically links the GCC/libstdc++/libgcc,

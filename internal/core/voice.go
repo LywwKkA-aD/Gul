@@ -82,28 +82,6 @@ func (a *App) voiceEngine() VoiceEngine {
 	return a.voice
 }
 
-// startVoice launches the engine with the currently selected devices.
-func (a *App) startVoice() {
-	v := a.voiceEngine()
-	if v == nil {
-		return
-	}
-	a.mu.Lock()
-	capID, pbID := a.captureID, a.playbackID
-	a.mu.Unlock()
-	go func() {
-		if err := v.Start(capID, pbID); err != nil {
-			a.log.Error("voice engine start", "error", err)
-		}
-	}()
-}
-
-func (a *App) stopVoice() {
-	if v := a.voiceEngine(); v != nil {
-		go v.Stop()
-	}
-}
-
 // SetUserVolume sets the per-user gain by the peer key (mumble/peerkey.go), so
 // it survives the peer reconnecting.
 func (a *App) SetUserVolume(key string, volume float32) {
@@ -264,42 +242,27 @@ func (a *App) AudioDevices() (playback, capture []domain.AudioDevice, err error)
 // system default).
 func (a *App) SelectDevices(captureID, playbackID string) {
 	a.mu.Lock()
+	changed := a.captureID != captureID || a.playbackID != playbackID
 	a.captureID, a.playbackID = captureID, playbackID
-	running := a.status.State == domain.StateConnected || a.status.State == domain.StateReconnecting
+	if changed {
+		a.restartVoiceLocked(false)
+	}
 	a.mu.Unlock()
 
 	a.updateSettings(func(c *config.Config) {
 		c.Audio.CaptureID, c.Audio.PlaybackID = captureID, playbackID
 	})
-
-	if v := a.voiceEngine(); v != nil && running {
-		go func() {
-			v.Stop()
-			if err := v.Start(captureID, playbackID); err != nil {
-				a.log.Error("voice engine restart", "error", err)
-			}
-		}()
-	}
 }
 
 // HandleDeviceLost restarts the engine on the currently selected devices
 // after one of them stopped (unplug, backend error). Falls back to the
 // system defaults when the restart fails.
 func (a *App) HandleDeviceLost() {
-	v := a.voiceEngine()
-	if v == nil {
-		return
-	}
 	a.mu.Lock()
-	capID, pbID := a.captureID, a.playbackID
+	restarting := a.restartVoiceLocked(true)
 	a.mu.Unlock()
-	a.log.Warn("audio device lost, restarting engine")
-	v.Stop()
-	if err := v.Start(capID, pbID); err != nil {
-		a.log.Error("engine restart on selected devices", "error", err)
-		if err := v.Start("", ""); err != nil {
-			a.log.Error("engine restart on default devices", "error", err)
-		}
+	if restarting {
+		a.log.Warn("audio device lost, restarting engine")
 	}
 }
 

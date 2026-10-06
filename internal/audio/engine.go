@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/LywwKkA-aD/Gul/internal/audio/miniaudio"
-	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/session"
 )
 
 // FrameSource and FrameSink abstract the audio devices so the whole
@@ -39,8 +39,8 @@ type Callbacks struct {
 
 // Config wires the engine to the voice transport.
 type Config struct {
-	// Packets delivers incoming raw Opus packets (mumble passthrough).
-	Packets <-chan mumble.VoicePacket
+	// Packets delivers ordered Opus and bounded loss/reset markers.
+	Packets <-chan session.VoicePacket
 	// Send transmits one encoded frame; it takes ownership of the bytes.
 	Send func(opus []byte, final bool) error
 	// Bitrate is the encoder target (server MaxBitrate already clamped).

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gul — образец видео и звука</title>
+<style>
+  body { margin: 0; padding: 32px; background: #1b2440; color: #f3f5f9; font: 16px system-ui; }
+  main { max-width: 960px; margin: auto; }
+  canvas { width: 100%; border-radius: 14px; background: #141b31; }
+  button { margin: 16px 12px 16px 0; padding: 12px 20px; border: 0; border-radius: 8px; font: inherit; cursor: pointer; }
+  p { color: #b9c1d4; }
+</style>
+<main>
+  <h1>Образец для демонстрации Gul</h1>
+  <p>Выберите эту вкладку в диалоге показа экрана и включите «Поделиться аудио вкладки».</p>
+  <canvas width="1280" height="720" aria-label="Движущийся образец"></canvas>
+  <button id="sound">Включить тихий тестовый звук</button>
+  <span id="status" role="status">Звук выключен</span>
+  <p>Тон 440 Гц. Микрофон не используется, обращения к сети отсутствуют.</p>
+</main>
+<script>
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  let frame = 0;
+  const timer = setInterval(() => {
+    ctx.fillStyle = '#141b31'; ctx.fillRect(0, 0, 1280, 720);
+    ctx.fillStyle = '#f3f5f9'; ctx.font = '44px monospace';
+    ctx.fillText('GUL / CAPTURE TEST', 60, 95);
+    ctx.font = '30px monospace'; ctx.fillText(`Frame ${frame++}`, 60, 150);
+    ctx.fillStyle = '#2f52de'; ctx.fillRect((frame * 8) % 1160, 300, 120, 120);
+    ctx.fillStyle = '#b9c1d4'; ctx.fillText(new Date().toISOString(), 60, 640);
+  }, 1000 / 30);
+  let audio;
+  document.querySelector('#sound').onclick = async () => {
+    if (audio) {
+      await audio.close(); audio = undefined;
+      document.querySelector('#sound').textContent = 'Включить тихий тестовый звук';
+      document.querySelector('#status').textContent = 'Звук выключен';
+      return;
+    }
+    audio = new AudioContext();
+    const tone = audio.createOscillator(); const gain = audio.createGain();
+    tone.frequency.value = 440; gain.gain.value = 0.035;
+    tone.connect(gain).connect(audio.destination); tone.start();
+    await audio.resume();
+    document.querySelector('#sound').textContent = 'Выключить звук';
+    document.querySelector('#status').textContent = 'Тихий тон 440 Гц';
+  };
+  window.addEventListener('pagehide', () => { clearInterval(timer); if (audio) void audio.close(); });
+</script>
+</html>

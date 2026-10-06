@@ -25,6 +25,8 @@ build/bin/
 node_modules/
 frontend/dist/
 frontend/bindings/
+frontend/test-results/
+frontend/playwright-report/
 
 # Python configuration/security checks
 __pycache__/

@@ -187,9 +187,9 @@ tasks:
     cmds:
       - mkdir -p {{.ROOT_DIR}}/build/linux/appimage
       - >-
-        wails3 generate .desktop -name "{{.DISPLAY_NAME}}" -genericname "Mumble voice client"
-        -comment "A desktop Mumble voice client for friends" -exec "{{.EXEC}}" -icon "{{.ICON}}"
-        -keywords "Mumble;Voice;Chat;" -categories "{{.CATEGORIES}}" -startupnotify
+        wails3 generate .desktop -name "{{.DISPLAY_NAME}}" -genericname "LiveKit voice client"
+        -comment "A desktop LiveKit voice client for friends" -exec "{{.EXEC}}" -icon "{{.ICON}}"
+        -keywords "LiveKit;Voice;Chat;" -categories "{{.CATEGORIES}}" -startupnotify
         -outputfile "{{.ROOT_DIR}}/build/linux/desktop"
     vars:
       APP_NAME: '{{.APP_NAME}}'

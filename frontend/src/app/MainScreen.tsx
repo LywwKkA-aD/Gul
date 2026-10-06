@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, type CSSProperties } from 'react';
 import { ChatService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { findChannel, selfUser, useGulStore } from '../state/store';
 import type { ChatMessage, ConnState } from '../state/types';
@@ -11,6 +11,10 @@ import { Tooltip } from '../components/ui';
 import { cx } from '../components/ui/cx';
 import { useFullscreen } from './fullscreen';
 import { serverLabel } from './serverLabel';
+import { screenSession } from '../livekit/session';
+import { ScreenSharePanel } from '../livekit/ScreenSharePanel';
+
+const ScreenShareProvider = lazy(() => import('../livekit/ScreenShareProvider').then((module) => ({ default: module.ScreenShareProvider })));
 
 // Wails: elements with this CSS property act as the window drag handle. On
 // macOS the top --titlebar-h of the window is a native drag area already
@@ -47,6 +51,7 @@ export function MainScreen() {
 
   const reconnecting = status.state === 'reconnecting';
   const self = selfUser(tree);
+  const mediaSession = screenSession(status);
 
   // Follow our own position in the tree: joins (ours or forced by an admin)
   // move the active channel.
@@ -68,7 +73,7 @@ export function MainScreen() {
   const label = serverLabel(status.server, tree?.name) || 'СЕРВЕР';
   const address = status.server || 'Сервер не выбран';
 
-  return (
+  const content = (
     <div className="flex h-full flex-col bg-bg-0 text-ui text-text-1">
       <div
         className={cx(
@@ -125,7 +130,7 @@ export function MainScreen() {
         </aside>
 
         <section className="flex min-h-0 min-w-0 flex-col bg-bg-2">
-          <Chat channel={activeChannel} />
+          <Chat channel={activeChannel} media={<ScreenSharePanel />} />
         </section>
 
         <MemberList channel={activeChannel} />
@@ -134,6 +139,11 @@ export function MainScreen() {
       {reconnecting && <ReconnectBanner server={status.server} note={status.error} />}
     </div>
   );
+  return mediaSession
+    ? <Suspense fallback={content}>
+      <ScreenShareProvider key={mediaSession.key} session={mediaSession}>{content}</ScreenShareProvider>
+    </Suspense>
+    : content;
 }
 
 /** The clearance macOS needs for its traffic lights, and only where they are.

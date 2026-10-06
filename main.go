@@ -20,8 +20,8 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/core"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
+	"github.com/LywwKkA-aD/Gul/internal/livekit"
 	"github.com/LywwKkA-aD/Gul/internal/logging"
-	"github.com/LywwKkA-aD/Gul/internal/mumble"
 	"github.com/LywwKkA-aD/Gul/internal/secret"
 	"github.com/LywwKkA-aD/Gul/internal/tray"
 	"github.com/LywwKkA-aD/Gul/services"
@@ -163,7 +163,13 @@ func (e *wailsEmitter) Emit(name string, payload any) {
 }
 
 func main() {
-	cfgDir, err := config.Dir()
+	if liveKitLabBuild == "1" || os.Getenv("GUL_LIVEKIT_LAB") == "1" {
+		if err := runLiveKitLab(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	cfgDir, err := config.LiveKitDir(os.Getenv("GUL_CONFIG_DIR"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -181,11 +187,7 @@ func main() {
 	emitter := &wailsEmitter{}
 	coreApp := core.New(logger, emitter)
 
-	manager, err := mumble.NewManager(cfgDir, logger, coreApp.Callbacks())
-	if err != nil {
-		logger.Error("mumble manager", "error", err)
-		log.Fatal(err)
-	}
+	manager := livekit.NewManager(logger, coreApp.Callbacks())
 	defer manager.Close()
 	coreApp.SetController(manager)
 
@@ -207,13 +209,16 @@ func main() {
 	// exists. A document this build cannot read costs the settings, not the
 	// start - core logs what was lost and runs on defaults.
 	settings, settingsErr := config.Load(cfgDir)
+	if settings.Connection.LastAddress == "" {
+		settings.Connection.LastAddress = "http://127.0.0.1:8787"
+	}
 	coreApp.UseSettings(cfgDir, settings, settingsErr)
 
 	// Passwords of remembered servers live in the operating system's own
 	// credential store, never in config.json. A machine without one is
 	// supported: the servers are still remembered and the user types the
 	// password (internal/secret).
-	store := secret.New(secretService)
+	store := secret.New(secretService + ".livekit")
 	coreApp.SetSecrets(store)
 	if !store.Available() {
 		logger.Warn("no credential store on this machine, server passwords will not be remembered")
@@ -227,8 +232,8 @@ func main() {
 	coreApp.SetNotifier(notifier)
 
 	app := application.New(application.Options{
-		Name:        "Gul",
-		Description: "Voice chat for friends on top of Mumble",
+		Name:        "Gul LiveKit",
+		Description: "Voice, chat and screen sharing with LiveKit",
 		// Wails logs binding arguments and results at DEBUG. Those may contain
 		// join passwords and chat text, so keep framework logs at WARN while
 		// retaining Gul's own DEBUG diagnostics.
@@ -250,6 +255,7 @@ func main() {
 			application.NewService(services.NewAudioService(coreApp)),
 			application.NewService(services.NewSettingsService(coreApp)),
 			application.NewService(services.NewUpdateService(coreApp)),
+			application.NewService(services.NewScreenShareService(manager)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -273,7 +279,7 @@ func main() {
 	coreApp.SetKeyMonitor(monitor)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Gul",
+		Title:     "Gul LiveKit",
 		Width:     1080,
 		Height:    680,
 		MinWidth:  860,
@@ -340,14 +346,13 @@ func main() {
 	setupTray(app, coreApp, win)
 	watchWindowAttention(coreApp, win)
 
-	// Two things that must not be on the startup path: the notification
-	// backend, which puts a permission dialog on screen on macOS, and the
-	// version check, which talks to GitHub. Both run once the window is up and
-	// neither is waited for.
-	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		go notifier.start(context.Background())
-		coreApp.StartUpdateCheck()
-	})
+	// The local preview does not contact GitHub for release checks. Native
+	// notifications are opt-in so test instances do not request OS permission.
+	if os.Getenv("GUL_LOCAL_NOTIFICATIONS") == "1" {
+		app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+			go notifier.start(context.Background())
+		})
+	}
 
 	logger.Info("gul starting", "version", core.Version, "config_dir", cfgDir)
 	if err := app.Run(); err != nil {

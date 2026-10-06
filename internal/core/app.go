@@ -15,15 +15,15 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/config"
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 	"github.com/LywwKkA-aD/Gul/internal/hotkey"
-	"github.com/LywwKkA-aD/Gul/internal/mumble"
 	"github.com/LywwKkA-aD/Gul/internal/notify"
 	"github.com/LywwKkA-aD/Gul/internal/secret"
+	"github.com/LywwKkA-aD/Gul/internal/session"
 )
 
 // Version is the application version reported in diagnostics and the about
 // screen. Its numeric base must match build/config.yml; platform metadata omits
 // the prerelease suffix where the native format requires numeric components.
-const Version = "0.6.0-alpha.3"
+const Version = "0.7.0-alpha.1"
 
 const (
 	// historyPerChannel caps the in-memory session transcript per channel.
@@ -67,7 +67,7 @@ type App struct {
 	watchedKey string
 
 	mu       sync.Mutex
-	ctrl     mumble.Controller
+	ctrl     session.Controller
 	status   domain.ConnectionStatus
 	tree     domain.ChannelNode
 	history  map[uint32][]domain.ChatMessage
@@ -89,6 +89,7 @@ type App struct {
 
 	voice                 VoiceEngine
 	captureID, playbackID string
+	voiceLife             voiceLifecycle // guarded by mu; device calls run outside it
 
 	// Self audio state and its tray observers (selfaudio.go).
 	selfMuted, selfDeafened bool
@@ -162,7 +163,7 @@ func New(log *slog.Logger, emitter domain.Emitter) *App {
 }
 
 // SetController injects the Mumble controller. Call once, before the UI runs.
-func (a *App) SetController(c mumble.Controller) {
+func (a *App) SetController(c session.Controller) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ctrl = c
@@ -170,8 +171,8 @@ func (a *App) SetController(c mumble.Controller) {
 
 // Callbacks bundles the handler methods for the Mumble layer, so main.go can
 // wire the controller without knowing which method maps to which hook.
-func (a *App) Callbacks() mumble.Callbacks {
-	return mumble.Callbacks{
+func (a *App) Callbacks() session.Callbacks {
+	return session.Callbacks{
 		OnStatus:    a.HandleStatus,
 		OnLatency:   a.HandleLatency,
 		OnTree:      a.HandleTree,
@@ -181,7 +182,7 @@ func (a *App) Callbacks() mumble.Callbacks {
 	}
 }
 
-func (a *App) controller() (mumble.Controller, error) {
+func (a *App) controller() (session.Controller, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.ctrl == nil {
@@ -280,7 +281,7 @@ func (a *App) SendMessage(channelID uint32, text string) error {
 	a.mu.Lock()
 	sender := a.username
 	a.mu.Unlock()
-	a.handleMessage(mumble.RawMessage{
+	a.handleMessage(session.RawMessage{
 		ChannelID: channelID,
 		Sender:    sender,
 		HTML:      EscapePlain(text),
@@ -339,13 +340,20 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	a.mu.Lock()
 	prev := a.status.State
 	a.status = s
+	// Record the desired audio lifetime with the status itself. Device callbacks
+	// may race this notification, but cannot revive a disconnected session.
+	if s.State == domain.StateConnected && prev != domain.StateReconnecting {
+		a.setVoiceRunningLocked(true)
+	} else if s.State == domain.StateDisconnected {
+		a.setVoiceRunningLocked(false)
+	}
 	a.mu.Unlock()
 
 	// The address and everything derived from it (network errors embed
 	// host:port) stays out of the record: gul.log travels in diagnostics
 	// archives the user shares (PLAN.md §10.7).
 	a.log.Debug("connection state", "state", string(s.State),
-		"error", mumble.RedactServer(s.Error, s.Server))
+		"error", session.RedactServer(s.Error, s.Server))
 	a.emit(domain.EventConnectionState, s)
 
 	// The voice engine lives while the session does; reconnects keep it
@@ -353,12 +361,10 @@ func (a *App) HandleStatus(s domain.ConnectionStatus) {
 	switch {
 	case s.State == domain.StateConnected && prev != domain.StateReconnecting:
 		a.commitConnection()
-		a.startVoice()
 	case s.State == domain.StateDisconnected:
 		a.mu.Lock()
 		a.connectionCommitted = false
 		a.mu.Unlock()
-		a.stopVoice()
 		// A connect the server refused ends here, never at commitConnection,
 		// so this is where a password that was never accepted stops being
 		// held.
@@ -404,14 +410,14 @@ func (a *App) HandleTree(root domain.ChannelNode) {
 
 // HandleMessage sanitizes an incoming chat message, appends it to the session
 // history and pushes it to the UI.
-func (a *App) HandleMessage(raw mumble.RawMessage) {
+func (a *App) HandleMessage(raw session.RawMessage) {
 	a.handleMessage(raw, false)
 }
 
 // handleMessage is HandleMessage plus the one fact only the caller knows:
 // whether this is our own message, echoed locally because Mumble servers never
 // deliver a text message back to its sender. Our own words must not notify us.
-func (a *App) handleMessage(raw mumble.RawMessage, local bool) {
+func (a *App) handleMessage(raw session.RawMessage, local bool) {
 	a.notifyMu.Lock()
 	defer a.notifyMu.Unlock()
 
@@ -485,22 +491,28 @@ func (a *App) nextID(at time.Time) string {
 	return strconv.FormatInt(at.UnixMilli(), 36) + "-" + strconv.FormatUint(a.seq, 36)
 }
 
-// Shutdown releases what must not outlive the process: the global key watch
-// (and any transmission it opened), a version check still waiting on GitHub,
-// and a settings change still inside the debounce window. Runs on the way out,
-// before the services are stopped.
+// Shutdown releases what must not outlive the process: the global key watch,
+// the audio devices and any pending restart, a version check still waiting on
+// GitHub, and settings inside the debounce window. Runs before services stop.
 func (a *App) Shutdown() {
 	a.StopGlobalPTT()
 	a.stopUpdateCheck()
+	a.shutdownVoice()
 	a.FlushSettings()
 }
 
 // Collect writes a diagnostics bundle into the application config directory and
 // returns its path.
 func (a *App) Collect() (string, error) {
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
+	a.mu.Lock()
+	dir := a.cfgDir
+	a.mu.Unlock()
+	if dir == "" {
+		var err error
+		dir, err = config.Dir()
+		if err != nil {
+			return "", err
+		}
 	}
 	path, err := Collect(dir)
 	if err != nil {

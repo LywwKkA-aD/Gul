@@ -3,12 +3,15 @@ import { MicrophoneSlashIcon } from '@phosphor-icons/react/dist/csr/MicrophoneSl
 import { HeadphonesIcon } from '@phosphor-icons/react/dist/csr/Headphones';
 import { SpeakerSlashIcon } from '@phosphor-icons/react/dist/csr/SpeakerSlash';
 import { GearSixIcon } from '@phosphor-icons/react/dist/csr/GearSix';
+import { MonitorIcon } from '@phosphor-icons/react/dist/csr/Monitor';
 import { AudioService } from '../../bindings/github.com/LywwKkA-aD/Gul/services';
 import { selfUser, useGulStore } from '../state/store';
 import { initialsOf, tintFor } from '../state/types';
 import { Avatar, IconButton, Tooltip, VoiceStateIcon } from './ui';
 import { pingTone, type PingTone } from './pingTone';
 import { cx } from './ui/cx';
+import { useScreenShare } from '../livekit/ScreenShareContext';
+import { screenShareControl, toggleScreenShare } from '../livekit/screenShareControl';
 
 export function BottomBar() {
   const status = useGulStore((s) => s.status);
@@ -25,6 +28,8 @@ export function BottomBar() {
   // Push-to-talk gives no other feedback that the key actually reached the
   // gate, so the mic button carries it: filled and lit while the key is held.
   const transmitting = useGulStore((s) => s.gateMode === 'ptt' && s.pttHeld && !s.muted);
+  const screenShare = useScreenShare();
+  const shareControl = screenShareControl(screenShare?.snapshot ?? null, screenShare?.canCapture ?? false);
 
   const connected = status.state === 'connected';
   const roundedPing = connected && pingMs !== null ? Math.max(0, Math.round(pingMs)) : null;
@@ -43,7 +48,7 @@ export function BottomBar() {
   const latencyTitle =
     roundedPing === null
       ? 'Ожидаем первый замер RTT до сервера'
-      : `RTT до сервера по текущему TLS/TCP-сеансу: ${roundedPing} мс`;
+      : `Время обмена с голосовым сервером (RTT): ${roundedPing} мс`;
 
   // One gesture is one call. Core owns the rule that ties the two gates
   // together - opening the microphone lifts the deafen, deafening closes the
@@ -153,6 +158,21 @@ export function BottomBar() {
             aria-label={deafened ? 'Включить звук' : 'Выключить звук'}
           >
             {deafened ? <SpeakerSlashIcon size={16} weight="fill" /> : <HeadphonesIcon size={16} />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip label={shareControl.label}>
+          <IconButton
+            surface="sidebar"
+            active={shareControl.active}
+            disabled={shareControl.disabled}
+            aria-label={shareControl.label}
+            aria-busy={screenShare?.snapshot.pendingShare || undefined}
+            data-testid="screen-share-toggle"
+            data-state={screenShare?.snapshot.status ?? 'connecting'}
+            onClick={() => { if (screenShare) void toggleScreenShare(screenShare.controller); }}
+          >
+            <MonitorIcon size={16} weight={shareControl.active ? 'fill' : 'regular'}
+              className={shareControl.active ? 'text-[var(--speak)]' : undefined} />
           </IconButton>
         </Tooltip>
         <Tooltip label="Настройки">

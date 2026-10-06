@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { screenSession, sessionGrantProvider } from './session.ts';
+
+const connected = { state: 'connected', server: 'https://gul.example', epoch: 7, selfChannel: 0 };
+const validGrant = {
+  url: 'wss://gul.example/rtc', token: 'private-token', identity: 'screen-alice',
+  room: 'channel-0', ownerIdentity: 'alice', channelId: 0, epoch: 7,
+};
+
+test('screen session exists only for a confirmed connected epoch and channel, including channel zero', () => {
+  assert.deepEqual(screenSession(connected), { epoch: 7, channelId: 0, key: '7:0' });
+  for (const patch of [
+    { state: 'connecting' }, { state: 'reconnecting' }, { state: 'disconnected' },
+    { epoch: undefined }, { epoch: 0 }, { epoch: -1 }, { epoch: NaN },
+    { epoch: Number.MAX_SAFE_INTEGER + 1 },
+    { selfChannel: undefined }, { selfChannel: -1 }, { selfChannel: 1.5 }, { selfChannel: 2 ** 32 },
+  ]) assert.equal(screenSession({ ...connected, ...patch }), null);
+});
+
+test('channel changes and fresh logins produce a new panel lifetime even on the same channel', () => {
+  assert.notEqual(screenSession(connected).key, screenSession({ ...connected, selfChannel: 2 }).key);
+  assert.notEqual(screenSession(connected).key, screenSession({ ...connected, epoch: 8 }).key);
+});
+
+test('screen grant is requested for the captured Go session and uses server-owned identities', async () => {
+  const calls = [];
+  const provider = sessionGrantProvider(screenSession(connected), async (...args) => {
+    calls.push(args);
+    return validGrant;
+  });
+  const grant = await provider();
+  assert.deepEqual(calls, [[7, 0]]);
+  assert.equal(grant.identity, 'screen-alice');
+  assert.equal(grant.ownerIdentity, 'alice');
+});
+
+test('stale, malformed or credential-bearing grants are rejected without exposing token content', async () => {
+  for (const patch of [
+    { epoch: 8 }, { channelId: 1 }, { token: '' }, { identity: '' }, { room: '' },
+    { ownerIdentity: '' }, { identity: 'alice' },
+    { url: 'https://gul.example' }, { url: 'ws://user:private-token@gul.example' },
+    { url: 'wss://gul.example/?token=private-token' }, { url: 'wss://gul.example/#private-token' },
+  ]) {
+    const provider = sessionGrantProvider(screenSession(connected), async () => ({ ...validGrant, ...patch }));
+    await assert.rejects(provider(), (error) => {
+      assert.equal(error.message, 'Screen session is no longer available');
+      assert.ok(!error.message.includes('private-token'));
+      return true;
+    });
+  }
+});
+
+test('broker errors cannot leak into screen session errors', async () => {
+  const provider = sessionGrantProvider(screenSession(connected), async () => { throw new Error('private-token'); });
+  await assert.rejects(provider(), { message: 'Screen session is no longer available' });
+});

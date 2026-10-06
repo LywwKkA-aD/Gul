@@ -63,11 +63,15 @@ grep -Fq 'github.com/godbus/dbus/v5@v5.2.2' \
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 "$repo_root/scripts/collect-licenses.sh" "$output_dir"
 
-for name in LICENSE VERSION handshake.go; do
-  bundled_name="$name"
-  if [[ "$name" == "handshake.go" ]]; then bundled_name="$name.txt"; fi
-  cmp "$repo_root/internal/reality/$name" \
-    "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality/$bundled_name"
+# The desktop now uses LiveKit. Keeping retired source in the repository must
+# not make the generated runtime manifest claim those transports are shipped.
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/vendored/internal/reality"
+for retired_module in github.com/LywwKkA-aD/gumble github.com/apernet/hysteria/core/v2 github.com/apernet/hysteria/extras/v2; do
+  test ! -e "$output_dir/THIRD_PARTY_LICENSES/go/$retired_module"
+  if grep -Fq "  $retired_module@" "$output_dir/THIRD_PARTY_MANIFEST.txt"; then
+    echo "retired runtime module was attributed as bundled: $retired_module" >&2
+    exit 1
+  fi
 done
 
 test -f "$output_dir/LICENSE"
@@ -87,10 +91,14 @@ test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/third_party/toolchain-runtime
 test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/third_party/toolchain-runtime/winpthreads/COPYING"
 test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/third_party/toolchain-runtime/VERSION"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/toolchain/LICENSE"
-test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/LICENSE"
-test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/gumble/proto/LICENSE"
-test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/apernet/hysteria/core/v2/LICENSE.md"
-test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/apernet/hysteria/extras/v2/LICENSE.md"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/livekit/server-sdk-go/v2/LICENSE"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/livekit/protocol/LICENSE"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/pion/webrtc/v4/LICENSE"
+# A source filename matching "license" must preserve its complete contents
+# without creating a package inside generated .app/Legal directories.
+twirp_source_dir=$(cd "$repo_root" && go list -m -f '{{.Dir}}' github.com/twitchtv/twirp)
+cmp "$twirp_source_dir/license_test.go" \
+  "$output_dir/THIRD_PARTY_LICENSES/go/github.com/twitchtv/twirp/license_test.go.txt"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/coder/websocket/LICENSE.txt"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/godbus/dbus/v5/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/golang.org/x/sys/LICENSE"
@@ -107,12 +115,28 @@ test -f "$output_dir/THIRD_PARTY_LICENSES/npm/@wailsio/runtime/NanoID-LICENSE-an
 test -f "$output_dir/THIRD_PARTY_LICENSES/npm/@wailsio/runtime/is-callable-LICENSE-and-source.js"
 test -f "$output_dir/THIRD_PARTY_LICENSES/npm/@wailsio/runtime/HTMX-LICENSE-and-source.js"
 
-grep -Fq 'github.com/LywwKkA-aD/gumble' "$output_dir/THIRD_PARTY_MANIFEST.txt"
-grep -Fq 'github.com/apernet/hysteria/core/v2@v2.13.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
-grep -Fq 'github.com/apernet/hysteria/extras/v2@v2.13.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+# protobuf-es 1.10.1 omits LICENSE from its npm tarball. Its Apache license
+# and the complete inline Google BSD notice both have to survive minification.
+protobuf_licenses="$output_dir/THIRD_PARTY_LICENSES/npm/@bufbuild/protobuf"
+cmp "$repo_root/third_party/npm-attributions/bufbuild-protobuf-1.10.1/LICENSE-APACHE-2.0" \
+  "$protobuf_licenses/LICENSE-APACHE-2.0"
+cmp "$repo_root/frontend/node_modules/@bufbuild/protobuf/dist/esm/google/varint.js" \
+  "$protobuf_licenses/Google-BSD-3-Clause-LICENSE-and-source.js"
+cmp "$repo_root/frontend/node_modules/@bufbuild/protobuf/dist/esm/index.js" \
+  "$protobuf_licenses/Buf-NOTICE-and-source.js"
+grep -Fq 'Copyright 2008 Google Inc.' "$protobuf_licenses/Google-BSD-3-Clause-LICENSE-and-source.js"
+grep -Fq 'Copyright 2021-2024 Buf Technologies, Inc.' "$protobuf_licenses/Buf-NOTICE-and-source.js"
+grep -Fq 'Apache License' "$protobuf_licenses/LICENSE-APACHE-2.0"
+grep -Fq 'v1.10.1' "$protobuf_licenses/VERSION"
+
+grep -Fq 'github.com/livekit/server-sdk-go/v2@v2.18.1' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'github.com/livekit/protocol@v1.49.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'github.com/pion/webrtc/v4@' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'github.com/coder/websocket@v1.8.15' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'Go toolchain' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'react@19.2.8' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq '@bufbuild/protobuf@1.10.1' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'livekit-client@2.22.3' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq '@fontsource/ibm-plex-sans@5.3.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'third_party/toolchain-runtime/gcc/COPYING.RUNTIME' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 
@@ -125,6 +149,7 @@ grep -Fq 'golang.org/x/sys@' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 # devOptional packages (type definitions and their dependencies) belong to the
 # development tree only and must not be attributed as bundled.
 test ! -e "$output_dir/THIRD_PARTY_LICENSES/npm/@types"
+test ! -e "$output_dir/THIRD_PARTY_LICENSES/npm/@types/dom-mediacapture-record"
 test ! -e "$output_dir/THIRD_PARTY_LICENSES/npm/csstype"
 if grep -Eq '^  (@types/|csstype@)' "$output_dir/THIRD_PARTY_MANIFEST.txt"; then
   echo "development-only npm packages must not be attributed as bundled" >&2
@@ -197,6 +222,44 @@ if GUL_TEST_STRIPPED_MODULE="github.com/adrg/xdg" \
 fi
 grep -Fq 'No license file found for Go module: github.com/adrg/xdg' "$test_root/stripped.log"
 test ! -e "$stripped_output"
+
+# A version-specific npm attribution must not silently cover another release
+# or accept a package whose inline third-party license has disappeared.
+fake_node_bin="$test_root/fake-node-bin"
+real_node=$(command -v node)
+mkdir -p "$fake_node_bin" "$test_root/stripped-protobuf"
+cat >"$fake_node_bin/node" <<'FAKE_NODE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" -eq 0 ]]; then
+  "$GUL_TEST_REAL_NODE" | while IFS='|' read -r name version directory; do
+    if [[ "$name" == "@bufbuild/protobuf" ]]; then
+      version="${GUL_TEST_PROTOBUF_VERSION:-$version}"
+      directory="${GUL_TEST_PROTOBUF_DIR:-$directory}"
+    fi
+    printf '%s|%s|%s\n' "$name" "$version" "$directory"
+  done
+  exit 0
+fi
+exec "$GUL_TEST_REAL_NODE" "$@"
+FAKE_NODE
+chmod +x "$fake_node_bin/node"
+if GUL_TEST_PROTOBUF_VERSION="1.10.2" GUL_TEST_REAL_NODE="$real_node" \
+  PATH="$fake_node_bin:$PATH" "$repo_root/scripts/collect-licenses.sh" "$test_root/new-protobuf/legal" \
+  >/dev/null 2>"$test_root/new-protobuf.log"; then
+  echo "collector reused a version-specific npm license for an unaudited version" >&2
+  exit 1
+fi
+grep -Fq 'Unsupported protobuf license attribution version: 1.10.2' "$test_root/new-protobuf.log"
+test ! -e "$test_root/new-protobuf/legal"
+if GUL_TEST_PROTOBUF_DIR="$test_root/stripped-protobuf" GUL_TEST_REAL_NODE="$real_node" \
+  PATH="$fake_node_bin:$PATH" "$repo_root/scripts/collect-licenses.sh" "$test_root/stripped-protobuf-output/legal" \
+  >/dev/null 2>"$test_root/stripped-protobuf.log"; then
+  echo "collector accepted protobuf without its inline BSD attribution" >&2
+  exit 1
+fi
+grep -Fq 'Missing inline protobuf license attribution' "$test_root/stripped-protobuf.log"
+test ! -e "$test_root/stripped-protobuf-output/legal"
 
 if find "$output_dir" -type l -print -quit | grep -q .; then
   echo "license bundle must contain regular files, not symlinks" >&2

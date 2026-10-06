@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Browser } from '@wailsio/runtime';
 import { HashIcon } from '@phosphor-icons/react/dist/csr/Hash';
 import { ChatCircleDotsIcon } from '@phosphor-icons/react/dist/csr/ChatCircleDots';
@@ -16,7 +16,7 @@ const GROUP_WINDOW_MS = 5 * 60 * 1000;
 // the same state, otherwise useSyncExternalStore loops forever (white screen).
 const NO_MESSAGES: ChatMessage[] = [];
 
-export function Chat({ channel }: { channel: ChannelNode | null }) {
+export function Chat({ channel, media }: { channel: ChannelNode | null; media?: ReactNode }) {
   const messages = useGulStore((s) => (channel ? (s.messages[channel.id] ?? NO_MESSAGES) : NO_MESSAGES));
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
@@ -59,6 +59,8 @@ export function Chat({ channel }: { channel: ChannelNode | null }) {
         <HashIcon size={15} className="flex-none text-text-3" />
         <h2 className="min-w-0 truncate font-medium">{channel?.name ?? '…'}</h2>
       </header>
+
+      {media}
 
       <div
         ref={scrollRef}

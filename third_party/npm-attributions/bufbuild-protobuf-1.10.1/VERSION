@@ -1,0 +1,18 @@
+Gul attribution record for @bufbuild/protobuf 1.10.1.
+The npm package declares (Apache-2.0 AND BSD-3-Clause) but omits its root
+LICENSE file. No dependency source has been modified.
+
+LICENSE-APACHE-2.0 is an exact copy of the official protobuf-es license:
+https://github.com/bufbuild/protobuf-es/blob/v1.10.1/LICENSE
+Tag v1.10.1 commit: c75ab9154ce5475ef7768c1995a9b38d53b229e1
+License Git blob: 5e63af3d65353a87d2d7c66bcc8a3c10783b2961
+License SHA-256: 6da19f017fad6716cbc9c938972ebee29957c295b8a4d51060dfb03da51d8502
+Retrieved: 2026-10-06.
+
+The release collector also copies these files unchanged from the exact
+package-lock-selected npm package, preserving notices removed by minification:
+- dist/esm/google/varint.js: complete Google BSD-3-Clause license and source.
+- dist/esm/index.js: Buf Technologies copyright and Apache license notice.
+
+Upstream BSD source:
+https://github.com/bufbuild/protobuf-es/blob/v1.10.1/packages/protobuf/src/google/varint.ts

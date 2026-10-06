@@ -1,5 +1,5 @@
 // Package domain holds the shared model types that cross layer boundaries
-// (mumble -> core -> UI). It must stay dependency-free to avoid import cycles.
+// (transport -> core -> UI). It must stay dependency-free to avoid import cycles.
 package domain
 
 import "time"
@@ -55,7 +55,20 @@ type ConnectionStatus struct {
 	Server      string    `json:"server"`
 	Error       string    `json:"error,omitempty"`
 	SelfSession uint32    `json:"selfSession,omitempty"`
-	SelfChannel uint32    `json:"selfChannel,omitempty"`
+	SelfChannel uint32    `json:"selfChannel"`
+	// Epoch changes with the active media connection, fencing late UI grants.
+	Epoch uint64 `json:"epoch,omitempty"`
+}
+
+// ScreenGrant authorizes only the screen companion in the current session.
+type ScreenGrant struct {
+	URL           string `json:"url"`
+	Token         string `json:"token"`
+	Identity      string `json:"identity"`
+	Room          string `json:"room"`
+	OwnerIdentity string `json:"ownerIdentity"`
+	ChannelID     uint32 `json:"channelId"`
+	Epoch         uint64 `json:"epoch"`
 }
 
 // SavedServer is one remembered server as the connect picker reads it. It

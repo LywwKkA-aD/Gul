@@ -15,17 +15,19 @@ markPlatform()
 
 // Dev-only design-system showcase: open the app with #styleguide in the URL.
 const styleguide = window.location.hash === '#styleguide'
-const Root = styleguide ? Styleguide : App
+const livekitLab = window.location.hash === '#livekit' || window.location.hash === '#livekit-native'
+const ScreenShareLab = React.lazy(() => import('./livekit/ScreenShareLab'))
+const Root = livekitLab ? ScreenShareLab : styleguide ? Styleguide : App
 
 function render() {
   ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <React.StrictMode>
-      <Root />
+      <React.Suspense fallback={<p>Загрузка…</p>}><Root /></React.Suspense>
     </React.StrictMode>,
   )
 }
 
-if (styleguide) {
+if (styleguide || livekitLab) {
   render()
 } else {
   // The persisted settings seed the connect form and the settings modal, and

@@ -54,6 +54,8 @@ export interface ConnectionStatus {
   error?: string;
   selfSession?: number;
   selfChannel?: number;
+  /** Changes when the authenticated connection or its channel lifetime changes. */
+  epoch?: number;
 }
 
 export interface ConnectionLatency {

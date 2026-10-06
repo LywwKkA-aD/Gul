@@ -114,7 +114,7 @@ export function ConnectScreen() {
               mono
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="Адрес или ссылка от администратора"
+              placeholder="http://127.0.0.1:8787"
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
@@ -134,13 +134,14 @@ export function ConnectScreen() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="Для локального стенда оставьте пустым"
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
           </Field>
 
           <p className="text-xs leading-relaxed text-text-3">
-            Введите адрес и пароль от администратора. Всё для подключения уже встроено в Gul.
+            Локальный стенд LiveKit: http://127.0.0.1:8787. Введите ник, пароль оставьте пустым.
           </p>
 
           <Button size="lg" className="w-full" onClick={connect} disabled={!canConnect}>

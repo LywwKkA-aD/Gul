@@ -1,7 +1,7 @@
 {
   "name": "gul-frontend",
   "private": true,
-  "version": "0.6.0-alpha.3",
+  "version": "0.7.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "build": "tsc && vite build --mode production",
     "lint": "eslint src",
     "test": "node --test 'src/**/*.test.ts'",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:livekit": "playwright test --config playwright.livekit.config.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",
@@ -17,12 +18,14 @@
     "@fontsource/martian-mono": "5.3.0",
     "@phosphor-icons/react": "2.1.10",
     "@wailsio/runtime": "3.0.0-beta.11",
+    "livekit-client": "2.22.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zustand": "5.0.15"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",

@@ -2,10 +2,11 @@ package audio
 
 import (
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/LywwKkA-aD/Gul/internal/dsp/opus"
-	"github.com/LywwKkA-aD/Gul/internal/mumble"
+	"github.com/LywwKkA-aD/Gul/internal/session"
 )
 
 // streamIdleTimeout drops the per-user decoder and jitter state after this
@@ -21,6 +22,10 @@ type rxStream struct {
 	pcm        []int16 // decode buffer, up to a 60 ms packet
 	talking    bool
 	lastPacket time.Time
+	// Wire sequence numbers restart for each phrase. Local sequence numbers
+	// keep successive phrases distinct while their PCM shares the jitter ring.
+	sequenceOffset int64
+	phraseEnded    bool
 }
 
 // rxPipeline is the incoming path (PLAN.md 4.4): passthrough packets ->
@@ -104,13 +109,16 @@ func newRxPipeline(cfg Config, chain *dspChain) *rxPipeline {
 }
 
 // drain moves every pending packet into the per-user jitter buffers.
-func (r *rxPipeline) drain(packets <-chan mumble.VoicePacket) {
+func (r *rxPipeline) drain(packets <-chan session.VoicePacket) {
 	if packets == nil {
 		return
 	}
 	for {
 		select {
-		case p := <-packets:
+		case p, ok := <-packets:
+			if !ok {
+				return
+			}
 			r.ingest(p)
 		default:
 			return
@@ -118,8 +126,22 @@ func (r *rxPipeline) drain(packets <-chan mumble.VoicePacket) {
 	}
 }
 
-func (r *rxPipeline) ingest(p mumble.VoicePacket) {
+func (r *rxPipeline) ingest(p session.VoicePacket) {
+	if p.Reset {
+		r.close()
+		return
+	}
+	// Leave headroom for repacking and the jitter restart window. Invalid
+	// sequence arithmetic must never wrap into a different ring slot.
+	const maxSequence = math.MaxInt64 - jitterRestartGap - opus.MaxFrameSize/FrameSamples
+	if p.Sequence < 0 || p.Sequence > maxSequence {
+		return
+	}
 	s := r.streams[p.Session]
+	if p.LostFrames != 0 && (p.LostFrames < 1 || p.LostFrames > 12 ||
+		len(p.Opus) != 0 || p.Final || s == nil || s.phraseEnded) {
+		return
+	}
 	if s == nil {
 		dec, err := opus.NewDecoder()
 		if err != nil {
@@ -136,6 +158,31 @@ func (r *rxPipeline) ingest(p mumble.VoicePacket) {
 		r.streams[p.Session] = s
 	}
 	s.lastPacket = time.Now()
+	var sequence int64
+	if !s.phraseEnded {
+		if s.sequenceOffset > 0 && p.Sequence > maxSequence-s.sequenceOffset {
+			return
+		}
+		sequence = p.Sequence + s.sequenceOffset
+	} else if s.jit.highest > maxSequence {
+		return
+	}
+	if p.LostFrames > 0 {
+		// Transport reordering emits loss before the next compressed packet.
+		// Concealing at playback time would mutate a decoder which has already
+		// decoded that future packet. Only accept the next missing interval;
+		// duplicated or stale markers must never advance decoder state twice.
+		if s.jit.state == jitterIdleState || sequence != s.jit.highest {
+			return
+		}
+		for i := range p.LostFrames {
+			if _, err := s.dec.Decode(nil, s.pcm[:FrameSamples]); err != nil {
+				return
+			}
+			s.jit.PushConcealed(sequence+int64(i), s.pcm[:FrameSamples])
+		}
+		return
+	}
 
 	frames := 0
 	if len(p.Opus) > 0 {
@@ -146,19 +193,34 @@ func (r *rxPipeline) ingest(p mumble.VoicePacket) {
 			// Repack: a 20/40/60 ms packet becomes 2/4/6 sequence-numbered
 			// 10 ms frames (the wire sequence is counted in 10 ms units).
 			frames = n / FrameSamples
+			if frames > 0 && s.phraseEnded {
+				sequence = s.jit.BeginPhrase()
+				s.sequenceOffset = sequence - p.Sequence
+				s.phraseEnded = false
+			} else if frames > 0 && (s.jit.state == jitterIdleState ||
+				(sequence < 0 && sequence <= s.jit.next-jitterRestartGap)) {
+				// A missing final must not make a negative mapping reject a
+				// genuine backwards restart forever. Keep the jitter's normal
+				// restart policy and its learned link depth.
+				sequence = p.Sequence
+				s.sequenceOffset = 0
+				s.jit.restart(sequence)
+			}
 			for i := range frames {
-				s.jit.Push(p.Sequence+int64(i), s.pcm[i*FrameSamples:(i+1)*FrameSamples])
+				s.jit.Push(sequence+int64(i), s.pcm[i*FrameSamples:(i+1)*FrameSamples])
 			}
 		}
 	}
 	if p.Final {
-		last := p.Sequence + int64(frames) - 1
-		if frames == 0 {
-			// An empty terminator ends the transmission after the frames of
-			// the previous packet.
-			last = p.Sequence - 1
+		if !s.phraseEnded {
+			// With no decoded PCM this names the previous packet's last
+			// frame. Repeated empty/invalid finals must not reopen a phrase.
+			// A stale final still closes accepted PCM, including behind a
+			// nonzero wire base, before the jitter's restart heuristic runs.
+			last := max(sequence+int64(frames)-1, s.jit.highest-1)
+			s.jit.PushFinal(last)
 		}
-		s.jit.PushFinal(last)
+		s.phraseEnded = true
 	}
 }
 
@@ -172,7 +234,7 @@ func (r *rxPipeline) tick(sink FrameSink, deafened bool, users *userAudioState, 
 	now := time.Now()
 	for session, s := range r.streams {
 		switch s.jit.Pop(r.frame) {
-		case JitterFrame:
+		case JitterFrame, JitterBufferedConceal:
 			r.setTalking(s, true)
 		case JitterConceal:
 			// PLC: the decoder invents the missing 10 ms.
