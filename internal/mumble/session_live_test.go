@@ -12,12 +12,11 @@ import (
 // (task murmur:up). It is excluded from CI: run with `go test -tags live`.
 func TestDialLocalMurmur(t *testing.T) {
 	tofu := NewTOFUStore(t.TempDir(), slog.Default())
-	// Through a relay, because that is the only road there is now: the direct
-	// host:port one was removed with the tunnel contract, so a client and a
-	// Murmur on the same machine still meet through one.
+	// Use the official Hysteria server in front of the local Murmur stand.
 	ep, roots, _ := localRelay(t)
 
 	s, err := Dial(DialConfig{
+		Context:    t.Context(),
 		Address:    ep.address,
 		Username:   "gul-smoke",
 		Password:   relayLiveSecret,

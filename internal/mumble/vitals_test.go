@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 	"github.com/LywwKkA-aD/gumble/gumble"
 )
 
@@ -180,7 +179,7 @@ func TestVitalsCannotNameTheServer(t *testing.T) {
 			"connection to murmur.example.test was aborted"),
 	}
 
-	rendered := v.redact("wss://murmur.example.test").LogValue().String()
+	rendered := v.redact("hysteria2://murmur.example.test").LogValue().String()
 
 	for _, secret := range []string{"192.168.0.106", "203.0.113.9", "murmur.example.test"} {
 		if strings.Contains(rendered, secret) {
@@ -278,7 +277,7 @@ func TestTheSessionPanelCarriesTheVoiceCounters(t *testing.T) {
 	}
 	t.Cleanup(manager.Close)
 
-	manager.logVitals(&Session{packets: newPacketConn(&discardConn{}), addr: "example.test"}, TransportWSS)
+	manager.logVitals(&Session{packets: newPacketConn(&discardConn{}), addr: "example.test"}, TransportHysteria)
 
 	got := capture.attrs("session vitals")
 	for _, key := range []string{"voice.rx_drops", "voice.tx_drops", "voice.tx_offline", "voice.tx_errors"} {
@@ -307,7 +306,6 @@ func TestTheLostConnectionLineCarriesTheVoiceCounters(t *testing.T) {
 	}
 	t.Cleanup(manager.Close)
 	manager.backoffFn = func(int) time.Duration { return time.Millisecond }
-	manager.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
 
 	hooksCh := make(chan sessionHooks, 1)
 	var attempts atomic.Int32
@@ -319,8 +317,13 @@ func TestTheLostConnectionLineCarriesTheVoiceCounters(t *testing.T) {
 		return nil, errors.New("no second attempt wanted")
 	}
 
-	manager.Connect("wss://murmur.example.test/mumble", "gul", "secret")
-	hooks := <-hooksCh
+	manager.Connect("hysteria2://murmur.example.test", "gul", "secret")
+	var hooks sessionHooks
+	select {
+	case hooks = <-hooksCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("connection attempt never started")
+	}
 	hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError, String: "reset"})
 
 	deadline := time.Now().Add(3 * time.Second)

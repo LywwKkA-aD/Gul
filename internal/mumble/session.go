@@ -3,11 +3,8 @@ package mumble
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"sync"
 	"time"
 
@@ -15,12 +12,11 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumbleutil"
 
 	"github.com/LywwKkA-aD/Gul/internal/identity"
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // dialTimeout bounds getting the connection open: the transport dial, the TLS
-// handshake, and on the relay roads the tunnel handshake in front of them. All
-// of that is small and fixed in size, so a fixed budget fits it.
+// handshake and Hysteria TCP stream setup. All of that is small and fixed in
+// size, so a fixed budget fits it.
 const dialTimeout = 10 * time.Second
 
 // syncSilence bounds what happens next, and it is measured differently on
@@ -41,38 +37,22 @@ const syncSilence = 10 * time.Second
 
 // DialConfig carries everything needed to establish one Mumble session.
 type DialConfig struct {
-	Address  string // host[:port] or wss://host[:port]/mumble
+	// Context cancels connection setup and initial Mumble synchronization.
+	// Canceling it after Dial succeeds does not close the live session.
+	Context  context.Context
+	Address  string // hysteria2://host[:port] (bare hosts default to UDP 443)
 	Username string
 	Password string
-	// Certificate is the persistent client identity.
-	//
-	// Nothing reads it at the moment, and saying so is the point: the tunnel
-	// contract took the client's own TLS session away, so there is no longer a
-	// handshake for this key to sign. Every session Murmur sees is anonymous
-	// and every User.Hash comes back empty until the exchange that proves
-	// possession of this key exists.
-	//
-	// It stays loaded rather than removed because the file on disk is the
-	// user's identity: deleting the plumbing would let cert.pem stop being
-	// created, and the first build that wants it back would hand everybody a
-	// new one.
+	// Certificate is used only by callers without a derived IdentitySeed.
 	Certificate *tls.Certificate
 	// IdentitySeed is the master secret this user is known by
-	// (internal/identity). Empty opens an anonymous session.
+	// (internal/identity). When empty, Certificate supplies a legacy identity.
 	IdentitySeed []byte
-	// OuterRoots overrides who signs the relay's own certificate. Nil means
+	// OuterRoots overrides who signs the Hysteria server certificate. Nil means
 	// the system trust store, which is what production uses; a live test
-	// pointing at a relay it stood up itself supplies its own. It exists
-	// because removing the direct road left no way to reach a test relay at
-	// all - every road now goes through one.
+	// supplies a CA for its local Hysteria server.
 	OuterRoots *tls.Config
-	// RelayCredential is the bearer for the WSS relay. Deriving it costs
-	// roughly 50 ms of PBKDF2, so the Manager derives it once per Connect and
-	// every reconnect reuses it; an empty value here is derived on the spot.
-	RelayCredential relayproto.Credential
-	// Transport is the road to try (transport.go). Empty means the WebSocket
-	// one, which is what every deployed relay speaks. Ignored for a direct
-	// Mumble address, which has only one road.
+	// Transport identifies the embedded Hysteria transport in diagnostics.
 	Transport Transport
 }
 
@@ -103,13 +83,9 @@ type Session struct {
 	log    *slog.Logger
 	addr   string
 	host   string
-	// packets is the framing wrapper on the relay path, kept so the reason a
-	// session ended can name a stalled uplink instead of "connection lost".
-	// Nil on the direct path, which has no wrapper of its own.
+	// packets owns the tunnel and records why it ended, including stalled uplink.
 	packets *packetConn
-	// closeOnce funnels every Disconnect into one actual client call:
-	// gumble's Client.Disconnect writes its state without a lock, and both the
-	// reconnect loop and stopRun legitimately try to close the same session.
+	// closeOnce releases the tunnel once when Disconnect and reconnect race.
 	closeOnce sync.Once
 }
 
@@ -120,8 +96,7 @@ func (s *Session) stalledUplink() bool {
 }
 
 // vitals reads the instrument panel of this session's connection (vitals.go).
-// The direct road has no wrapper of its own and therefore no panel, which is
-// what the second return value says.
+// The second return value is false when no transport has been attached.
 func (s *Session) vitals() (Vitals, bool) {
 	if s == nil || s.packets == nil {
 		return Vitals{}, false
@@ -184,49 +159,38 @@ func dial(cfg DialConfig, tofu *TOFUStore, hooks sessionHooks, log *slog.Logger)
 	// Two budgets, because the two phases fail differently. Opening the
 	// connection is bounded by the clock; the sync that follows is bounded by
 	// silence (syncSilence).
-	dialCtx, cancelDial := context.WithTimeout(context.Background(), dialTimeout)
-	conn, dialErr := dialRelay(dialCtx, ep, cfg.Transport, relayCredential(cfg), tofu, cfg.IdentitySeed, cfg.OuterRoots)
-	// The road is open or it is not; neither dial keeps this context past its
-	// own handshake (wss.go, quic.go), so it is released here rather than
-	// being left to bound the sync as well.
+	parent := cfg.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	dialCtx, cancelDial := context.WithTimeout(parent, dialTimeout)
+	conn, dialErr := dialHysteria(dialCtx, cfg, ep, tofu)
+	// A completed tunnel no longer depends on the setup context.
 	cancelDial()
 	if dialErr != nil {
 		return nil, fmt.Errorf("dial %s: %w", ep.address, dialErr)
 	}
-	// One Mumble packet per message (see newPacketConn); the wrapper belongs
-	// on the connection gumble writes packets into, which is above the shaper
-	// - chaff is dropped below it, and a packetConn that saw chaff would
-	// never report silence again (packetconn_test.go).
+	// Frame application packets above TLS so protocol keepalives and QUIC
+	// handshakes never count as Mumble activity for the silence watchdog.
 	packets := newPacketConn(conn)
 	s.packets = packets
-	syncCtx, cancelSync := syncingContext(packets)
+	syncCtx, cancelSync := syncingContextWithParent(parent, packets, time.Now())
 	defer cancelSync()
 	client, err := gumble.DialWithConn(syncCtx, packets, gc)
 	if err != nil {
+		_ = packets.Close()
 		return nil, fmt.Errorf("dial %s: %w", ep.address, err)
 	}
 	if err := checkIdentity(client, ep.host, cfg.IdentitySeed, log); err != nil {
-		_ = client.Disconnect()
+		_ = packets.Close()
 		return nil, err
 	}
 	s.client = client
 	return s, nil
 }
 
-// checkIdentity compares the name the server gave us with the one we derived
-// for ourselves.
-//
-// This is what makes the identity a fact rather than a courtesy. The relay
-// speaks Murmur's TLS now, so the certificate that reaches the server is one
-// the relay presented - but the client worked out, before connecting, exactly
-// which certificate that should be and exactly what Murmur would call it
-// (internal/identity). A relay that showed the server anything else is caught
-// here, by arithmetic, and not taken on trust.
-//
-// An empty hash is a different thing and is not an accusation: a server that
-// does not ask for a client certificate reports one for everybody, and that is
-// its choice to make. It is logged, because a user who expects to be somebody
-// should be able to find out why they are not.
+// checkIdentity verifies that Murmur reports the identity presented by the
+// client's end-to-end TLS session. A server may allow anonymous users.
 func checkIdentity(client *gumble.Client, host string, master []byte, log *slog.Logger) error {
 	if len(master) == 0 || client == nil || client.Self == nil {
 		return nil
@@ -240,7 +204,7 @@ func checkIdentity(client *gumble.Client, host string, master []byte, log *slog.
 	case "":
 		log.Warn("the server did not ask who we are; this session is anonymous")
 	default:
-		// The relay showed the server a certificate that is not ours. Whoever
+		// The server reported a certificate that is not ours. Whoever
 		// we are logged in as, it is not who this client believes it is.
 		return fmt.Errorf(
 			"the server knows this session as somebody else: it reports %s where this client is %s",
@@ -249,20 +213,14 @@ func checkIdentity(client *gumble.Client, host string, master []byte, log *slog.
 	return nil
 }
 
-// syncingContext ends when the connection has been silent for syncSilence.
-//
-// A sync that is merely slow keeps its context; one that has stopped loses it.
-// The connection itself is the evidence - packetConn records every read - so
-// this asks the same question the rest of the transport does: is anything still
-// arriving?
-func syncingContext(packets *packetConn) (context.Context, context.CancelFunc) {
-	return syncingContextSince(packets, time.Now())
+// syncingContextSince bounds setup by silence since the supplied start time.
+// A slow sync that keeps delivering Mumble bytes remains alive.
+func syncingContextSince(packets *packetConn, started time.Time) (context.Context, context.CancelFunc) {
+	return syncingContextWithParent(context.Background(), packets, started)
 }
 
-// syncingContextSince is syncingContext with the start of the wait supplied, so
-// a test can reach the timeout without spending it.
-func syncingContextSince(packets *packetConn, started time.Time) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
+func syncingContextWithParent(parent context.Context, packets *packetConn, started time.Time) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
 	go func() {
 		// A quarter of the budget: often enough to notice promptly, rarely
 		// enough that a slow sync pays nothing for being watched.
@@ -283,104 +241,23 @@ func syncingContextSince(packets *packetConn, started time.Time) (context.Contex
 	return ctx, cancel
 }
 
-// dialRelay takes the road it is given.
-//
-// Which road that is comes from the Manager, which rotates through them on the
-// evidence that matters - whether packets of ours come back - rather than
-// falling back here on a failure to connect. A road that connects and then
-// carries nothing is the failure this whole milestone exists for, and it is
-// invisible from inside a dial (transport.go).
-func dialRelay(
-	ctx context.Context,
-	ep endpoint,
-	transport Transport,
-	credential relayproto.Credential,
-	tofu *TOFUStore,
-	seed []byte,
-	roots *tls.Config,
-) (net.Conn, error) {
-	if transport == "" {
-		// The field's contract, kept: empty means the first road. It was the
-		// else branch that used to honour it, and the table replaced the else
-		// branch - so Dial, whose callers do not choose a road at all, started
-		// failing with "no road named" instead of taking the default one.
-		transport = relayTransports[0]
-	}
-	road, ok := relayRoads[transport]
-	if !ok {
-		// A road named but not built. This was an else branch until now, so
-		// anything that was not QUIC quietly became WebSocket: a road added to
-		// relayTransports without being added here would not have failed, it
-		// would have lied - the session would run, and the chooser would
-		// record its success under the wrong name and write that to disk.
-		return nil, fmt.Errorf("mumble: no road named %q", transport)
-	}
-	return road(ctx, ep, credential, tofu, seed, roots)
-}
-
-// relayRoad opens one road to the relay and returns the connection gumble will
-// speak Mumble over. Each road's own dial takes one more argument than this -
-// a seam its tests reach in with - and the entries below supply it.
-type relayRoad func(
-	context.Context,
-	endpoint,
-	relayproto.Credential,
-	*TOFUStore,
-	[]byte,
-	*tls.Config,
-) (net.Conn, error)
-
-// relayRoads is every road that exists, by the name the chooser and the
-// settings file use for it. Adding a road is one entry here and one in
-// relayTransports, which decides the order they are tried in.
-var relayRoads = map[Transport]relayRoad{
-	TransportWSS: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, seed []byte, roots *tls.Config) (net.Conn, error) {
-		var client *http.Client
-		if roots != nil {
-			client = &http.Client{Transport: &http.Transport{TLSClientConfig: roots}}
-		}
-		return dialWSSTunnel(ctx, ep, credential, tofu, seed, client)
-	},
-	TransportQUIC: func(ctx context.Context, ep endpoint, credential relayproto.Credential,
-		tofu *TOFUStore, seed []byte, roots *tls.Config) (net.Conn, error) {
-		return dialQUICTunnel(ctx, ep, credential, tofu, seed, roots)
-	},
-}
-
-// isTerminalRelayError reports whether a failure is about who is calling
-// rather than about the road, in which case another road cannot help.
-func isTerminalRelayError(err error) bool {
-	return errors.Is(err, ErrRelayPasswordRequired) ||
-		errors.Is(err, ErrRelayAuthentication) ||
-		errors.Is(err, ErrRelayNotFound) ||
-		errors.Is(err, ErrRelayRateLimited) ||
-		errors.Is(err, ErrRelayFull)
-}
-
-// relayCredential returns the bearer for the relay, deriving it when the
-// caller did not. An empty password yields an empty credential, which dialWSS
-// rejects before it touches the network.
-func relayCredential(cfg DialConfig) relayproto.Credential {
-	if cfg.RelayCredential != "" || cfg.Password == "" {
-		return cfg.RelayCredential
-	}
-	return relayproto.Derive([]byte(cfg.Password))
-}
-
 // Disconnect closes the connection exactly once; later calls are no-ops.
-// gumble reports "already disconnected" as an error, which is not interesting
-// to any caller here.
+// Closing the owned stream also releases Hysteria after a remote EOF.
 func (s *Session) Disconnect() error {
-	if s == nil || s.client == nil {
+	if s == nil {
 		return nil
 	}
 	var err error
 	s.closeOnce.Do(func() {
-		if s.client.State() == gumble.StateDisconnected {
-			return
+		// gumble marks a read failure disconnected without closing its Conn.
+		// Always release the owned stream and Hysteria client, including after
+		// a remote EOF. Closing the socket also avoids Client.Disconnect's
+		// unsynchronized write to the read loop's disconnect event.
+		if s.packets != nil {
+			err = s.packets.Close()
+		} else if s.client != nil && s.client.Conn != nil {
+			err = s.client.Conn.Close()
 		}
-		err = s.client.Disconnect()
 	})
 	return err
 }

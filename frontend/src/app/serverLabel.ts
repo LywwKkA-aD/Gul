@@ -1,10 +1,8 @@
 // What the sidebar calls the server we are on.
 //
-// The address the user typed is a dial string, not a name: it can be a bare
-// host, a host:port, or a relay URL with a scheme and a path
-// (internal/mumble/endpoint.go accepts all three). The identity inside all of
-// them is the host, so that is what the header shows - the full address stays
-// one hover away.
+// The address can include a Hysteria scheme, port and obfuscation mode. The
+// header shows the host; historical Mumble/relay addresses remain readable in
+// the saved-server list until the user replaces them.
 //
 // Kept free of React and of the DOM so the rules are testable (serverLabel.test.ts).
 
@@ -14,6 +12,8 @@ export const MUMBLE_DEFAULT_PORT = '64738';
 
 /** Ports the scheme already implies, so printing them adds nothing. */
 const SCHEME_DEFAULT_PORT: Record<string, string> = {
+  hysteria2: '443',
+  hy2: '443',
   wss: '443',
   https: '443',
   ws: '80',
@@ -46,9 +46,8 @@ function trimRootDot(host: string): string {
 }
 
 /**
- * The host of an accepted server address, plus a port only when it carries
- * information: `host:64738` and `wss://host:443/mumble` are the default ways
- * to reach a server, `host:8443` is not.
+ * The host plus a port only when it carries information. Hysteria defaults to
+ * 443; saved addresses from earlier releases retain their historical labels.
  *
  * Anything unparseable is returned trimmed rather than swallowed: showing the
  * raw string beats showing nothing.
@@ -60,8 +59,7 @@ export function serverHost(address: string): string {
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//.exec(value);
   const rest = scheme ? value.slice(scheme[0].length) : value;
 
-  // Everything from the first path, query or fragment separator is routing,
-  // not identity - `wss://host/mumble` names the same server as `host`.
+  // Only the authority belongs in the label, including for old saved URLs.
   let authority = rest.split(/[/?#]/)[0];
   const at = authority.lastIndexOf('@');
   if (at >= 0) authority = authority.slice(at + 1);
@@ -70,8 +68,11 @@ export function serverHost(address: string): string {
   const { host, port } = splitHostPort(authority);
   if (host === '') return value;
 
-  const implied = scheme ? SCHEME_DEFAULT_PORT[scheme[1].toLowerCase()] : undefined;
-  const noise = port === '' || port === MUMBLE_DEFAULT_PORT || port === implied;
+  const schemeName = scheme?.[1].toLowerCase();
+  const hysteria = schemeName === 'hy2' || schemeName === 'hysteria2';
+  const implied = schemeName ? SCHEME_DEFAULT_PORT[schemeName] : '443';
+  const historicalDefault = !hysteria && port === MUMBLE_DEFAULT_PORT;
+  const noise = port === '' || historicalDefault || port === implied;
   return noise ? trimRootDot(host) : `${trimRootDot(host)}:${port}`;
 }
 

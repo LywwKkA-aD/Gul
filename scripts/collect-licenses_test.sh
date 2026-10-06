@@ -82,6 +82,8 @@ test -f "$output_dir/THIRD_PARTY_LICENSES/vendored/third_party/toolchain-runtime
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/toolchain/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/LywwKkA-aD/gumble/gumble/proto/LICENSE"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/apernet/hysteria/core/v2/LICENSE.md"
+test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/apernet/hysteria/extras/v2/LICENSE.md"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/coder/websocket/LICENSE.txt"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/github.com/godbus/dbus/v5/LICENSE"
 test -f "$output_dir/THIRD_PARTY_LICENSES/go/golang.org/x/sys/LICENSE"
@@ -99,6 +101,8 @@ test -f "$output_dir/THIRD_PARTY_LICENSES/npm/@wailsio/runtime/is-callable-LICEN
 test -f "$output_dir/THIRD_PARTY_LICENSES/npm/@wailsio/runtime/HTMX-LICENSE-and-source.js"
 
 grep -Fq 'github.com/LywwKkA-aD/gumble' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'github.com/apernet/hysteria/core/v2@v2.13.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
+grep -Fq 'github.com/apernet/hysteria/extras/v2@v2.13.0' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'github.com/coder/websocket@v1.8.15' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'Go toolchain' "$output_dir/THIRD_PARTY_MANIFEST.txt"
 grep -Fq 'react@19.2.8' "$output_dir/THIRD_PARTY_MANIFEST.txt"

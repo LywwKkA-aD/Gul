@@ -1,0 +1,74 @@
+name: gul-hysteria
+
+services:
+  mumble:
+    image: mumblevoip/mumble-server:v1.5.915@sha256:018ad3515932e513d8fdc970df918373a2664c4da32b09a89a4aaee28eb7507a
+    restart: unless-stopped
+    mem_limit: 256m
+    # Hysteria joins this container's namespace; Mumble is never published.
+    ports:
+      - "443:443/udp"
+      - "443:443/tcp"
+      - "80:80/tcp"
+    environment:
+      MUMBLE_CONFIG_HOST: "127.0.0.1"
+      MUMBLE_CONFIG_PORT: "64738"
+      MUMBLE_CONFIG_USERS: "16"
+      MUMBLE_CONFIG_WELCOMETEXT: "Gul"
+      # All proxied users share loopback; tolerate normal reconnect bursts.
+      MUMBLE_CONFIG_AUTOBANATTEMPTS: "60"
+      MUMBLE_CONFIG_AUTOBANTIME: "30"
+      # The administrative Ice listener is unnecessary for this deployment.
+      MUMBLE_CONFIG_ICE: ""
+    secrets:
+      - source: join_password
+        target: MUMBLE_CONFIG_SERVER_PASSWORD
+      - source: admin_password
+        target: MUMBLE_SUPERUSER_PASSWORD
+    volumes:
+      - mumble-data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  hysteria:
+    image: tobyxdd/hysteria:v2.13.0@sha256:92b06917b2abb940e90ea6dc9215c1b1ceea69fa7edc1374daf3cde36e422740
+    restart: unless-stopped
+    network_mode: service:mumble
+    depends_on:
+      mumble:
+        condition: service_started
+        restart: true
+    command: ["server", "-c", "/etc/hysteria/server.json"]
+    environment:
+      GOMEMLIMIT: "256MiB"
+    mem_limit: 384m
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./private/server.json:/etc/hysteria/server.json:ro
+      - acme:/acme
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  join_password:
+    file: ./private/join-password
+  admin_password:
+    file: ./private/admin-password
+
+volumes:
+  mumble-data: {}
+  acme: {}

@@ -111,21 +111,15 @@ func newLiveManager(t *testing.T, name string) *liveClient {
 	return c
 }
 
-// liveRelay is the address every live client now connects to, and the password
-// that opens it.
-//
-// The direct road is gone: there is no way to reach Murmur from this client
-// except through a relay, which is exactly the shape production has. So the
-// stand gets one, standing in front of the same Murmur these tests always
-// used. Its certificate is signed by nobody the machine trusts, hence the
-// roots handed to the manager (DialConfig.OuterRoots).
+// liveRelay returns the local official Hysteria endpoint, its credential and
+// test certificate roots. Both clients reach the same developer Murmur stand.
 func liveRelay(t *testing.T) (address, password string, roots *tls.Config) {
 	t.Helper()
-	ep, wssRoots, _ := localRelay(t)
-	return ep.address, relayLiveSecret, wssRoots
+	ep, roots, _ := localRelay(t)
+	return ep.address, relayLiveSecret, roots
 }
 
-// connectLive points one live client at the stand's relay.
+// connectLive points one live client at Hysteria in front of the stand.
 func connectLive(t *testing.T, c *liveClient, name string) {
 	t.Helper()
 	address, password, roots := liveRelay(t)
@@ -219,7 +213,7 @@ func TestReconnectAfterServerRestart(t *testing.T) {
 func TestChannelWalk(t *testing.T) {
 	admin := newLiveManager(t, "SuperUser")
 	defer admin.mgr.Close()
-	// SuperUser needs its own password, and the relay was told about it.
+	// SuperUser needs its own password, which Hysteria also accepts here.
 	adminAddress, _, adminRoots := liveRelay(t)
 	admin.mgr.outerRoots = adminRoots
 	admin.mgr.Connect(adminAddress, "SuperUser", liveSuperUserPassword)

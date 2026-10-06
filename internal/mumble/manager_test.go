@@ -14,7 +14,7 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
+	"github.com/LywwKkA-aD/Gul/internal/hysteria"
 )
 
 // statusSink collects OnStatus callbacks. The buffer is generous because a
@@ -55,24 +55,6 @@ func (s *statusSink) drained() []domain.ConnectionStatus {
 	}
 }
 
-// await reads statuses until it sees want or the timeout elapses, skipping the
-// states in between. It is for tests that churn through many reconnect emits
-// and only care that a particular state is eventually reached.
-func (s *statusSink) await(t *testing.T, want domain.ConnState, timeout time.Duration) (domain.ConnectionStatus, bool) {
-	t.Helper()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case status := <-s.ch:
-			if status.State == want {
-				return status, true
-			}
-		case <-deadline:
-			return domain.ConnectionStatus{}, false
-		}
-	}
-}
-
 func (s *statusSink) expect(t *testing.T, want domain.ConnState) domain.ConnectionStatus {
 	t.Helper()
 	status := s.next(t)
@@ -92,13 +74,6 @@ func newTestManager(t *testing.T, cb Callbacks) *Manager {
 		t.Fatalf("NewManager: %v", err)
 	}
 	m.backoffFn = func(int) time.Duration { return time.Millisecond }
-	// Connect derives the relay bearer before it reports anything, and the
-	// real derivation is 600k PBKDF2 rounds - deliberately slow, and slower
-	// still under the race detector, which is enough to push a loaded CI
-	// runner past the callback deadlines below. The cost itself is covered
-	// where it belongs, in wss_test.go against relayproto.Derive; a test that
-	// cares about the credential overrides this again.
-	m.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
 	// A healthy link by default: tests that care about the round-trip gate say
 	// so themselves, and the rest hand out sessions with no client at all.
 	m.roundTripFn = func(*gumble.Client) bool { return true }
@@ -164,8 +139,8 @@ func TestManagerLeavesARoadWhoseUplinkStalled(t *testing.T) {
 	m.Connect(testRelayAddress, "gul", "secret")
 
 	first, second := <-roads, <-roads
-	if first == second {
-		t.Fatalf("both attempts took the %q road; a stalled uplink must cost the road its place", first)
+	if first != TransportHysteria || second != TransportHysteria {
+		t.Fatalf("reconnect used a legacy transport: %q, %q", first, second)
 	}
 }
 
@@ -229,22 +204,22 @@ func TestManagerRejectsUnsafeRelayURLBeforeDial(t *testing.T) {
 	}
 }
 
-func TestManagerPreservesNormalizedRelayURL(t *testing.T) {
+func TestManagerPreservesNormalizedHysteriaURL(t *testing.T) {
 	sink := newStatusSink()
 	m := newTestManager(t, Callbacks{OnStatus: sink.record})
 	// Room for every road: a dial that fails for a network reason is retried
 	// on the next one straight away (transport.go), so a first connect to a
 	// server that is down is more than one attempt.
-	configs := make(chan DialConfig, len(relayTransports)+1)
+	configs := make(chan DialConfig, 1)
 	m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
 		configs <- cfg
 		return nil, errors.New("stop")
 	}
 
-	m.Connect("wss://murmur.example.test", "gul", "secret")
+	m.Connect("hysteria2://murmur.example.test", "gul", "secret")
 	sink.expect(t, domain.StateConnecting)
 	status := sink.expect(t, domain.StateDisconnected)
-	if status.Server != "wss://murmur.example.test" {
+	if status.Server != "hysteria2://murmur.example.test" {
 		t.Fatalf("server = %q", status.Server)
 	}
 	if cfg := <-configs; cfg.Address != status.Server {
@@ -252,8 +227,8 @@ func TestManagerPreservesNormalizedRelayURL(t *testing.T) {
 	}
 }
 
-func TestRelayAuthenticationErrorsAreTerminal(t *testing.T) {
-	for _, err := range []error{ErrRelayPasswordRequired, ErrRelayAuthentication} {
+func TestHysteriaAuthenticationErrorsAreTerminal(t *testing.T) {
+	for _, err := range []error{hysteria.ErrPasswordRequired, hysteria.ErrAuthentication} {
 		if !isTerminalDialError(err) {
 			t.Errorf("%v was not terminal", err)
 		}
@@ -277,7 +252,7 @@ func TestManagerFirstAttemptFailureIsTerminal(t *testing.T) {
 	if status.Error != "connection refused" {
 		t.Fatalf("error = %q, want the dial error verbatim", status.Error)
 	}
-	if status.Server != "localhost:64738" {
+	if status.Server != "hysteria2://localhost" {
 		t.Fatalf("server = %q, want the normalized address", status.Server)
 	}
 
@@ -446,7 +421,7 @@ func TestManagerPromptsAndRetriesOnFingerprintChange(t *testing.T) {
 	if prompt.OldFingerprint != "old-fingerprint" || prompt.NewFingerprint != "new-fingerprint" {
 		t.Fatalf("prompt = %+v, want both fingerprints", prompt)
 	}
-	if prompt.Server != "localhost:64738" {
+	if prompt.Server != "hysteria2://localhost" {
 		t.Fatalf("prompt server = %q, want the normalized address", prompt.Server)
 	}
 
@@ -493,7 +468,7 @@ func TestManagerDisconnectStopsTheLoop(t *testing.T) {
 	m.Disconnect()
 
 	status := sink.expect(t, domain.StateDisconnected)
-	if status.Server != "localhost:64738" {
+	if status.Server != "hysteria2://localhost" {
 		t.Fatalf("server = %q, want it preserved in the final status", status.Server)
 	}
 	if got := m.Status().State; got != domain.StateDisconnected {
@@ -659,278 +634,9 @@ func (w testWriter) Write(p []byte) (int, error) {
 
 // TestManagerDerivesTheRelayBearerOncePerConnect pins the cost model: PBKDF2
 // runs once when the user connects, not once per reconnect attempt.
-func TestManagerDerivesTheRelayBearerOncePerConnect(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-
-	var derivations atomic.Int32
-	m.deriveFn = func([]byte) relayproto.Credential {
-		derivations.Add(1)
-		return relayproto.Credential("v2.test-credential")
-	}
-
-	configs := make(chan DialConfig, 8)
-	m.dialFn = func(cfg DialConfig, _ sessionHooks) (*Session, error) {
-		configs <- cfg
-		// Rate limiting keeps the loop retrying without a live session.
-		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "server password")
-	for range 3 {
-		select {
-		case cfg := <-configs:
-			if cfg.RelayCredential != "v2.test-credential" {
-				t.Fatalf("dial credential = %q", cfg.RelayCredential)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("timed out waiting for a dial attempt")
-		}
-	}
-	m.Disconnect()
-
-	if got := derivations.Load(); got != 1 {
-		t.Fatalf("derivations = %d, want 1 for one Connect", got)
-	}
-}
-
-func TestManagerWaitsOutTheRelayRetryAfter(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-	// The ban has to win over the ordinary ladder, which is 1 ms here.
-	const retryAfter = 200 * time.Millisecond
-
-	attempts := make(chan time.Time, 4)
-	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
-		attempts <- time.Now()
-		return nil, &RateLimitedError{RetryAfter: retryAfter}
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "secret")
-	first := <-attempts
-
-	sink.expect(t, domain.StateConnecting)
-	status := sink.expect(t, domain.StateConnecting)
-	if !strings.Contains(status.Error, "1 секунду") {
-		t.Fatalf("status error = %q, want the wait in Russian", status.Error)
-	}
-
-	second := <-attempts
-	m.Disconnect()
-	if waited := second.Sub(first); waited < retryAfter {
-		t.Fatalf("waited %s before retrying, want at least %s", waited, retryAfter)
-	}
-}
-
-// TestManagerRateLimitedFirstConnectStaysOnTheConnectForm is the first-connect
-// half of the rate-limit contract. "reconnecting" means a session existed: the
-// UI replaces the connect form with the locked main screen and its banner, so
-// announcing it for an attempt that never connected leaves the user staring at
-// a dimmed session that does not exist, with the form that holds the message
-// unmounted.
-func TestManagerRateLimitedFirstConnectStaysOnTheConnectForm(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
-		return nil, &RateLimitedError{RetryAfter: time.Millisecond}
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "secret")
-	sink.expect(t, domain.StateConnecting)
-
-	status := sink.expect(t, domain.StateConnecting)
-	if !strings.Contains(status.Error, "Следующая попытка") {
-		t.Fatalf("status error = %q, want the wait the connect form shows", status.Error)
-	}
-	if status.Server != "wss://murmur.example.test" {
-		t.Fatalf("server = %q, want the normalized address", status.Server)
-	}
-
-	// Disconnect waits for the loop, so every status it produced is recorded.
-	m.Disconnect()
-	for _, recorded := range sink.drained() {
-		if recorded.State == domain.StateReconnecting {
-			t.Fatal("a first connect entered the reconnect state: there was no session to lose")
-		}
-	}
-}
-
-// TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal: waiting out a
-// rate limit is not the same as having been connected. The next failure is
-// still a first-attempt failure and still belongs on the connect form.
-func TestManagerRateLimitedFirstConnectKeepsLaterFailuresTerminal(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-
-	var attempts atomic.Int32
-	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
-		if attempts.Add(1) == 1 {
-			return nil, &RateLimitedError{RetryAfter: time.Millisecond}
-		}
-		return nil, errors.New("connection refused")
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "secret")
-	sink.expect(t, domain.StateConnecting)
-	sink.expect(t, domain.StateConnecting) // the wait
-	sink.expect(t, domain.StateConnecting) // the retry
-
-	status := sink.expect(t, domain.StateDisconnected)
-	if status.Error != "connection refused" {
-		t.Fatalf("error = %q, want the dial error verbatim", status.Error)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	// Three: the rate-limited one, then the refused one, then the other road.
-	// A dial that fails with nothing on the other end says something about the
-	// road and nothing about the user, so the search happens before the user
-	// is sent back to the form (transport.go).
-	if got := attempts.Load(); got != 3 {
-		t.Fatalf("dial attempts = %d, want 3: the roads are searched first", got)
-	}
-}
-
-// TestManagerRateLimitedReconnectShowsTheReconnectState is the other half: a
-// session did exist, so the locked main screen and its banner are correct -
-// and the banner is where the wait has to be readable.
-func TestManagerRateLimitedReconnectShowsTheReconnectState(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-
-	var attempts atomic.Int32
-	hooksCh := make(chan sessionHooks, 4)
-	m.dialFn = func(_ DialConfig, hooks sessionHooks) (*Session, error) {
-		if attempts.Add(1) == 1 {
-			hooksCh <- hooks
-			return &Session{}, nil
-		}
-		return nil, &RateLimitedError{RetryAfter: 20 * time.Millisecond}
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "secret")
-	sink.expect(t, domain.StateConnecting)
-	sink.expect(t, domain.StateConnected)
-
-	hooks := <-hooksCh
-	hooks.disconnect(&gumble.DisconnectEvent{Type: gumble.DisconnectError, String: "eof"})
-
-	sink.expect(t, domain.StateReconnecting) // the drop
-	status := sink.expect(t, domain.StateReconnecting)
-	if !strings.Contains(status.Error, "Следующая попытка") {
-		t.Fatalf("status error = %q, want the wait visible in the banner", status.Error)
-	}
-	m.Disconnect()
-}
-
-// TestManagerWaitsOutAFullRelay: a relay answering 503 is neither a bad
-// password nor a broken address, and the Retry-After it sends is as binding as
-// the one a rate limit sends.
-func TestManagerWaitsOutAFullRelay(t *testing.T) {
-	sink := newStatusSink()
-	m := newTestManager(t, Callbacks{OnStatus: sink.record})
-	const retryAfter = 200 * time.Millisecond
-
-	attempts := make(chan time.Time, 4)
-	m.dialFn = func(DialConfig, sessionHooks) (*Session, error) {
-		attempts <- time.Now()
-		return nil, &RelayFullError{RetryAfter: retryAfter}
-	}
-
-	m.Connect("wss://murmur.example.test", "gul", "secret")
-	first := <-attempts
-
-	sink.expect(t, domain.StateConnecting)
-	status := sink.expect(t, domain.StateConnecting)
-	if !strings.Contains(status.Error, "переполнен") {
-		t.Fatalf("status error = %q, want the Russian capacity message", status.Error)
-	}
-	if strings.Contains(status.Error, "websocket") {
-		t.Fatalf("status error = %q, want no raw transport error", status.Error)
-	}
-
-	second := <-attempts
-	m.Disconnect()
-	if waited := second.Sub(first); waited < retryAfter {
-		t.Fatalf("waited %s before retrying, want at least %s", waited, retryAfter)
-	}
-}
-
-func TestRelayRefusalKeepsTheLadderAsAFloor(t *testing.T) {
-	const ladder = 5 * time.Second
-
-	cases := []struct {
-		name string
-		err  error
-		want time.Duration
-		says string
-	}{
-		{
-			name: "rate limit shorter than the ladder",
-			err:  &RateLimitedError{RetryAfter: time.Second},
-			want: ladder,
-			says: "отклоняет подключения",
-		},
-		{
-			name: "rate limit longer than the ladder",
-			err:  &RateLimitedError{RetryAfter: 30 * time.Second},
-			want: 30 * time.Second,
-			says: "отклоняет подключения",
-		},
-		{
-			name: "full relay carries its own message",
-			err:  &RelayFullError{RetryAfter: 30 * time.Second},
-			want: 30 * time.Second,
-			says: "переполнен",
-		},
-		{
-			name: "full relay without a Retry-After",
-			err:  &RelayFullError{},
-			want: ladder,
-			says: "переполнен",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			wait, message, ok := relayRefusal(tc.err, ladder)
-			if !ok {
-				t.Fatalf("relayRefusal(%v) did not recognize a transient refusal", tc.err)
-			}
-			if wait != tc.want {
-				t.Fatalf("wait = %s, want %s", wait, tc.want)
-			}
-			if !strings.Contains(message, tc.says) {
-				t.Fatalf("message = %q, want it to contain %q", message, tc.says)
-			}
-		})
-	}
-
-	if _, _, ok := relayRefusal(errors.New("connection refused"), ladder); ok {
-		t.Fatal("an ordinary dial failure is not a relay refusal")
-	}
-}
-
-func TestRateLimitedMessageCountsSeconds(t *testing.T) {
-	cases := map[time.Duration]string{
-		500 * time.Millisecond: "1 секунду",
-		2 * time.Second:        "2 секунды",
-		11 * time.Second:       "11 секунд",
-		21 * time.Second:       "21 секунду",
-		30 * time.Second:       "30 секунд",
-	}
-	for wait, want := range cases {
-		if got := rateLimitedMessage(wait); !strings.Contains(got, want) {
-			t.Errorf("rateLimitedMessage(%s) = %q, want it to contain %q", wait, got, want)
-		}
-	}
-}
-
-// TestManagerLogsCarryNoServerAddress is the privacy contract of PLAN.md
-// §10.7: diagnostics archives are shareable, so no log record may name the
-// server - neither as an attribute nor inside an error string.
 func TestManagerLogsCarryNoServerAddress(t *testing.T) {
 	const host = "murmur.example.test"
-	const address = "wss://" + host + "/mumble"
+	const address = "hysteria2://" + host
 
 	var records bytes.Buffer
 	m, err := NewManager(t.TempDir(), slog.New(slog.NewJSONHandler(&records, nil)), Callbacks{})
@@ -939,7 +645,6 @@ func TestManagerLogsCarryNoServerAddress(t *testing.T) {
 	}
 	t.Cleanup(m.Close)
 	m.backoffFn = func(int) time.Duration { return time.Millisecond }
-	m.deriveFn = func([]byte) relayproto.Credential { return "v2.test-credential" }
 
 	hooksCh := make(chan sessionHooks, 4)
 	var attempts atomic.Int32
@@ -977,49 +682,5 @@ func TestManagerLogsCarryNoServerAddress(t *testing.T) {
 	}
 	if !strings.Contains(logged, redactedServer) {
 		t.Fatalf("log does not show that the address was redacted: %s", logged)
-	}
-}
-
-// The message a user sees when nothing opened has to name every road.
-//
-// Reporting only the last one is how "QUIC handshake failed" reaches the
-// screen of somebody whose websocket road failed first, for an unrelated
-// reason - and sends them looking at the wrong half of the system. Seen
-// happening: a Cloudflare front answered the websocket dial with HTTP/2 and
-// the QUIC road then timed out, and only the timeout was shown.
-func TestEveryRoadFailedNamesThemAll(t *testing.T) {
-	t.Parallel()
-	message := everyRoadFailed([]roadFailure{
-		{TransportWSS, errors.New("server negotiated HTTP/2")},
-		{TransportQUIC, errors.New("timeout: no recent network activity")},
-	})
-	for _, want := range []string{"wss", "HTTP/2", "quic", "timeout"} {
-		if !strings.Contains(message, want) {
-			t.Errorf("сообщение %q не содержит %q", message, want)
-		}
-	}
-}
-
-// One road is the ordinary case and must read as it always did: naming a
-// single road adds noise where there was no choice to explain.
-func TestASingleFailureIsReportedPlainly(t *testing.T) {
-	t.Parallel()
-	if got := everyRoadFailed([]roadFailure{{TransportWSS, errors.New("connection refused")}}); got != "connection refused" {
-		t.Errorf("получено %q, ожидалось %q", got, "connection refused")
-	}
-}
-
-// Roads that failed identically are reported once. Labelling them would turn
-// "connection refused" into "wss: connection refused; quic: connection
-// refused" - longer, no more informative, and an invitation to look for a
-// difference that is not there.
-func TestIdenticalRoadFailuresAreReportedOnce(t *testing.T) {
-	t.Parallel()
-	message := everyRoadFailed([]roadFailure{
-		{TransportWSS, errors.New("connection refused")},
-		{TransportQUIC, errors.New("connection refused")},
-	})
-	if message != "connection refused" {
-		t.Errorf("получено %q, ожидалось %q", message, "connection refused")
 	}
 }

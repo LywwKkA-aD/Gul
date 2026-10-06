@@ -1,13 +1,13 @@
 package mumble
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"html"
 	"log/slog"
 	"math"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +15,8 @@ import (
 	"github.com/LywwKkA-aD/gumble/gumble"
 
 	"github.com/LywwKkA-aD/Gul/internal/domain"
+	"github.com/LywwKkA-aD/Gul/internal/hysteria"
 	"github.com/LywwKkA-aD/Gul/internal/identity"
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // ErrNotConnected is returned by actions that need a live session.
@@ -42,24 +42,12 @@ const roundTripGrace = 12 * time.Second
 
 type credentials struct {
 	address string
-	// key identifies this server the way the CALLER spells it, which is not
-	// how address spells it: Connect normalizes, so a saved "wss://host/mumble"
-	// becomes "wss://host" here. Anything the caller has to match up with -
-	// the road remembered for a server, which core stores beside its own list
-	// keyed by its own string - has to use the caller's spelling, or the two
-	// sides key the same server differently and the memory silently never
-	// applies. address stays the normalized one: it is what the user is shown.
-	key string
-	// kind is what parseEndpoint made of the address. The chooser needs it to
-	// know which roads exist, and taking it from here rather than re-reading
-	// the string keeps one answer to that question.
+	// key retains the caller's spelling for saved-server settings; address
+	// carries the normalized endpoint shown in connection status.
+	key      string
 	kind     endpointKind
 	username string
 	password string
-	// bearer is the derived WSS relay credential. PBKDF2 makes derivation cost
-	// about 50 ms, so it is computed once per Connect and reused by every
-	// reconnect attempt. It is a secret: never log it, never put it in status.
-	bearer relayproto.Credential
 }
 
 // tofuPending is the certificate change awaiting the user's decision.
@@ -83,19 +71,16 @@ type Manager struct {
 	tofu *TOFUStore
 	cert tls.Certificate
 	// identitySeed is the master secret this user is known by. It never
-	// leaves the machine: the per-server seed is derived where the frame is
-	// built (identity.HostSeed).
+	// leaves the machine: the derived certificate is presented inside Mumble TLS.
 	identitySeed []byte
 	// outerRoots is a seam: nil means the system trust store. A live test
-	// standing up its own relay supplies its own roots, which is the only way
-	// to reach one now that the direct road is gone.
+	// supplies the CA for a local Hysteria server.
 	outerRoots *tls.Config
 
 	// Network timing seams keep the lifecycle deterministic in tests;
 	// NewManager wires the production implementations.
 	dialFn          func(DialConfig, sessionHooks) (*Session, error)
 	backoffFn       func(int) time.Duration
-	deriveFn        func([]byte) relayproto.Credential
 	statsInterval   time.Duration
 	sampleLatencyFn func(*gumble.Client) // seam for tests; nil means sampleLatency
 	roundTripFn     func(*gumble.Client) bool
@@ -117,8 +102,7 @@ type Manager struct {
 	selfAudioWake   chan struct{}
 	selfAudioDone   chan struct{}
 	selfAudioBudget *sendBudget
-	// transports picks the road to the relay and remembers what worked
-	// (transport.go).
+	// transports remembers which saved servers completed a Hysteria round trip.
 	transports *transportChooser
 
 	mu         sync.Mutex
@@ -126,6 +110,7 @@ type Manager struct {
 	client     *gumble.Client
 	session    *Session
 	stop       chan struct{}
+	cancel     context.CancelFunc
 	done       chan struct{}
 	accept     chan struct{}
 	pending    *tofuPending
@@ -173,7 +158,6 @@ func NewManager(cfgDir string, log *slog.Logger, cb Callbacks) (*Manager, error)
 		cert:            cert,
 		identitySeed:    seed,
 		backoffFn:       defaultBackoff,
-		deriveFn:        relayproto.Derive,
 		statsInterval:   statsPollInterval,
 		accept:          make(chan struct{}, 1),
 		status:          domain.ConnectionStatus{State: domain.StateDisconnected},
@@ -229,16 +213,21 @@ func (m *Manager) Connect(address, username, password string) {
 	m.pending = nil
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
 	m.stop, m.done = stop, done
 	m.mu.Unlock()
 
-	go m.run(credentials{
-		address:  addr,
-		key:      address,
-		kind:     ep.kind,
-		username: username,
-		password: password,
-	}, stop, done)
+	go func() {
+		defer cancel()
+		m.run(ctx, credentials{
+			address:  addr,
+			key:      address,
+			kind:     ep.kind,
+			username: username,
+			password: password,
+		}, stop, done)
+	}()
 }
 
 // Disconnect stops the session and any reconnect loop.
@@ -356,251 +345,6 @@ func (m *Manager) Close() {
 	m.voice.close()
 }
 
-// run is the connect/reconnect loop. Exactly one runs per Connect.
-//
-// First attempt failing is terminal: the user is looking at a connect form and
-// needs the error, not a silent retry. The exception is a relay that answers
-// "not now, come back in N seconds" (429, 503): that attempt keeps retrying,
-// and keeps the user on the connect form while it does. Once a session has
-// been established, every unexpected drop is retried with 1s, 2s, 4s ... capped
-// at 30s, until Disconnect, Close, or a terminal condition (kick, ban,
-// rejected credentials).
-func (m *Manager) run(c credentials, stop <-chan struct{}, done chan<- struct{}) {
-	defer close(done)
-
-	c.bearer = relayBearer(c, m.deriveFn)
-	attempt := 0
-	reconnecting := false
-	// roadsLeft bounds one immediate search across the roads, so a server that
-	// is simply down cannot become a loop of instant retries.
-	roadsLeft := len(m.transports.roads(c.kind)) - 1
-	// Moving to the next road continues the same attempt rather than starting
-	// a new one, so it must not announce itself again.
-	searching := false
-	// What each road answered during one search. The user is told all of it:
-	// reporting only the last road is how "QUIC handshake failed" ends up on
-	// screen for someone whose websocket road failed first and for an entirely
-	// different reason.
-	var roadFailures []roadFailure
-
-	for {
-		if isStopped(stop) {
-			return
-		}
-		// A fresh wave - anything but continuing an in-flight road search - may
-		// search every road once again. Without replenishing here the budget is
-		// spent on the first wave and never restored, and the chooser pins to
-		// whichever road it stopped on even after another one recovers: a link
-		// that loses both roads and gets one back would never reconnect.
-		if !searching {
-			roadsLeft = len(m.transports.roads(c.kind)) - 1
-			roadFailures = roadFailures[:0]
-		}
-		if !reconnecting && !searching {
-			m.emitStatus(domain.ConnectionStatus{State: domain.StateConnecting, Server: c.address})
-		}
-		searching = false
-
-		dropped := make(chan *gumble.DisconnectEvent, 1)
-		transport := m.transports.next(c.kind, c.key)
-		session, err := m.dialOnce(c, transport, dropped)
-		if err != nil {
-			var mismatch *MismatchError
-			if errors.As(err, &mismatch) {
-				if !m.awaitFingerprint(c.address, mismatch, stop) {
-					return
-				}
-				// Accepted: retry immediately, the backoff is untouched.
-				continue
-			}
-
-			// The address never reaches gul.log: network errors embed
-			// host:port on their own (PLAN.md §10.7).
-			m.log.Warn("connect attempt failed", "error", RedactServer(err.Error(), c.address))
-
-			// A relay that turns the attempt away for now states how long it
-			// wants to be left alone. Retrying earlier only extends the
-			// refusal, so this is never terminal and never rushed - not even
-			// on the very first attempt. What it must not do on a first
-			// attempt is take the user off the connect form: until a session
-			// has existed, the form is where the message and the wait belong,
-			// and "reconnecting" would strand the user behind a locked screen.
-			if wait, message, refused := relayRefusal(err, m.backoffFn(attempt)); refused {
-				state := domain.StateConnecting
-				if reconnecting {
-					state = domain.StateReconnecting
-				}
-				m.emitStatus(domain.ConnectionStatus{
-					State: state, Server: c.address, Error: message,
-				})
-				if !sleepOrStop(wait, stop) {
-					return
-				}
-				attempt++
-				continue
-			}
-
-			// A road that would not open is a fact about the road, not about
-			// the user. Try the next one straight away - no backoff, nothing
-			// said yet: on a first connect this is the difference between
-			// "cannot reach the server" and simply arriving by the other road.
-			if roadsLeft > 0 && isRoadFailure(err) {
-				roadsLeft--
-				searching = true
-				roadFailures = append(roadFailures, roadFailure{transport, err})
-				m.transports.failed(c.key)
-				m.log.Info("road did not open, trying another", "transport", string(transport))
-				continue
-			}
-
-			if !reconnecting || isTerminalDialError(err) {
-				m.emitStatus(domain.ConnectionStatus{
-					State:  domain.StateDisconnected,
-					Server: c.address,
-					Error:  everyRoadFailed(append(roadFailures, roadFailure{transport, err})),
-				})
-				return
-			}
-			m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address})
-			if !sleepOrStop(m.backoffFn(attempt), stop) {
-				return
-			}
-			attempt++
-			continue
-		}
-
-		attempt = 0
-		m.setSession(session)
-		m.publishConnected(session, c.address)
-
-		event, stopped, silent := m.waitSession(session, c.key, transport, dropped, stop)
-		m.clearSession()
-		if stopped {
-			_ = session.Disconnect()
-			return
-		}
-
-		reason, terminal := disconnectReason(event)
-		// note is the diagnostic the user actually sees on the reconnect
-		// banner. Only the two cases below carry one: an ordinary drop leaves
-		// the banner as it was rather than flashing "connection lost" at every
-		// blip. Both constants are addressless, so neither is redacted.
-		note := ""
-		switch {
-		case silent:
-			// Nothing of ours ever came back. The session looks perfect from
-			// the inside, so it has to be taken down here - and the road it
-			// took is the one to stop using.
-			_ = session.Disconnect()
-			m.transports.failed(c.key)
-			m.log.Info("giving up on this road, trying another",
-				"transport", string(transport))
-			reason, terminal = reasonNoRoundTrip, false
-			note = reasonNoRoundTrip
-		case session.stalledUplink():
-			// The road opened, carried the login, and then stopped taking
-			// anything of ours while the server kept talking. Reconnecting on
-			// it produces the same session again, which is what a user lived
-			// through: eleven of them in four minutes, each about ten seconds
-			// long, every one ending the same way.
-			//
-			// One stall is enough to move on. Being wrong about a passing
-			// hiccup costs a road change, and the road that follows has to
-			// prove itself anyway; being right saves the loop.
-			m.transports.failed(c.key)
-			m.log.Info("this road stopped carrying our traffic, trying another",
-				"transport", string(transport))
-			reason = reasonUplinkStalled
-			note = reasonUplinkStalled
-		}
-		if terminal {
-			m.emitStatus(domain.ConnectionStatus{
-				State: domain.StateDisconnected, Server: c.address, Error: reason,
-			})
-			return
-		}
-		// The transport's own error, where gumble had none of its own. Without
-		// it a network fault reaches the log as a bare "connection lost", which
-		// is exactly what a user's diagnostics said while telling us nothing.
-		lost := []any{"reason", RedactServer(reason, c.address), "transport", string(transport)}
-		if err := session.transportError(); err != nil {
-			lost = append(lost, "error", RedactServer(err.Error(), c.address))
-		}
-		// The last reading of the panel, on the one line every lost session
-		// writes. A session that dies between two ticks would otherwise leave
-		// no account of itself at all.
-		if vitals, ok := session.vitals(); ok {
-			lost = append(lost, "vitals", vitals.redact(c.address))
-		}
-		// The voice counters belong on this line whether or not the session
-		// had a panel of its own: they live on the Manager, they survive the
-		// session that lost them, and a drop with a growing tx_errors is a
-		// different story from a drop with none.
-		lost = append(lost, "voice", m.voice.stats())
-		m.log.Warn("connection lost", lost...)
-		reconnecting = true
-		m.emitStatus(domain.ConnectionStatus{State: domain.StateReconnecting, Server: c.address, Error: note})
-		if !sleepOrStop(m.backoffFn(attempt), stop) {
-			return
-		}
-		attempt++
-	}
-}
-
-// waitSession owns the stats ticker for exactly one live session. Returning
-// stops new requests before reconnecting; publishLatency rejects any response
-// that was already in flight from the old client.
-// It also holds the round-trip gate: silent reports a session that never
-// proved our packets reach the server (roundTripGrace).
-func (m *Manager) waitSession(
-	session *Session,
-	address string,
-	transport Transport,
-	dropped <-chan *gumble.DisconnectEvent,
-	stop <-chan struct{},
-) (event *gumble.DisconnectEvent, stopped, silent bool) {
-	client := session.client
-	interval := m.statsInterval
-	if interval <= 0 {
-		interval = statsPollInterval
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	sample := m.sampleLatencyFn
-	if sample == nil {
-		sample = m.sampleLatency
-	}
-	sample(client)
-
-	verify := time.NewTimer(m.roundTripGrace)
-	defer verify.Stop()
-
-	for {
-		select {
-		case <-stop:
-			return nil, true, false
-		case event := <-dropped:
-			return event, false, false
-		case <-verify.C:
-			if m.roundTripFn != nil && !m.roundTripFn(client) {
-				return nil, false, true
-			}
-			// Packets of ours go there and come back on this road. That is the
-			// only thing worth remembering about it (transport.go).
-			if m.transports.succeeded(address, transport) {
-				m.log.Info("road proved itself", "transport", string(transport))
-				if cb := m.cb.OnTransport; cb != nil {
-					cb(address, string(transport))
-				}
-			}
-		case <-ticker.C:
-			sample(client)
-			m.logVitals(session, transport)
-		}
-	}
-}
-
 // logVitals writes one line describing what the connection has actually
 // carried (vitals.go). It runs on the session ticker, so a session that fails
 // leaves a trail rather than a single "connection lost".
@@ -657,6 +401,7 @@ func (m *Manager) sampleLatency(client *gumble.Client) {
 }
 
 func (m *Manager) dialOnce(
+	ctx context.Context,
 	c credentials,
 	transport Transport,
 	dropped chan<- *gumble.DisconnectEvent,
@@ -687,14 +432,14 @@ func (m *Manager) dialOnce(
 
 	cert := m.cert
 	return m.dialFn(DialConfig{
-		Address:         c.address,
-		Username:        c.username,
-		Password:        c.password,
-		Certificate:     &cert,
-		IdentitySeed:    m.identitySeed,
-		OuterRoots:      m.outerRoots,
-		RelayCredential: c.bearer,
-		Transport:       transport,
+		Context:      ctx,
+		Address:      c.address,
+		Username:     c.username,
+		Password:     c.password,
+		Certificate:  &cert,
+		IdentitySeed: m.identitySeed,
+		OuterRoots:   m.outerRoots,
+		Transport:    transport,
 	}, hooks)
 }
 
@@ -717,8 +462,8 @@ func (m *Manager) publishConnected(session *Session, server string) {
 	}
 }
 
-// PreferTransport seeds the road to try first for one server. Anything the
-// chooser does not recognise is ignored, which simply leaves the search alone.
+// PreferTransport restores a verified Hysteria hint for one server. Anything the
+// chooser does not recognise is ignored; Hysteria remains the only transport.
 func (m *Manager) PreferTransport(address, transport string) {
 	ep, err := parseEndpoint(address)
 	if err != nil {
@@ -883,15 +628,19 @@ func (m *Manager) awaitFingerprint(server string, mismatch *MismatchError, stop 
 // while waiting, so the loop is free to take m.mu on its way out.
 func (m *Manager) stopRun() {
 	m.mu.Lock()
-	stop, done := m.stop, m.done
+	stop, done, cancel := m.stop, m.done, m.cancel
 	session := m.session
 	m.stop, m.done = nil, nil
+	m.cancel = nil
 	m.mu.Unlock()
 
 	if stop == nil {
 		return
 	}
 	close(stop)
+	if cancel != nil {
+		cancel()
+	}
 	// Unblock a loop parked on the disconnect event.
 	_ = session.Disconnect()
 	if done != nil {
@@ -1021,66 +770,13 @@ func joinReason(prefix, detail string) string {
 	return prefix + ": " + detail
 }
 
-// isRoadFailure reports whether a failed dial says anything about the road it
-// took. It does only when nothing answered: a server that rejected us, a relay
-// that refused the credential or asked us to come back later, all answered,
-// and taking a different road to the same answer would only spend the user's
-// time twice.
-// roadFailure is one road's answer during a search across them.
-type roadFailure struct {
-	transport Transport
-	err       error
-}
-
-// everyRoadFailed renders what the user is shown when no road opened.
-//
-// One line per road, named. The alternative - and what this replaced - is the
-// last road's error alone, which is actively misleading: the roads are tried
-// in order and fail for unrelated reasons, so a websocket failure followed by
-// a QUIC timeout is reported as a QUIC problem, and the reader goes looking at
-// the wrong half of the system.
-func everyRoadFailed(failures []roadFailure) string {
-	switch len(failures) {
-	case 0:
-		return ""
-	case 1:
-		return failures[0].err.Error()
-	}
-	// Roads that failed the same way are reported once and unlabelled. Naming
-	// them would turn "connection refused" into "wss: connection refused;
-	// quic: connection refused", which is longer, no more informative, and
-	// invites the reader to look for a difference that is not there. The
-	// labels exist for the case they were added for: roads failing
-	// differently.
-	parts := make([]string, 0, len(failures))
-	same := true
-	for _, failure := range failures {
-		parts = append(parts, string(failure.transport)+": "+failure.err.Error())
-		if failure.err.Error() != failures[0].err.Error() {
-			same = false
-		}
-	}
-	if same {
-		return failures[0].err.Error()
-	}
-	return strings.Join(parts, "; ")
-}
-
-func isRoadFailure(err error) bool {
-	var reject *gumble.RejectError
-	if errors.As(err, &reject) {
-		return false
-	}
-	return !isTerminalDialError(err) && !isTerminalRelayError(err)
-}
-
 // isTerminalDialError reports whether retrying can only fail the same way.
 //
 // DECISION: "username in use" and "server full" are treated as transient - the
 // first is the common race where the server has not yet reaped our previous
 // session after a drop, the second clears on its own.
 func isTerminalDialError(err error) bool {
-	if errors.Is(err, ErrRelayPasswordRequired) || errors.Is(err, ErrRelayAuthentication) {
+	if errors.Is(err, hysteria.ErrAuthentication) || errors.Is(err, hysteria.ErrPasswordRequired) {
 		return true
 	}
 	var reject *gumble.RejectError
@@ -1092,74 +788,5 @@ func isTerminalDialError(err error) bool {
 		return false
 	default:
 		return true
-	}
-}
-
-// relayBearer derives the relay credential once per Connect. Direct Mumble
-// endpoints never reach a relay, so they do not pay the PBKDF2 cost.
-func relayBearer(c credentials, derive func([]byte) relayproto.Credential) relayproto.Credential {
-	if c.password == "" {
-		return ""
-	}
-	ep, err := parseEndpoint(c.address)
-	if err != nil || ep.kind != endpointRelay {
-		return ""
-	}
-	return derive([]byte(c.password))
-}
-
-// relayRefusal recognizes a relay answer that rejects this attempt but says
-// when to come back: 429 (this client is asking too often) and 503 (the relay
-// is full). Both are transient, and both carry a Retry-After the client must
-// honour - the backoff ladder is only the floor, never a way to come earlier.
-func relayRefusal(err error, ladder time.Duration) (wait time.Duration, message string, ok bool) {
-	var limited *RateLimitedError
-	if errors.As(err, &limited) {
-		wait = max(limited.RetryAfter, ladder)
-		return wait, rateLimitedMessage(wait), true
-	}
-	var full *RelayFullError
-	if errors.As(err, &full) {
-		wait = max(full.RetryAfter, ladder)
-		return wait, relayFullMessage(wait), true
-	}
-	return 0, "", false
-}
-
-// rateLimitedMessage is user-visible: the connect form and the reconnect
-// banner show it verbatim.
-func rateLimitedMessage(wait time.Duration) string {
-	return fmt.Sprintf("Сервер временно отклоняет подключения. Следующая попытка через %s.", humanSeconds(wait))
-}
-
-// relayFullMessage is user-visible: a relay at capacity is not a failure of
-// the address, the password or the nickname, so it must not read like one.
-func relayFullMessage(wait time.Duration) string {
-	return fmt.Sprintf("Сервер переполнен: нет свободных мест. Следующая попытка через %s.", humanSeconds(wait))
-}
-
-// humanSeconds renders a wait in whole seconds with the Russian plural form.
-func humanSeconds(d time.Duration) string {
-	seconds := int64(d / time.Second)
-	if d%time.Second != 0 {
-		seconds++
-	}
-	if seconds < 1 {
-		seconds = 1
-	}
-	return strconv.FormatInt(seconds, 10) + " " + pluralSeconds(seconds)
-}
-
-func pluralSeconds(n int64) string {
-	if n%100 >= 11 && n%100 <= 14 {
-		return "секунд"
-	}
-	switch n % 10 {
-	case 1:
-		return "секунду"
-	case 2, 3, 4:
-		return "секунды"
-	default:
-		return "секунд"
 	}
 }

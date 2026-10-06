@@ -240,10 +240,17 @@ jobs:
       - name: Run tests with race detector
         run: go test -race -count=1 . ./cmd/... ./internal/... ./services/...
 
+      - name: Verify Hysteria deployment configuration
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
+
       - name: Scan reachable Go vulnerabilities
         run: |
           go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
-          govulncheck . ./cmd/... ./internal/... ./services/...
+          python_cmd=python3
+          if [[ "$RUNNER_OS" == "Windows" ]]; then python_cmd=python; fi
+          "$python_cmd" -m unittest discover -s scripts -p 'test_check_go_vulnerabilities.py'
+          "$python_cmd" scripts/check-go-vulnerabilities.py . ./cmd/... ./internal/... ./services/...
 
       - name: Verify embedded RNNoise model
         run: |

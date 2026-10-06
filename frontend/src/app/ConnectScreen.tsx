@@ -114,7 +114,7 @@ export function ConnectScreen() {
               mono
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="127.0.0.1:64738 или wss://host/mumble"
+              placeholder="voice.example.com или hy2://host:443"
               disabled={connecting}
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
@@ -128,7 +128,7 @@ export function ConnectScreen() {
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
           </Field>
-          <Field label="Пароль сервера (для WSS обязателен)">
+          <Field label="Пароль сервера">
             <TextInput
               ref={passwordRef}
               type="password"
@@ -138,6 +138,10 @@ export function ConnectScreen() {
               onKeyDown={(e) => e.key === 'Enter' && connect()}
             />
           </Field>
+
+          <p className="text-xs leading-relaxed text-text-3">
+            Введите адрес и пароль от администратора. Hysteria уже встроена в Gul.
+          </p>
 
           <Button size="lg" className="w-full" onClick={connect} disabled={!canConnect}>
             {connecting ? (
@@ -157,8 +161,7 @@ export function ConnectScreen() {
             </p>
           )}
 
-          {/* While the attempt is still alive the message is a wait, not a
-              failure: a relay asking for N seconds is not a red error. */}
+          {/* Keep progress messages distinct from a completed failure. */}
           {status.error && (
             <p
               className={'text-xs leading-relaxed ' + (connecting ? 'text-warning' : 'text-danger')}
@@ -168,9 +171,7 @@ export function ConnectScreen() {
             </p>
           )}
 
-          {/* A relay that is rate limiting or full answers with a wait and the
-              attempt keeps retrying on its own, so this screen can stay in
-              'connecting' for minutes. Leaving it has to be possible. */}
+          {/* Cancellation also interrupts a connection still opening. */}
           {connecting && (
             <button
               type="button"

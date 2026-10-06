@@ -12,8 +12,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // messageConn stands in for the WebSocket stream: every Write is one message,
@@ -125,7 +123,7 @@ func TestPacketConnReassemblesAPacketSplitAcrossThreeWrites(t *testing.T) {
 func TestPacketConnRejectsAPacketOverTheMessageLimit(t *testing.T) {
 	oversize := make([]byte, packetHeaderBytes)
 	binary.BigEndian.PutUint16(oversize, 1)
-	binary.BigEndian.PutUint32(oversize[2:], relayproto.MaxMessageBytes)
+	binary.BigEndian.PutUint32(oversize[2:], maxMumblePacketBytes)
 	sink := &messageConn{}
 	conn := newPacketConn(sink)
 
@@ -145,7 +143,7 @@ func TestPacketConnRejectsAPacketOverTheMessageLimit(t *testing.T) {
 }
 
 func TestPacketConnKeepsTheLargestAllowedPacket(t *testing.T) {
-	payload := bytes.Repeat([]byte{7}, relayproto.MaxMessageBytes-packetHeaderBytes)
+	payload := bytes.Repeat([]byte{7}, maxMumblePacketBytes-packetHeaderBytes)
 	packet := mumblePacket(1, payload)
 	sink := &messageConn{}
 	conn := newPacketConn(sink)
@@ -153,7 +151,7 @@ func TestPacketConnKeepsTheLargestAllowedPacket(t *testing.T) {
 	if _, err := conn.Write(packet); err != nil {
 		t.Fatalf("write largest allowed packet: %v", err)
 	}
-	if len(sink.messages) != 1 || len(sink.messages[0]) != relayproto.MaxMessageBytes {
+	if len(sink.messages) != 1 || len(sink.messages[0]) != maxMumblePacketBytes {
 		t.Fatalf("messages = %d, first = %d bytes", len(sink.messages), len(sink.messages[0]))
 	}
 }
@@ -504,55 +502,3 @@ type timeoutError struct{}
 func (timeoutError) Error() string   { return "i/o timeout" }
 func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
-
-// The invariant the layering rests on, and the one that will break in silence
-// if the layers are ever reordered.
-//
-// The tunnel keeps talking through the silences: relayproto.ShapedConn sends
-// chaff so that the gaps between talk spurts are not as legible as the spurts.
-// Chaff is dropped in ShapedConn.readFrame, below packetConn, so the liveness
-// watchdog above never sees it and silence stays silence.
-//
-// Put packetConn under the shaper instead - which is exactly what moving it
-// during a change of tunnel contract would do - and chaff starts landing in
-// packetConn.Read. lastRead is refreshed a few times a second, SilentFor never
-// grows, syncingContext never fires, and the gate this whole milestone was
-// built around quietly stops existing. Nothing panics. Nothing is logged. The
-// symptom is the session that started all of it: the user hears everybody, and
-// the window says nothing.
-func TestChaffIsNotTheServerTalking(t *testing.T) {
-	t.Parallel()
-	client, server := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
-
-	chaffCtx, stopChaff := context.WithCancel(t.Context())
-	t.Cleanup(stopChaff)
-	go relayproto.Shape(relayproto.AsMessageConn(server)).SendChaff(chaffCtx)
-
-	// The client side as the session builds it: the shaper, and packetConn
-	// above it.
-	packets := newPacketConn(relayproto.Shape(relayproto.AsMessageConn(client)))
-	go func() {
-		// Somebody has to be reading, or the chaff never leaves the pipe. This
-		// read never returns: every frame that arrives is chaff, and the
-		// shaper goes back for another one rather than handing up zero bytes.
-		_, _ = packets.Read(make([]byte, 512))
-	}()
-
-	// Dated into the past so the watchdog reaches its verdict on its next
-	// tick rather than in ten seconds of real time.
-	ctx, cancel := syncingContextSince(packets, time.Now().Add(-2*syncSilence))
-	defer cancel()
-
-	select {
-	case <-ctx.Done():
-	case <-time.After(syncSilence):
-		t.Fatal("a tunnel carrying nothing but chaff was taken for a server that is talking; " +
-			"the liveness gate would never fire again")
-	}
-
-	// And the panel agrees: nothing arrived.
-	if got := packets.Vitals(); got.Received != 0 || got.In != "" {
-		t.Fatalf("chaff reached the packet layer: received=%d in=%q", got.Received, got.In)
-	}
-}

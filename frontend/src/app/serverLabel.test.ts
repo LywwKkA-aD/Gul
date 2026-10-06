@@ -17,6 +17,19 @@ test('a bare host is already the label', () => {
   assert.equal(serverHost('murmur.example.com'), 'murmur.example.com');
 });
 
+test('Hysteria schemes hide the default port and connection options', () => {
+  assert.equal(serverHost('hysteria2://voice.example.com:443'), 'voice.example.com');
+  assert.equal(serverHost('hy2://voice.example.com:443?obfs=gecko'), 'voice.example.com');
+  assert.equal(serverHost('hysteria2://voice.example.com?obfs=salamander'), 'voice.example.com');
+  assert.equal(serverHost('voice.example.com:443'), 'voice.example.com');
+  assert.equal(serverHost('hy2://[2001:db8::1]:443?obfs=gecko'), '[2001:db8::1]');
+});
+
+test('a Hysteria endpoint keeps any nondefault port', () => {
+  assert.equal(serverHost('hysteria2://voice.example.com:8443?obfs=gecko'), 'voice.example.com:8443');
+  assert.equal(serverHost('hy2://voice.example.com:64738'), 'voice.example.com:64738');
+});
+
 test('a relay URL loses its scheme and its path', () => {
   assert.equal(serverHost('wss://murmur.gulvox.com/mumble'), 'murmur.gulvox.com');
 });

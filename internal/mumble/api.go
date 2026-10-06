@@ -20,9 +20,7 @@ type Callbacks struct {
 	OnTree    func(domain.ChannelNode)
 	OnMessage func(RawMessage)
 	OnTofu    func(domain.TofuPrompt)
-	// OnTransport fires when a road has proved it carries our packets there
-	// and back (transport.go). It is the only moment worth remembering: a
-	// road that merely connected has proved nothing.
+	// OnTransport records a Hysteria connection after a Mumble round trip.
 	OnTransport func(address, transport string)
 }
 
@@ -56,9 +54,8 @@ type Controller interface {
 	// packet reaches the socket long before the room answers, and a tree that
 	// arrives in between still carries our previous flags.
 	SelfAudioSettled(muted, deafened bool) bool
-	// PreferTransport seeds the road to try first for one server, from what
-	// was remembered about it. Call before Connect; an unknown road is
-	// ignored, which leaves the ordinary search in place.
+	// PreferTransport restores a previously verified Hysteria hint. Legacy
+	// transport values are ignored; they cannot enable another protocol.
 	PreferTransport(address, transport string)
 	// AcceptFingerprint confirms the pending TOFU mismatch (OnTofu) and
 	// retries the connection with the new pinned fingerprint.

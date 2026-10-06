@@ -2,38 +2,24 @@ package mumble
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/LywwKkA-aD/gumble/gumble"
 )
 
 type endpointKind uint8
 
-const (
-	endpointDirect endpointKind = iota
-	// endpointRelay is any road that goes through the relay, not the
-	// WebSocket one in particular. It was called endpointRelay while WebSocket
-	// was the only such road, and the name outlived the fact: QUIC has been
-	// an endpointRelay endpoint since it existed. The address is still spelled
-	// wss://, and that spelling must not change - config.Server.Address is
-	// the key a saved password is filed under in the OS keychain.
-	endpointRelay
-)
+const endpointHysteria endpointKind = iota
 
-// retiredTunnelPath is the fixed path relays answered on up to v0.4.0-alpha.2,
-// published in the documentation of the time. The relay no longer answers on
-// it, but an address that still names it is treated as naming the server.
-const retiredTunnelPath = "/mumble"
+const hysteriaDefaultPort = "443"
 
 type endpoint struct {
-	kind    endpointKind
-	address string
-	host    string
+	kind        endpointKind
+	address     string
+	host        string
+	obfuscation string
 }
 
 func parseEndpoint(value string) (endpoint, error) {
@@ -42,56 +28,66 @@ func parseEndpoint(value string) (endpoint, error) {
 		return endpoint{}, errors.New("server address is required")
 	}
 
-	if strings.Contains(value, "://") {
-		return parseWSSEndpoint(value)
+	if !strings.Contains(value, "://") {
+		if strings.ContainsAny(value, "/?#@ \t\r\n") {
+			return endpoint{}, errors.New("invalid Hysteria server address")
+		}
+		if ip, err := netip.ParseAddr(value); err == nil && ip.Is6() {
+			value = "[" + value + "]"
+		}
+		value = "hysteria2://" + value
 	}
-	if strings.ContainsAny(value, "/?#@ \t\r\n") {
-		return endpoint{}, errors.New("invalid Mumble server address")
-	}
-	address, host := normalizeAddress(value)
-	if err := validateDirectAddress(address, host); err != nil {
-		return endpoint{}, err
-	}
-	host, err := canonicalHost(host)
-	if err != nil {
-		return endpoint{}, err
-	}
-	_, port, _ := net.SplitHostPort(address)
-	address = net.JoinHostPort(host, port)
-	return endpoint{kind: endpointDirect, address: address, host: host}, nil
+	return parseHysteriaEndpoint(value)
 }
 
-func parseWSSEndpoint(value string) (endpoint, error) {
+// The address is public configuration and a credential-store key. Accept only
+// the endpoint and an optional nonsecret obfuscation mode, never a share URI
+// carrying credentials or a configurable proxy destination.
+func parseHysteriaEndpoint(value string) (endpoint, error) {
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return endpoint{}, errors.New("invalid WSS server URL")
+		return endpoint{}, errors.New("invalid Hysteria server URL")
 	}
-	if !strings.EqualFold(parsed.Scheme, "wss") {
-		return endpoint{}, errors.New("relay URL must use wss://")
+	if strings.EqualFold(parsed.Scheme, "wss") {
+		return endpoint{}, errors.New("the old WSS relay is no longer supported; enter the new Hysteria server address")
+	}
+	if !strings.EqualFold(parsed.Scheme, "hysteria2") && !strings.EqualFold(parsed.Scheme, "hy2") {
+		return endpoint{}, errors.New("server URL must use hysteria2:// or hy2://")
 	}
 	if parsed.Opaque != "" || parsed.User != nil || parsed.Hostname() == "" {
-		return endpoint{}, errors.New("invalid WSS server URL")
+		return endpoint{}, errors.New("invalid Hysteria server URL; enter the password in the password field")
 	}
-	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
-		return endpoint{}, errors.New("relay URL cannot contain a query or fragment")
+	if strings.Contains(value, "#") {
+		return endpoint{}, errors.New("server URL cannot contain a fragment")
 	}
-	// The address carries no tunnel path. Where the tunnel answers is derived
-	// from the server password at dial time and differs per server
-	// (relayproto.NamesFor), so it cannot be part of what the user types or of
-	// what a saved server remembers. The path earlier builds published is still
-	// accepted here and dropped: the relay stopped answering on it, but a saved
-	// or copied address that spells it out should still resolve to the server
-	// rather than be refused as malformed.
-	if parsed.Path == "/" || parsed.Path == retiredTunnelPath {
-		parsed.Path = ""
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawPath != "" {
+		return endpoint{}, errors.New("server URL cannot contain a path")
 	}
-	if parsed.Path != "" || parsed.RawPath != "" {
-		return endpoint{}, errors.New("relay URL cannot contain a path")
+	var obfuscation string
+	switch parsed.RawQuery {
+	case "":
+		if parsed.ForceQuery {
+			return endpoint{}, errors.New("server URL query must select salamander or gecko obfuscation")
+		}
+	case "obfs=salamander":
+		obfuscation = "salamander"
+	case "obfs=gecko":
+		obfuscation = "gecko"
+	default:
+		return endpoint{}, errors.New("server URL only supports ?obfs=salamander or ?obfs=gecko")
 	}
 	port := parsed.Port()
+	if port == "" && strings.HasSuffix(parsed.Host, ":") {
+		return endpoint{}, errors.New("server port must be between 1 and 65535")
+	}
 	if port != "" {
 		if err := validatePort(port); err != nil {
 			return endpoint{}, err
+		}
+		number, _ := strconv.Atoi(port)
+		port = strconv.Itoa(number)
+		if port == hysteriaDefaultPort {
+			port = ""
 		}
 	}
 	host, err := canonicalHost(parsed.Hostname())
@@ -105,8 +101,9 @@ func parseWSSEndpoint(value string) (endpoint, error) {
 	} else {
 		parsed.Host = host
 	}
-	parsed.Scheme = "wss"
-	return endpoint{kind: endpointRelay, address: parsed.String(), host: host}, nil
+	parsed.Scheme = "hysteria2"
+	parsed.Path = ""
+	return endpoint{kind: endpointHysteria, address: parsed.String(), host: host, obfuscation: obfuscation}, nil
 }
 
 // canonicalHost makes the TLS SNI name and TOFU key stable for equivalent
@@ -153,38 +150,10 @@ func isASCIILetterOrDigit(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }
 
-func validateDirectAddress(address, host string) error {
-	if host == "" {
-		return errors.New("mumble server host is required")
-	}
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("invalid Mumble server address: %w", err)
-	}
-	return validatePort(port)
-}
-
 func validatePort(port string) error {
 	value, err := strconv.Atoi(port)
 	if err != nil || value < 1 || value > 65535 {
 		return errors.New("server port must be between 1 and 65535")
 	}
 	return nil
-}
-
-// normalizeAddress appends the default Mumble port when the caller omitted it
-// and returns the dial address plus the bare host used as the TOFU pin key.
-func normalizeAddress(address string) (addr, host string) {
-	addr = strings.TrimSpace(address)
-	if splitHost, _, err := net.SplitHostPort(addr); err == nil {
-		return addr, splitHost
-	}
-	if ip := net.ParseIP(strings.Trim(addr, "[]")); ip != nil {
-		host = strings.Trim(addr, "[]")
-		return net.JoinHostPort(host, strconv.Itoa(gumble.DefaultPort)), host
-	}
-	if strings.Contains(addr, ":") {
-		return addr, ""
-	}
-	return net.JoinHostPort(addr, strconv.Itoa(gumble.DefaultPort)), addr
 }

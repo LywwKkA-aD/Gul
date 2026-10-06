@@ -10,8 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // ErrUplinkStalled is the drop nobody could diagnose: the session keeps
@@ -45,23 +43,17 @@ const (
 	// packetHeaderBytes is the Mumble TCP header: 2-byte type, 4-byte
 	// big-endian payload length.
 	packetHeaderBytes = 6
+	// Bound buffered packets to avoid allocations controlled by an invalid length.
+	maxMumblePacketBytes = 1 << 20
 	// packetBufferBytes holds a voice packet (header plus one 10 ms Opus
 	// frame) and every ordinary control packet without growing.
 	packetBufferBytes = 4096
 )
 
-// packetConn makes one Mumble packet cost exactly one WebSocket message.
-//
-// It wraps the inner TLS connection rather than the WebSocket stream, because
-// the framing that matters is produced above TLS: gumble writes a packet in
-// two or three Write calls (header, voice header, payload), each becoming its
-// own TLS record and therefore its own WebSocket message. At 100 packets per
-// second that is 100-200 extra frames per second per direction, each carrying
-// WebSocket and TLS overhead of its own. Coalescing has to happen before the
-// TLS layer, so this is the connection handed to gumble.
-//
-// Latency is unchanged: bytes are held only while a packet is incomplete, and
-// the packet is written the moment its last byte arrives.
+// packetConn coalesces each Mumble packet into one write to the inner TLS
+// connection. Gumble emits the header and payload separately; combining them
+// avoids extra TLS records and tunnel writes for every 10 ms voice frame.
+// Bytes are held only until the packet is complete, with no batching delay.
 type packetConn struct {
 	net.Conn
 	mu  sync.Mutex
@@ -331,17 +323,16 @@ func (c *packetConn) fail(err error) error {
 }
 
 // packetBounds reports the total size of the packet starting at b and whether
-// b already holds all of it. A packet that cannot fit in one WebSocket message
-// is an error: the relay applies the same bound and would drop the connection.
+// b already holds all of it. The size bound limits memory use before any payload allocation.
 func packetBounds(b []byte) (size int, complete bool, err error) {
 	if len(b) < packetHeaderBytes {
 		return 0, false, nil
 	}
 	length := binary.BigEndian.Uint32(b[packetHeaderBytes-4 : packetHeaderBytes])
-	if length > relayproto.MaxMessageBytes-packetHeaderBytes {
+	if length > maxMumblePacketBytes-packetHeaderBytes {
 		return 0, false, fmt.Errorf(
-			"mumble packet of %d bytes exceeds the %d byte relay message limit",
-			uint64(length)+packetHeaderBytes, relayproto.MaxMessageBytes)
+			"mumble packet of %d bytes exceeds the %d byte packet limit",
+			uint64(length)+packetHeaderBytes, maxMumblePacketBytes)
 	}
 	size = packetHeaderBytes + int(length)
 	return size, len(b) >= size, nil

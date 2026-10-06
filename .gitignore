@@ -26,6 +26,10 @@ node_modules/
 frontend/dist/
 frontend/bindings/
 
+# Python configuration/security checks
+__pycache__/
+*.pyc
+
 # Wails / Task generated
 .task/
 build/linux/appimage/build

@@ -15,30 +15,30 @@ import (
 	"github.com/LywwKkA-aD/Gul/internal/domain"
 )
 
-// TestPublicWSSRelayStaysConnected is the rollout gate for the public relay.
-// It holds one authenticated Mumble session through WSS long enough to catch
-// the approximately 20-second connection cycling that motivated the relay.
+// TestPublicHysteriaStaysConnected holds one authenticated Mumble session
+// through a deployed Hysteria server for 90 seconds, checking ping responses
+// and unexpected reconnects. Run it from each affected network before rollout.
 //
 // Run only this live test and pass the password through a file descriptor:
 //
-//	GUL_WSS_LIVE_PASSWORD_FILE=/dev/stdin \
+//	GUL_HYSTERIA_LIVE_PASSWORD_FILE=/dev/stdin \
 //	  go test -tags live ./internal/mumble \
-//	  -run '^TestPublicWSSRelayStaysConnected$' -count=1 -v
-func TestPublicWSSRelayStaysConnected(t *testing.T) {
-	passwordFile := os.Getenv("GUL_WSS_LIVE_PASSWORD_FILE")
+//	  -run '^TestPublicHysteriaStaysConnected$' -count=1 -v
+func TestPublicHysteriaStaysConnected(t *testing.T) {
+	passwordFile := os.Getenv("GUL_HYSTERIA_LIVE_PASSWORD_FILE")
 	if passwordFile == "" {
-		t.Skip("GUL_WSS_LIVE_PASSWORD_FILE is not set")
+		t.Skip("GUL_HYSTERIA_LIVE_PASSWORD_FILE is not set")
 	}
 	password := readLivePassword(t, passwordFile)
 	defer clear(password)
 
-	address := os.Getenv("GUL_WSS_LIVE_ADDRESS")
+	address := os.Getenv("GUL_HYSTERIA_LIVE_ADDRESS")
 	if address == "" {
-		address = "wss://murmur.gulvox.com/mumble"
+		t.Skip("GUL_HYSTERIA_LIVE_ADDRESS is not set")
 	}
-	username := os.Getenv("GUL_WSS_LIVE_USERNAME")
+	username := os.Getenv("GUL_HYSTERIA_LIVE_USERNAME")
 	if username == "" {
-		username = "gul-wss-smoke"
+		username = "gul-hysteria-smoke"
 	}
 
 	var mu sync.Mutex
@@ -76,10 +76,10 @@ func TestPublicWSSRelayStaysConnected(t *testing.T) {
 				goto connected
 			}
 			if status.State == domain.StateDisconnected && status.Error != "" {
-				t.Fatalf("relay connection failed: %s", status.Error)
+				t.Fatalf("Hysteria connection failed: %s", RedactServer(status.Error, address))
 			}
 		case <-connectDeadline.C:
-			t.Fatal("relay did not connect within 15 seconds")
+			t.Fatal("Hysteria did not connect within 15 seconds")
 		}
 	}
 
@@ -90,7 +90,7 @@ connected:
 		select {
 		case status := <-updates:
 			if status.State != domain.StateConnected {
-				t.Fatalf("relay session changed state during stability window: %s", status.State)
+				t.Fatalf("Hysteria session changed state during stability window: %s", status.State)
 			}
 		case <-hold.C:
 			mu.Lock()
@@ -103,7 +103,7 @@ connected:
 			if lastLatency == nil || math.IsNaN(lastLatency.PingMS) || math.IsInf(lastLatency.PingMS, 0) || lastLatency.PingMS < 0 {
 				t.Fatal("no valid TLS/TCP RTT sample arrived during stability window")
 			}
-			t.Logf("public WSS session stayed connected for 90s; RTT %.0f ms", lastLatency.PingMS)
+			t.Logf("public Hysteria session stayed connected for 90s; RTT %.0f ms", lastLatency.PingMS)
 			return
 		}
 	}

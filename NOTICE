@@ -38,6 +38,11 @@ https://github.com/LywwKkA-aD/gumble/commit/7999640c1fef
 Generated Mumble protocol bindings within gumble retain the Mumble Developers'
 BSD-3-Clause license in the generated bundle.
 
+Hysteria core/v2 and extras/v2 v2.13.0 (github.com/apernet/hysteria)
+  Copyright 2023 Toby
+  License: MIT - each module's LICENSE.md is included in the generated bundle.
+  These official modules provide the embedded client and packet obfuscation.
+
 Other Go runtime dependencies include the Go standard library, Wails v3,
 coder/websocket, adrg/xdg, godbus/dbus, go-ole, go-colorable, go-isatty,
 golang.org/x/net, golang.org/x/sys, google.golang.org/protobuf and, on

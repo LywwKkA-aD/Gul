@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/LywwKkA-aD/Gul/internal/relayproto"
 )
 
 // Vitals is one reading of what a live connection has actually carried, taken
@@ -172,12 +170,12 @@ func (f *inboundFramer) consume(b []byte, into *tally) {
 		kind := uint16(f.header[0])<<8 | uint16(f.header[1])
 		length := uint32(f.header[2])<<24 | uint32(f.header[3])<<16 |
 			uint32(f.header[4])<<8 | uint32(f.header[5])
-		// A length past what the relay would carry means the stream is not
+		// A length past the packet size bound means the stream is not
 		// where this thinks it is. Counting is a diagnostic and must never be
 		// the thing that ends a session, so it stops looking rather than
 		// failing: the tally goes quiet, and the framing error surfaces
 		// wherever it really belongs.
-		if length > relayMaxPacketPayload {
+		if length > maxMumblePacketPayload {
 			f.remain, f.have = 0, 0
 			f.stop()
 			return
@@ -196,7 +194,7 @@ const (
 	// maxFramerSkip is large enough that no session outlives it and small
 	// enough to stay far from overflow.
 	maxFramerSkip = 1 << 62
-	// relayMaxPacketPayload is the largest payload a packet may declare, the
+	// maxMumblePacketPayload is the largest payload a packet may declare, the
 	// same bound packetBounds applies to what we send.
-	relayMaxPacketPayload = uint32(relayproto.MaxMessageBytes - packetHeaderBytes)
+	maxMumblePacketPayload = uint32(maxMumblePacketBytes - packetHeaderBytes)
 )

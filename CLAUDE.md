@@ -8,6 +8,9 @@
 Команды: task dev · task murmur:up · task test · task lint · task package
 Стенд: mumblevoip/mumble-server:v1.5.915 в докере; отладка AEC — VoiceTargetLoopback (ID 31).
 
+Транспорт GUI с M7.9: встроенный Hysteria v2.13.0 -> Mumble TLS/TCP; голос —
+UDPTunnel. Прямой и WSS-дозвон заменены. Текущий серверный стенд — `deploy/hysteria/`.
+
 Стек (пины жёсткие, @latest запрещён): Wails v3.0.0-beta.11 · Go ≥1.25 ·
 форк stieneee/gumble (с M2 — свой форк + OpusPassthrough) · вендоренные libopus 1.6.1,
 webrtc-audio-processing v2.1 (AEC3), RNNoise (ветка main), miniaudio 0.11.25 ·

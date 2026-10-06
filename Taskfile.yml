@@ -83,10 +83,12 @@ tasks:
       - cd frontend && npm run lint
 
   test:
-    summary: Runs Go tests with the race detector (device/live tests excluded) and the frontend unit tests
+    summary: Runs Go tests with the race detector (device/live tests excluded) and frontend/deployment tests
     cmds:
       - go test -race {{.GO_PACKAGES}}
       - cd frontend && npm test
+      - python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
+      - python3 -m unittest discover -s scripts -p 'test_check_go_vulnerabilities.py'
 
   test:live:
     summary: Runs tests that need the local murmur stand (task murmur:up first)
