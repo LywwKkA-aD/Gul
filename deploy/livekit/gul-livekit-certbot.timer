@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Gul LiveKit short-lived certificate every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

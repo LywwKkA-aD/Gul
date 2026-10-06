@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew Gul LiveKit IP certificate
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gul-livekit/renew-certificate.sh
+TimeoutStartSec=15min
+UMask=0077
+NoNewPrivileges=true

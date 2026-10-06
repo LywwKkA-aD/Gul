@@ -1,14 +1,14 @@
 {
   "name": "gul-frontend",
   "private": true,
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build:dev": "tsc && vite build --minify false --mode development",
     "build": "tsc && vite build --mode production",
     "lint": "eslint src",
-    "test": "node --test 'src/**/*.test.ts'",
+    "test": "node --test 'src/**/*.test.ts' 'e2e/remote/config.test.ts'",
     "preview": "vite preview",
     "test:livekit": "playwright test --config playwright.livekit.config.ts"
   },

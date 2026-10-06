@@ -245,6 +245,7 @@ jobs:
         run: |
           python3 -m unittest discover -s deploy/hysteria -p 'test_*.py'
           python3 -m unittest discover -s deploy/reality -p 'test_*.py'
+          python3 -m unittest discover -s deploy/livekit -p 'test_*.py'
 
       - name: Scan reachable Go vulnerabilities
         run: |

@@ -1,0 +1,11 @@
+[Unit]
+Description=Protect Gul LiveKit internal ports
+Before=docker.service gul-livekit-broker.service haproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gul-livekit/firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
