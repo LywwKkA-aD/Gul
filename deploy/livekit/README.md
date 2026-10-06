@@ -1,6 +1,6 @@
 # LiveKit на VPS
 
-Стенд для Gul 0.7.0-alpha.2: Debian 12, Docker Compose, HAProxy 2.6 и публичный
+Стенд для Gul 0.7.0-alpha.3: Debian 12, Docker Compose, HAProxy 2.6 и публичный
 IPv4. Проверен на 1 vCPU / 1 ГБ RAM с двумя голосовыми клиентами и демонстрацией
 720p. Это проверка небольшой компании, а не оценка предельной нагрузки.
 
@@ -94,8 +94,8 @@ GOTOOLCHAIN=go1.26.7 go test -race -tags live ./internal/livekit \
   -run '^TestPublicSFUTwoNativeManagers$' -count=1 -v
 ```
 
-Без `GUL_LIVEKIT_FORCE_RELAY` проверяется обычный ICE. Для браузерного теста
-создайте файл 0600 с `GUL_REMOTE_URL` и `GUL_REMOTE_PASSWORD`, затем из `frontend`:
+Без `GUL_LIVEKIT_FORCE_RELAY` проверяется обычный ICE. Браузерный тест запускается на macOS/Linux (он проверяет POSIX-права
+приватного файла). Для него создайте файл 0600 с `GUL_REMOTE_URL` и `GUL_REMOTE_PASSWORD`, затем из `frontend`:
 
 ```sh
 GUL_REMOTE_E2E=1 GUL_REMOTE_E2E_ENV=/private/path/remote.env \

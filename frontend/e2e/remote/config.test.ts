@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadRemoteConfig } from './config.ts';
 
-test('remote media checks read a private HTTPS config without exposing rejected secrets', () => {
+// Windows does not implement POSIX owner/group file modes. The private
+// remote fixture is a Unix test tool, independent of the Windows client.
+test('remote media checks read a private HTTPS config without exposing rejected secrets', {
+  skip: process.platform === 'win32' ? 'requires POSIX file permissions' : false,
+}, () => {
   const dir = mkdtempSync(join(tmpdir(), 'gul-remote-config-'));
   const file = join(dir, '.env');
   const password = 'private-test-password';

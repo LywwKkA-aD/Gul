@@ -135,7 +135,7 @@ def generate(address, password, output):
     write_private(output / 'haproxy.cfg', proxy_config(address))
     write_private(output / 'address', 'https://' + address + '\n')
     write_private(output / 'Gul-LiveKit-server.txt',
-                  'Gul LiveKit 0.7.0-alpha.2\n\nАдрес: https://' + address +
+                  'Gul LiveKit 0.7.0-alpha.3\n\nАдрес: https://' + address +
                   '\nПароль сервера: ' + password + '\nНик: выберите свой.\n')
 
 
