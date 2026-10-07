@@ -9,6 +9,7 @@ import { defaultVoiceSettings, type VoiceSettings } from './voice-gate.ts';
 import { screenResolution } from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
 import { attachLinuxScreenAudio, findPrivateAudioDevice } from './linux-screen-audio.ts';
+import { attachWindowsScreenAudio } from './windows-screen-audio.ts';
 
 export function voiceCaptureOptions(settings: VoiceSettings, deviceId?: string) {
   return {
@@ -48,20 +49,26 @@ export async function captureScreen(withAudio: boolean): Promise<ScreenCapture> 
     display = { tracks: tracks as (LocalVideoTrack | LocalAudioTrack)[] };
     if (!withAudio) return display;
     const capabilities = await window.gul.captureCapabilities();
-    if (capabilities.platform !== 'linux') return display;
-    // The Linux display handler never grants Chromium's total sink loopback. Defense in
-    // depth stops any unexpected native audio before acquiring the private excluded mix.
+    if (!['linux', 'win32'].includes(capabilities.platform)) return display;
+    // Native helpers exclude Gul. Stop any unexpected Chromium full mix before
+    // acquiring the consent-bound source so a voice cannot return through a share.
     const video = tracks.filter((track): track is LocalVideoTrack => track.kind === 'video');
     tracks.filter((track) => track.kind === 'audio').forEach((track) => track.stop());
-    const linuxDisplay: ScreenCapture = { tracks: video };
-    display = linuxDisplay;
+    const nativeDisplay: ScreenCapture = { tracks: video };
+    display = nativeDisplay;
     if (video.length !== 1) throw new Error('GUL_SCREEN_AUDIO_UNAVAILABLE');
-    if (!capabilities.systemAudio || !capabilities.ownAudioExcluded)
-      throw new Error('GUL_SCREEN_AUDIO_UNAVAILABLE');
-    return await attachLinuxScreenAudio(linuxDisplay, {
+    if (!capabilities.systemAudio || !capabilities.ownAudioExcluded) return nativeDisplay;
+    const nativeAudio = {
       start: () => window.gul.screenAudioStart(),
       stop: (leaseId) => window.gul.screenAudioStop(leaseId),
       onEnded: (listener) => window.gul.onScreenAudioEnded(listener),
+    } satisfies Pick<
+      import('./linux-screen-audio.ts').LinuxScreenAudioDependencies,
+      'start' | 'stop' | 'onEnded'
+    >;
+    if (capabilities.platform === 'win32') return await attachWindowsScreenAudio(nativeDisplay, nativeAudio);
+    return await attachLinuxScreenAudio(nativeDisplay, {
+      ...nativeAudio,
       findDevice: (label) => findPrivateAudioDevice(label),
       capture: (deviceId) =>
         createLocalAudioTrack({

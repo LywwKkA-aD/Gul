@@ -2,7 +2,11 @@ import type { BrowserWindow } from 'electron';
 import type { SessionAuthority } from './session.ts';
 import { appPage, appOrigin, mediaPermission, displayMediaPreflight } from './security.ts';
 
-export function installPermissions(window: BrowserWindow, authority: SessionAuthority): void {
+export function installPermissions(
+  window: BrowserWindow,
+  authority: SessionAuthority,
+  captureNetworkAllowed: (url: string) => boolean = () => false,
+): void {
   const session = window.webContents.session;
   const report = (
     stage: 'check' | 'request',
@@ -77,6 +81,10 @@ export function installPermissions(window: BrowserWindow, authority: SessionAuth
     event.preventDefault();
   });
   session.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: !authority.networkAllowed(details.url) });
+    const ownCapture =
+      !window.isDestroyed() &&
+      details.webContentsId === window.webContents.id &&
+      captureNetworkAllowed(details.url);
+    callback({ cancel: !authority.networkAllowed(details.url) && !ownCapture });
   });
 }

@@ -2,7 +2,7 @@ import { APP_ORIGIN } from '../shared/contracts.ts';
 
 export const contentSecurityPolicy = [
   "default-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",

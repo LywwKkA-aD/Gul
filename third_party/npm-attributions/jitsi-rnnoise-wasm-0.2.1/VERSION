@@ -1,0 +1,7 @@
+@jitsi/rnnoise-wasm 0.2.1
+Jitsi gitHead: cb529a59a8478fe604e57986fc96afdaecfa6fb7
+RNNoise gitlink: 372f7b4b76cde4ca1ec4605353dd17898a99de38
+The bundled synchronous module uses RNNoise 0.2.
+The npm package supplies Jitsi's Apache-2.0 LICENSE.
+LICENSE-RNNOISE-BSD-3-Clause preserves the compiled RNNoise license:
+https://raw.githubusercontent.com/xiph/rnnoise/372f7b4b76cde4ca1ec4605353dd17898a99de38/COPYING

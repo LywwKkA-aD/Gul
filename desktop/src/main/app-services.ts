@@ -48,7 +48,7 @@ export class AppServices {
       update: this.update ? { version: this.update.version, url: this.update.url } : null,
     };
   }
-  capabilities(options?: { linuxExcludedAudio: boolean }) {
+  capabilities(options?: { readonly linuxExcludedAudio?: boolean; readonly windowsExcludedAudio?: boolean }) {
     return getCaptureCapabilities(options);
   }
   async openUpdate(): Promise<void> {

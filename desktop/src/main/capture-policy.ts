@@ -8,21 +8,22 @@ export interface CaptureCapabilities {
   readonly picker: 'portal' | 'application';
 }
 
-/** Capabilities of the pinned Electron44/Chromium152 implementation, not a promise of audible samples. */
+/** Audio support follows native activation; an OS version alone cannot guarantee exclusion. */
 export function captureCapabilities(
   platform: string,
   release: string,
   pulseDetected: boolean,
   linuxExcludedAudio = false,
   picker: 'portal' | 'application' = 'application',
+  windowsExcludedAudio = false,
 ): CaptureCapabilities {
   const components = release.split('.').map(Number);
-  const windows11 = platform === 'win32' && components[0] === 10 && components[2] >= 22000;
   const coreaudio =
     platform === 'darwin' && (components[0] > 23 || (components[0] === 23 && components[1] >= 2));
   const excludedLinux = platform === 'linux' && pulseDetected && linuxExcludedAudio;
-  const systemAudio = platform === 'win32' || excludedLinux || coreaudio;
-  const ownAudioExcluded = windows11 || coreaudio || excludedLinux;
+  const excludedWindows = platform === 'win32' && windowsExcludedAudio;
+  const systemAudio = excludedWindows || excludedLinux || coreaudio;
+  const ownAudioExcluded = excludedWindows || coreaudio || excludedLinux;
   return Object.freeze({
     platform,
     backend:
@@ -37,15 +38,16 @@ export function captureCapabilities(
     ownAudioExcluded,
     picker,
     audioServer: platform === 'linux' ? (pulseDetected ? 'detected' : 'not-detected') : 'not-required',
-    details: excludedLinux
-      ? 'Передаются звуки приложений и игр. Голоса, демонстрации и сигналы Gul исключены; собеседников по-прежнему слышно.'
-      : platform === 'linux'
-        ? 'Системный звук недоступен: встроенный помощник или локальный PipeWire/PulseAudio не готов. Общий микс с голосами Gul не записывается.'
-        : !systemAudio
-          ? 'Этот режим передаёт изображение. Системный звук не поддерживается этой версией ОС.'
-          : ownAudioExcluded
-            ? 'Передаётся общий системный звук. Gul запрашивает исключение собственного воспроизведения; это зависит от возможностей ОС и источника.'
-            : 'Эта версия Windows передаёт общий системный звук, включая голоса Gul. Исключение звука Gul средствами ОС здесь недоступно.',
+    details:
+      excludedLinux || excludedWindows
+        ? 'Передаются звуки приложений и игр. Голоса, демонстрации и сигналы Gul исключены; собеседников по-прежнему слышно.'
+        : platform === 'linux'
+          ? 'Системный звук недоступен: встроенный помощник или локальный PipeWire/PulseAudio не готов. Общий микс с голосами Gul не записывается.'
+          : platform === 'win32'
+            ? 'Передаётся изображение. Windows не разрешила захват звука с исключением Gul; общий микс с голосами собеседников не записывается.'
+            : !systemAudio
+              ? 'Этот режим передаёт изображение. Системный звук не поддерживается этой версией ОС.'
+              : 'Передаётся общий системный звук. Gul запрашивает исключение собственного воспроизведения; это зависит от возможностей ОС и источника.',
   });
 }
 

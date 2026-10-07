@@ -2,6 +2,7 @@ import { Track, type LocalAudioTrack, type AudioProcessorOptions, type TrackProc
 import { voiceSettings, type VoiceReading, type VoiceSettings } from './voice-gate.ts';
 
 export interface VoiceProcessorHandle {
+  readonly failed?: boolean;
   readonly update: (settings: VoiceSettings) => void;
   readonly destroy: () => Promise<void>;
   readonly setMuted?: (muted: boolean) => void;
@@ -10,6 +11,7 @@ interface ProcessorDependencies {
   readonly node?: (context: AudioContext) => AudioWorkletNode;
   readonly stream?: (track: MediaStreamTrack) => MediaStream;
   readonly moduleURL?: string;
+  readonly failure?: () => void;
 }
 const loaded = new WeakMap<AudioContext, Promise<void>>();
 
@@ -25,6 +27,8 @@ export class VoiceProcessor
   private settings: VoiceSettings;
   private context?: AudioContext;
   private muted = true;
+  private faulted = false;
+  private cancelReady?: () => void;
   private readonly reading: (reading: Pick<VoiceReading, 'level' | 'active'>) => void;
   private readonly dependencies: ProcessorDependencies;
   constructor(
@@ -39,6 +43,7 @@ export class VoiceProcessor
   async init(options: AudioProcessorOptions): Promise<void> {
     const generation = ++this.generation;
     this.releaseGraph();
+    this.faulted = false;
     // LiveKit 2.22.3 device restarts pass the raw track but omit the prior shared context.
     const context = options.audioContext ?? this.context;
     if (!context?.audioWorklet) throw new Error('Обработка микрофона недоступна.');
@@ -55,15 +60,6 @@ export class VoiceProcessor
     await module;
     if (this.generation !== generation) throw new Error('Обработка микрофона отменена.');
     try {
-      const source = context.createMediaStreamSource(
-        (this.dependencies.stream ?? ((track) => new MediaStream([track])))(options.track),
-      );
-      this.source = source;
-      const destination = context.createMediaStreamDestination();
-      const output = destination.stream.getAudioTracks()[0];
-      if (!output) throw new Error();
-      output.enabled = !this.muted && options.track.enabled;
-      this.processedTrack = output;
       const node = (
         this.dependencies.node ??
         ((audioContext) =>
@@ -75,9 +71,42 @@ export class VoiceProcessor
           }))
       )(context);
       this.node = node;
+      let acknowledge!: () => void;
+      let settled = false;
+      const ready = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => fail(), 2000);
+        const fail = () => {
+          if (settled) {
+            if (this.generation !== generation || this.faulted) return;
+            this.faulted = true;
+            this.setMuted(true);
+            if (this.processedTrack) this.dependencies.failure?.();
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          this.cancelReady = undefined;
+          reject(new Error('Не удалось запустить обработку микрофона.'));
+        };
+        acknowledge = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.cancelReady = undefined;
+          resolve();
+        };
+        this.cancelReady = fail;
+        node.onprocessorerror = fail;
+      });
       node.port.onmessage = ({ data }: MessageEvent<unknown>) => {
         if (this.generation !== generation || !data || typeof data !== 'object') return;
         const value = data as Record<string, unknown>;
+        if (
+          value.type === 'ready' &&
+          typeof value.neuralNoise === 'boolean' &&
+          (value.sampleRate === context.sampleRate || (!context.sampleRate && value.sampleRate === 48000))
+        )
+          acknowledge();
         if (
           value.type === 'level' &&
           typeof value.level === 'number' &&
@@ -88,10 +117,22 @@ export class VoiceProcessor
         )
           this.reading({ level: value.level, active: value.active });
       };
+      await ready;
+      if (this.generation !== generation || this.faulted) throw new Error();
+      const source = context.createMediaStreamSource(
+        (this.dependencies.stream ?? ((track) => new MediaStream([track])))(options.track),
+      );
+      this.source = source;
+      const destination = context.createMediaStreamDestination();
+      destination.channelCount = 1;
+      const output = destination.stream.getAudioTracks()[0];
+      if (!output) throw new Error();
+      output.enabled = !this.muted && options.track.enabled;
+      this.processedTrack = output;
       source.connect(node);
       node.connect(destination);
     } catch {
-      await this.destroy();
+      if (this.generation === generation) await this.destroy();
       throw new Error('Не удалось запустить обработку микрофона.');
     }
   }
@@ -103,14 +144,19 @@ export class VoiceProcessor
     this.node?.port.postMessage({ type: 'settings', settings: this.settings });
   };
   setMuted = (muted: boolean): void => {
-    this.muted = muted;
-    if (this.processedTrack) this.processedTrack.enabled = !muted;
+    this.muted = this.faulted || muted;
+    if (this.processedTrack) this.processedTrack.enabled = !this.muted;
   };
+  get failed(): boolean {
+    return this.faulted;
+  }
   destroy = async (): Promise<void> => {
     this.generation++;
     this.releaseGraph();
   };
   private releaseGraph(): void {
+    this.cancelReady?.();
+    this.cancelReady = undefined;
     const node = this.node;
     const source = this.source;
     const output = this.processedTrack;
@@ -118,7 +164,9 @@ export class VoiceProcessor
     this.source = undefined;
     this.processedTrack = undefined;
     if (node) {
+      node.onprocessorerror = null;
       node.port.onmessage = null;
+      node.port.postMessage({ type: 'destroy' });
       node.port.close();
       node.disconnect();
     }
@@ -131,9 +179,10 @@ export async function attachVoiceProcessor(
   track: LocalAudioTrack,
   settings: VoiceSettings,
   reading: (reading: Pick<VoiceReading, 'level' | 'active'>) => void,
+  failure?: () => void,
 ): Promise<VoiceProcessorHandle | undefined> {
   if (typeof AudioWorkletNode === 'undefined' || typeof track.setProcessor !== 'function') return;
-  const processor = new VoiceProcessor(settings, reading);
+  const processor = new VoiceProcessor(settings, reading, { failure });
   try {
     await track.setProcessor(processor);
     return processor;

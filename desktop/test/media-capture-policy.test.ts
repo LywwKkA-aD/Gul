@@ -13,10 +13,10 @@ test('Linux audio exclusion requires the built-in helper and detected audio serv
   assert.doesNotMatch(linux.details, /выключите|другое устройство/iu);
   assert.equal(captureCapabilities('linux', '7.0.0', false, true).systemAudio, false);
   const windows = captureCapabilities('win32', '10.0.19045', false);
-  assert.equal(windows.systemAudio, true);
+  assert.equal(windows.systemAudio, false);
   assert.equal(windows.ownAudioExcluded, false);
   assert.match(windows.details, /голос/iu);
-  assert.equal(captureCapabilities('win32', '10.0.22000', true).ownAudioExcluded, true);
+  assert.equal(captureCapabilities('win32', '10.0.22000', true).ownAudioExcluded, false);
   assert.equal(captureCapabilities('win32', '10.0.20348', true).ownAudioExcluded, false);
   assert.equal(captureCapabilities('linux', '7.0.0', false).audioServer, 'not-detected');
   assert.equal(captureCapabilities('darwin', '22.0.0', false).systemAudio, false);

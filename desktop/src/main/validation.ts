@@ -66,6 +66,18 @@ export function screenInput(value: unknown): ScreenRequest {
     throw failure('GUL_INPUT_INVALID');
   return { channelId: value.channelId, revision: value.revision };
 }
+export function capturePickerInput(value: unknown): { requestId: string; sourceKey: string | null } {
+  const nonce = (input: unknown): input is string =>
+    typeof input === 'string' && /^[a-f0-9]{32}$/u.test(input);
+  if (
+    !record(value) ||
+    !only(value, ['requestId', 'sourceKey']) ||
+    !nonce(value.requestId) ||
+    (value.sourceKey !== null && !nonce(value.sourceKey))
+  )
+    throw failure('GUL_INPUT_INVALID');
+  return { requestId: value.requestId, sourceKey: value.sourceKey };
+}
 export interface Login {
   readonly sessionToken: string;
   readonly sessionId: number;

@@ -101,8 +101,8 @@ jobs:
       - name: Build native hold shortcut helper
         if: runner.os != 'macOS'
         run: npm run build:ptt
-      - name: Build native Linux screen audio helper
-        if: runner.os == 'Linux'
+      - name: Build native screen audio helper
+        if: runner.os != 'macOS'
         run: npm run build:audio
       - name: Build installers
         run: npm run dist -- ${{ matrix.target }} --publish never
@@ -122,6 +122,9 @@ jobs:
         env:
           GUL_PACKAGED_APP_PATH: ${{ github.workspace }}/desktop/artifacts/${{ matrix.executable }}
         run: npm run test:integration -- e2e/packaged.spec.ts
+      - name: Test native audio transport and capture picker components
+        if: runner.os != 'Linux'
+        run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts
       - name: Collect installers and hashes
         run: node scripts/release-assets.mjs --collect
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -151,7 +154,7 @@ jobs:
       - name: Prepare Chromium and audio
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb xauth libpulse-dev pulseaudio dbus-x11 pkg-config gnome-keyring libsecret-1-0
+          sudo apt-get install -y --no-install-recommends xvfb xauth openbox libpulse-dev pulseaudio dbus-x11 pkg-config gnome-keyring libsecret-1-0
           cd desktop
           npm ci
           npm run vendor:xray
@@ -176,7 +179,7 @@ jobs:
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=gul_ci_output channels=2 rate=48000
           pactl set-default-sink gul_ci_output
-          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts
+          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts
       - name: Test native Linux desktop and system audio
         working-directory: desktop
         env:
@@ -188,6 +191,13 @@ jobs:
           chmod 700 "$PULSE_RUNTIME_PATH"
           pulseaudio --start --exit-idle-time=-1
           dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/native-capture.spec.ts
+      - name: Test native picker in isolated desktop
+        working-directory: desktop
+        env:
+          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-electron-stand
+          GUL_ELECTRON_ISOLATED_DESKTOP: '1'
+          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
+        run: dbus-run-session -- xvfb-run -a sh -c 'openbox --sm-disable >/dev/null 2>&1 & wm=$!; trap "kill $wm 2>/dev/null || true" EXIT; npm run test:integration -- e2e/capture-picker.live.spec.ts'
       - name: Test native audio exclusion and crash cleanup
         working-directory: desktop
         env:

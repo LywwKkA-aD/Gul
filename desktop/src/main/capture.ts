@@ -1,11 +1,10 @@
-import { desktopCapturer, dialog, type BrowserWindow, type DesktopCapturerSource } from 'electron';
+import { desktopCapturer, type BrowserWindow, type DesktopCapturerSource } from 'electron';
 import type { SessionAuthority } from './session.ts';
 import { captureAllowed } from './security.ts';
 import { getCaptureCapabilities } from './capture-capabilities.ts';
 import {
   CaptureChooser,
   capturePickerMode,
-  captureSourceLabel,
   type CaptureChoice,
   type CaptureCapabilities,
 } from './capture-policy.ts';
@@ -19,6 +18,7 @@ export interface CaptureDependencies {
     sources: readonly DesktopCapturerSource[],
     audio: boolean,
     details: string,
+    valid: () => boolean,
   ) => Promise<CaptureChoice>;
 }
 
@@ -78,10 +78,11 @@ export function installDisplayCapture(
             systemAudio: capabilities.systemAudio,
             audioServer: capabilities.audioServer,
           });
+          const portalSelection = capturePickerMode(process.platform, process.env) === 'portal';
           const selection = await chooser.choose({
             valid,
-            portalSelection: capturePickerMode(process.platform, process.env) === 'portal',
-            loopbackAudio: process.platform !== 'linux',
+            portalSelection,
+            loopbackAudio: !['linux', 'win32'].includes(process.platform),
             audioRequested: request.audioRequested,
             capabilities,
             getSources: async () => {
@@ -90,38 +91,23 @@ export function installDisplayCapture(
                 (() =>
                   desktopCapturer.getSources({
                     types: ['screen', 'window'],
-                    thumbnailSize: { width: 0, height: 0 },
+                    thumbnailSize: { width: 320, height: 180 },
                     fetchWindowIcons: false,
                   }))
               )();
+              const selectable = portalSelection
+                ? sources
+                : sources.filter((source) => source.id !== window.getMediaSourceId());
               report('sources', {
-                count: sources.length,
-                screens: sources.filter((source) => source.id.startsWith('screen:')).length,
+                count: selectable.length,
+                screens: selectable.filter((source) => source.id.startsWith('screen:')).length,
               });
-              return sources;
+              return selectable;
             },
             pick: async (sources, audio, details) => {
               const choice = await (
-                dependencies.pick ??
-                (async (sources, audio, details) => {
-                  const selection = await dialog.showMessageBox(window, {
-                    type: 'question',
-                    title: 'Демонстрация экрана',
-                    message: audio
-                      ? 'Выберите экран или окно: передаются изображение и звук компьютера'
-                      : 'Выберите экран или окно для демонстрации',
-                    detail: audio
-                      ? details
-                      : 'Передаётся только изображение: системный звук недоступен для этого источника или ОС. ' +
-                        details,
-                    buttons: ['Отмена', ...sources.map(captureSourceLabel)],
-                    cancelId: 0,
-                    defaultId: 0,
-                    noLink: true,
-                  });
-                  return { response: selection.response, checkboxChecked: audio };
-                })
-              )(sources, audio, details);
+                dependencies.pick ?? (async () => ({ response: 0, checkboxChecked: false }))
+              )(sources, audio, details, valid);
               const selected = sources[choice.response - 1];
               report('picked', {
                 video: selected?.id.startsWith('screen:')

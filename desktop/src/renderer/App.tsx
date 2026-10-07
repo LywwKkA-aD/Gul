@@ -12,6 +12,7 @@ import { MediaController } from './media/controller.ts';
 import type { ChatEntry } from './media/model.ts';
 import { Icon } from './MediaElements.tsx';
 import { GulLogo } from './GulLogo.tsx';
+import { CapturePickerHost } from './CapturePickerHost.tsx';
 import { ChannelList, flattenChannels } from './ChannelList.tsx';
 import { ChatPanel } from './ChatPanel.tsx';
 import { EphemeralChatHistory } from './chat-history.ts';
@@ -19,6 +20,7 @@ import { ScreenPanel } from './ScreenPanel.tsx';
 import { SoundCues } from './sound-cues.ts';
 import { ConnectPanel } from './ConnectPanel.tsx';
 import { ConnectionLifecycle } from './connection-lifecycle.ts';
+import { PreferenceUpdateQueue, mergePreferences } from './preference-updates.ts';
 import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import { selectedSavedServer, passwordSaveNotice } from './saved-login.ts';
@@ -85,6 +87,7 @@ export function App() {
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [chat, setChat] = useState<{ channelId: number; entries: readonly ChatEntry[] } | null>(null);
   const [lifecycle] = useState(() => new ConnectionLifecycle());
+  const [preferenceUpdates] = useState(() => new PreferenceUpdateQueue());
 
   const persistPreferences = (next: Preferences) => {
     preferenceRef.current = Object.freeze(next);
@@ -321,30 +324,35 @@ export function App() {
       if (lifecycle.finish(current)) setBusy(false);
     }
   };
-  const changePreferences = async (patch: Partial<Preferences>) => {
-    const next = { ...preferenceRef.current, ...patch };
-    if (patch.audioinput !== undefined) await media.setDevice('audioinput', next.audioinput);
-    if (patch.audiooutput !== undefined) await media.setDevice('audiooutput', next.audiooutput);
-    if (patch.voice !== undefined) await media.setVoiceSettings(next.voice);
-    if (
-      patch.toggleEnabled !== undefined ||
-      ((patch.shortcut !== undefined || patch.hotkeyMode !== undefined) && next.toggleEnabled)
-    ) {
-      const revision = ++hotkeyRevision.current;
-      try {
-        await api.setPushToTalk(next.toggleEnabled ? next.shortcut : null, next.hotkeyMode);
-        if (revision !== hotkeyRevision.current) return;
-        if (next.toggleEnabled) await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
-      } catch {
-        if (revision !== hotkeyRevision.current) return;
-        persistPreferences({ ...next, toggleEnabled: false });
-        await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
-        throw new Error('Не удалось зарегистрировать эту клавишу. Выберите другое сочетание.');
-      }
-      if (revision !== hotkeyRevision.current) return;
-    }
-    persistPreferences(next);
-  };
+  const changePreferences = (patch: Partial<Preferences>) =>
+    preferenceUpdates.run(
+      patch,
+      () => preferenceRef.current,
+      async (next, fields) => {
+        if (fields.audioinput !== undefined) await media.setDevice('audioinput', next.audioinput);
+        if (fields.audiooutput !== undefined) await media.setDevice('audiooutput', next.audiooutput);
+        if (fields.voice !== undefined) await media.setVoiceSettings(next.voice);
+        if (
+          fields.toggleEnabled !== undefined ||
+          ((fields.shortcut !== undefined || fields.hotkeyMode !== undefined) && next.toggleEnabled)
+        ) {
+          const revision = ++hotkeyRevision.current;
+          try {
+            await api.setPushToTalk(next.toggleEnabled ? next.shortcut : null, next.hotkeyMode);
+            if (revision !== hotkeyRevision.current) return;
+            if (next.toggleEnabled)
+              await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
+          } catch {
+            if (revision !== hotkeyRevision.current) return;
+            persistPreferences(mergePreferences(preferenceRef.current, { ...fields, toggleEnabled: false }));
+            await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
+            throw new Error('Не удалось зарегистрировать эту клавишу. Выберите другое сочетание.');
+          }
+          if (revision !== hotkeyRevision.current) return;
+        }
+        persistPreferences(mergePreferences(preferenceRef.current, fields));
+      },
+    );
   const changeLocalAudio = (identity: string, patch: Partial<LocalAudioPreference>) => {
     const previous = localAudioRef.current[identity] ?? defaultLocalAudio;
     const next = { ...previous, ...patch };
@@ -576,6 +584,7 @@ export function App() {
           </aside>
         </div>
       )}
+      <CapturePickerHost />
       {settings && (
         <SettingsDialog
           preferences={preferences}

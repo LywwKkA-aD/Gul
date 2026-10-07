@@ -58,6 +58,18 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
       );
       expect(code).toBe(1);
     }
+    if (process.platform === 'win32') {
+      const helper = join(resourceRoot, 'audio-capture', 'win32-x64', 'gul-audio.exe');
+      await access(helper);
+      const code = await promisify(execFile)(helper, [], { timeout: 5000, maxBuffer: 16 * 1024 }).then(
+        () => 0,
+        (error: unknown) =>
+          error && typeof error === 'object' && 'code' in error && typeof error.code === 'number'
+            ? error.code
+            : -1,
+      );
+      expect(code).toBe(1);
+    }
 
     const licenses = JSON.parse(
       await readFile(join(resourceRoot, 'THIRD_PARTY_LICENSES', 'manifest.json'), 'utf8'),
@@ -65,10 +77,22 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
     expect(licenses.map(({ name }) => name)).toEqual(
       expect.arrayContaining([
         'livekit-client',
+        '@jitsi/rnnoise-wasm',
         'react',
         '@fontsource/ibm-plex-sans',
         '@fontsource/martian-mono',
       ]),
+    );
+    await access(
+      join(
+        resourceRoot,
+        'THIRD_PARTY_LICENSES',
+        'npm',
+        '@jitsi',
+        'rnnoise-wasm',
+        '0.2.1',
+        'LICENSE-RNNOISE-BSD-3-Clause',
+      ),
     );
     // firstWindow() also returns the hidden startup about:blank Page. Wait in the
     // main process until the final app frame is loaded before touching its CDP context.
@@ -94,6 +118,9 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
     }));
     expect(boundary).toEqual({ node: 'undefined', api: 'function' });
     if (process.platform === 'win32') {
+      const capabilities = await page.evaluate(() => window.gul.captureCapabilities());
+      expect(capabilities.platform).toBe('win32');
+      expect(capabilities.ownAudioExcluded).toBe(capabilities.systemAudio);
       await page.evaluate(() => window.gul.setPushToTalk('F8', 'hold'));
       await page.evaluate(() => window.gul.setPushToTalk(null));
     }

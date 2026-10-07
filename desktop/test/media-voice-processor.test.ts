@@ -3,13 +3,14 @@ import test from 'node:test';
 import { VoiceProcessor } from '../src/renderer/media/voice-processor.ts';
 import { defaultVoiceSettings } from '../src/renderer/media/voice-gate.ts';
 
-function harness(module?: Promise<void>) {
+function harness(module?: Promise<void>, ready = true) {
   const output = {
     enabled: true,
     stops: 0,
     stop() {
       this.stops++;
     },
+    getSettings: () => ({ channelCount: destination.channelCount }),
   };
   const source = {
     connects: 0,
@@ -21,7 +22,7 @@ function harness(module?: Promise<void>) {
       this.disconnects++;
     },
   };
-  const destination = { stream: { getAudioTracks: () => [output] } };
+  const destination = { channelCount: 2, stream: { getAudioTracks: () => [output] } };
   const port = {
     onmessage: null as ((event: { data: unknown }) => void) | null,
     closed: false,
@@ -43,6 +44,7 @@ function harness(module?: Promise<void>) {
   };
   let modules = 0;
   let nodes = 0;
+  let failures = 0;
   const context = {
     audioWorklet: {
       addModule: async () => {
@@ -60,10 +62,17 @@ function harness(module?: Promise<void>) {
   const processor = new VoiceProcessor(defaultVoiceSettings, (reading) => readings.push(reading), {
     node: () => {
       nodes++;
+      if (ready)
+        queueMicrotask(() =>
+          port.onmessage?.({ data: { type: 'ready', neuralNoise: true, sampleRate: 48000 } }),
+        );
       return node as any;
     },
     stream: () => ({}) as any,
     moduleURL: 'gul://app/voice-worklet.js',
+    failure: () => {
+      failures++;
+    },
   });
   const options = { kind: 'audio', track: { enabled: false }, audioContext: context } as any;
   return {
@@ -77,6 +86,7 @@ function harness(module?: Promise<void>) {
     port,
     modules: () => modules,
     nodes: () => nodes,
+    failures: () => failures,
   };
 }
 test('processor uses the SDK context, preserves muted track and destroys output without touching raw capture', async () => {
@@ -91,6 +101,34 @@ test('processor uses the SDK context, preserves muted track and destroys output 
   assert.equal(node.disconnects, 1);
   assert.equal(port.closed, true);
   assert.equal(port.onmessage, null);
+});
+test('processed microphone remains mono through the WebAudio destination and output track', async () => {
+  const { processor, options, output } = harness();
+  await processor.init(options);
+  assert.equal(output.getSettings().channelCount, 1);
+  await processor.destroy();
+});
+test('a late worklet error is sticky, reports once and cannot be unmuted by later audio preferences', async () => {
+  const { processor, options, node, output, failures } = harness();
+  await processor.init(options);
+  processor.setMuted(false);
+  (node as any).onprocessorerror();
+  (node as any).onprocessorerror();
+  processor.setMuted(false);
+  assert.equal(output.enabled, false);
+  assert.equal(processor.failed, true);
+  assert.equal(failures(), 1);
+  await processor.destroy();
+});
+test('processor cannot expose an output before the neural worklet is ready, and leaving cancels its handshake', async () => {
+  const { processor, options, output } = harness(undefined, false);
+  const opening = processor.init(options);
+  const cancelled = assert.rejects(opening, /обработк/iu);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(processor.processedTrack, undefined);
+  assert.equal(output.enabled, true, 'No destination should have been acquired yet.');
+  await processor.destroy();
+  await cancelled;
 });
 test('processor bounds meter input and forwards settings once without duplicate gain nodes', async () => {
   const { processor, options, port, readings } = harness();

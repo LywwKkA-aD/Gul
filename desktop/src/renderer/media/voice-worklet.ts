@@ -1,4 +1,6 @@
 import { defaultVoiceSettings, VoiceGate, voiceSettings, type VoiceSettings } from './voice-gate.ts';
+import { createNeuralDenoiser } from './neural-runtime.ts';
+import type { NeuralDenoiser } from './neural-noise.ts';
 
 declare const currentFrame: number;
 declare const sampleRate: number;
@@ -14,22 +16,53 @@ class GulVoiceWorklet extends AudioWorkletProcessor {
   private readonly silence = new Float32Array(128);
   private lastReport = Number.NEGATIVE_INFINITY;
   private smoothedGain = 0;
+  private denoiser?: NeuralDenoiser;
+  private readonly filtered = new Float32Array(128);
+  private closed = false;
   constructor(options: { processorOptions?: VoiceSettings }) {
     super();
-    this.gate = new VoiceGate(voiceSettings(defaultVoiceSettings, options.processorOptions ?? {}));
+    const settings = voiceSettings(defaultVoiceSettings, options.processorOptions ?? {});
+    this.gate = new VoiceGate(settings);
+    this.suppression(settings.noiseSuppression);
     this.port.onmessage = ({ data }: MessageEvent<unknown>) => {
+      if (this.closed) return;
       if (!data || typeof data !== 'object') return;
       const value = data as Record<string, unknown>;
+      if (value.type === 'destroy') {
+        this.closed = true;
+        this.denoiser?.destroy();
+        this.denoiser = undefined;
+        return;
+      }
       if (value.type !== 'settings' || !value.settings || typeof value.settings !== 'object') return;
       try {
-        this.gate.update(voiceSettings(defaultVoiceSettings, value.settings as Partial<VoiceSettings>));
+        const settings = voiceSettings(defaultVoiceSettings, value.settings as Partial<VoiceSettings>);
+        this.suppression(settings.noiseSuppression);
+        this.gate.update(settings);
       } catch {
         /* Only validated settings can change the audio graph. */
       }
     };
+    this.port.postMessage({ type: 'ready', neuralNoise: Boolean(this.denoiser), sampleRate });
+  }
+  private suppression(enabled: boolean): void {
+    if (enabled && sampleRate === 48000) this.denoiser ??= createNeuralDenoiser();
+    else {
+      this.denoiser?.destroy();
+      this.denoiser = undefined;
+    }
   }
   process(inputs: readonly Float32Array[][], outputs: readonly Float32Array[][]): boolean {
-    const input = inputs[0]?.[0] ?? this.silence;
+    if (this.closed) {
+      outputs[0]?.[0]?.fill(0);
+      return false;
+    }
+    const captured = inputs[0]?.[0] ?? this.silence;
+    let input = captured;
+    if (this.denoiser) {
+      this.denoiser.process(captured, this.filtered);
+      input = this.filtered;
+    }
     const reading = this.gate.read(input, (currentFrame * 1000) / sampleRate);
     const output = outputs[0]?.[0];
     if (output) {

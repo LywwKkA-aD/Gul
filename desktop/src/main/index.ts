@@ -13,9 +13,11 @@ import { AppServices } from './app-services.ts';
 import { TrayLifecycle } from './tray.ts';
 import { installMediaGuard } from './media-guard.ts';
 import { NativeScreenAudio } from './screen-audio.ts';
+import { WindowsScreenAudio } from './windows-screen-audio.ts';
 import type { DisplayCaptureConsent } from './capture-consent.ts';
 import { failure } from './validation.ts';
 import { claimApplicationInstance } from './application-instance.ts';
+import { CapturePicker } from './capture-picker.ts';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -49,14 +51,20 @@ let window: BrowserWindow | undefined;
 let quitting = false;
 let uninstallIPC = () => {};
 let services: AppServices;
-let screenAudio: NativeScreenAudio | undefined;
+let screenAudio: NativeScreenAudio | WindowsScreenAudio | undefined;
 let displayConsent: DisplayCaptureConsent | undefined;
+let capturePicker: CapturePicker | undefined;
 async function closeCapture(): Promise<void> {
+  capturePicker?.cancel();
   displayConsent?.invalidate();
   await screenAudio?.close();
 }
 async function captureCapabilities() {
-  return services.capabilities({ linuxExcludedAudio: (await screenAudio?.available()) ?? false });
+  const available = (await screenAudio?.available()) ?? false;
+  return services.capabilities({
+    linuxExcludedAudio: process.platform === 'linux' && available,
+    windowsExcludedAudio: process.platform === 'win32' && available,
+  });
 }
 const lifecycle = new TrayLifecycle({
   platform: process.platform,
@@ -119,7 +127,18 @@ async function createWindow(): Promise<void> {
     },
   });
   const ownWindow = window;
-  installPermissions(ownWindow, authority);
+  const ownPicker = new CapturePicker({
+    push: (request) => {
+      if (!ownWindow.isDestroyed()) ownWindow.webContents.send('gul:capture-picker', request);
+    },
+  });
+  capturePicker = ownPicker;
+  let ownAudio: NativeScreenAudio | WindowsScreenAudio | undefined;
+  installPermissions(
+    ownWindow,
+    authority,
+    (url) => ownAudio instanceof WindowsScreenAudio && ownAudio.networkAllowed(url),
+  );
   const testCapture =
     !app.isPackaged &&
     process.env.NODE_ENV === 'test' &&
@@ -127,6 +146,7 @@ async function createWindow(): Promise<void> {
     process.env.GUL_ELECTRON_TEST_CAPTURE_APPROVED === '1';
   const ownConsent = installDisplayCapture(ownWindow, authority, {
     getCapabilities: captureCapabilities,
+    pick: (sources, audio, details, valid) => ownPicker.choose(sources, audio, details, valid),
     ...(testCapture
       ? {
           // Xvfb has no window manager; the fixture exercises a real screen capture.
@@ -143,8 +163,14 @@ async function createWindow(): Promise<void> {
         }
       : {}),
   });
-  const ownAudio = new NativeScreenAudio({
-    executable: join(resourceRoot, 'audio-capture', `${process.platform}-${process.arch}`, 'gul-audio'),
+  const AudioCapture = process.platform === 'win32' ? WindowsScreenAudio : NativeScreenAudio;
+  ownAudio = new AudioCapture({
+    executable: join(
+      resourceRoot,
+      'audio-capture',
+      `${process.platform}-${process.arch}`,
+      process.platform === 'win32' ? 'gul-audio.exe' : 'gul-audio',
+    ),
     consent: ownConsent,
     onEnded: (leaseId) => {
       if (!ownWindow.isDestroyed()) ownWindow.webContents.send('gul:screen-audio-ended', leaseId);
@@ -153,6 +179,7 @@ async function createWindow(): Promise<void> {
   displayConsent = ownConsent;
   screenAudio = ownAudio;
   const closeOwnCapture = async () => {
+    ownPicker.cancel();
     ownConsent.invalidate();
     await ownAudio.close();
   };
@@ -220,6 +247,7 @@ if (primaryInstance) {
           },
           stop: (leaseId) => screenAudio?.stop(leaseId) ?? Promise.resolve(),
           reset: closeCapture,
+          select: (requestId, sourceKey) => capturePicker?.select(requestId, sourceKey) ?? false,
         },
       );
       await createWindow();

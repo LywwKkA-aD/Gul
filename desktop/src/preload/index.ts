@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { publicError } from './errors.ts';
 import { installDeviceAudioGuard } from './media-guard.ts';
+import type { CapturePickerRequest } from '../shared/capture-picker.ts';
 import type {
   AudioState,
   BrokerState,
@@ -35,6 +36,15 @@ const api: DesktopAPI = Object.freeze({
   servers: () => invoke<ServerList>('gul:servers'),
   forgetServer: (address: string) => invoke<void>('gul:forget-server', address),
   captureCapabilities: () => invoke<CaptureCapabilities>('gul:capture-capabilities'),
+  onCapturePicker: (listener: (request: CapturePickerRequest | null) => void) => {
+    if (typeof listener !== 'function') throw new TypeError('GUL_INPUT_INVALID');
+    const handler = (_event: Electron.IpcRendererEvent, request: CapturePickerRequest | null) =>
+      listener(request);
+    ipcRenderer.on('gul:capture-picker', handler);
+    return () => ipcRenderer.removeListener('gul:capture-picker', handler);
+  },
+  selectCaptureSource: (requestId: string, sourceKey: string | null) =>
+    invoke<void>('gul:select-capture-source', { requestId, sourceKey }),
   screenAudioStart: () => invoke<ScreenAudioLease>('gul:screen-audio-start'),
   screenAudioStop: (leaseId: string) => invoke<void>('gul:screen-audio-stop', leaseId),
   onScreenAudioEnded: (listener: (leaseId: string) => void) => {

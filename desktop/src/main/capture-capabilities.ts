@@ -5,7 +5,7 @@ import { captureCapabilities, capturePickerMode, type CaptureCapabilities } from
 
 /** Report engine support and a local audio-server socket; never expose paths or capture without consent. */
 export async function getCaptureCapabilities(
-  options: { readonly linuxExcludedAudio?: boolean } = {},
+  options: { readonly linuxExcludedAudio?: boolean; readonly windowsExcludedAudio?: boolean } = {},
 ): Promise<CaptureCapabilities> {
   let pulseDetected = false;
   if (process.platform === 'linux') {
@@ -33,5 +33,6 @@ export async function getCaptureCapabilities(
     pulseDetected,
     options.linuxExcludedAudio ?? false,
     capturePickerMode(process.platform, process.env),
+    options.windowsExcludedAudio ?? false,
   );
 }

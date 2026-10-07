@@ -1,0 +1,190 @@
+.capture-picker-dialog {
+  width: min(860px, 92vw);
+  max-height: 90vh;
+}
+.capture-picker-dialog .dialog-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(90vh - 2px);
+  padding: 28px;
+  overflow: hidden;
+}
+.capture-picker-dialog h2,
+.capture-picker-intro,
+.capture-picker-tabs {
+  flex-shrink: 0;
+}
+.capture-picker-dialog h2 {
+  margin-bottom: 8px;
+}
+.capture-picker-intro {
+  color: var(--text-2);
+  margin-bottom: 22px;
+}
+.capture-picker-tabs {
+  margin-bottom: 20px;
+}
+.capture-picker-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.capture-source-count {
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--bg-4);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.capture-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.capture-picker-dialog #capture-sources {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(380px, calc(90vh - 300px));
+  margin: -4px;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.capture-picker-dialog .capture-source-card {
+  display: block;
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.capture-source-card input,
+.capture-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.capture-source-body {
+  display: block;
+  padding: 5px;
+  border: 2px solid transparent;
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+  box-shadow: 0 0 0 1px var(--line-soft);
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+.capture-source-card:hover .capture-source-body {
+  background: var(--bg-4);
+}
+.capture-source-card input:checked + .capture-source-body {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+  box-shadow: none;
+}
+.capture-source-card input:focus-visible + .capture-source-body {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.capture-source-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--sb-0);
+}
+.capture-source-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.capture-preview-missing {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  color: var(--sb-text-2);
+  text-align: center;
+  font-size: 11px;
+}
+.capture-source-name {
+  display: block;
+  overflow: hidden;
+  padding: 10px 5px 6px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+  font-size: 13px;
+}
+.capture-picker-footer {
+  flex-shrink: 0;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-soft);
+}
+.capture-audio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-1);
+}
+.capture-audio-status p {
+  margin-top: 8px;
+  line-height: 1.5;
+  max-height: 4.5em;
+  overflow-y: auto;
+}
+.capture-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+.capture-selection-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.capture-share-button {
+  padding: 9px 20px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 13px;
+}
+.capture-share-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.capture-share-button:disabled {
+  background: var(--bg-4);
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+.capture-empty {
+  padding: 35px 12px;
+  text-align: center;
+  color: var(--text-3);
+}
+@media (max-width: 720px) {
+  .capture-source-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

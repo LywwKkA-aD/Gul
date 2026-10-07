@@ -183,7 +183,9 @@ test('renderer networking is limited to session capability paths on the owned ga
   assert.equal(allowedNetwork('gul://other/renderer.js', []), false);
   assert.equal(contentSecurityPolicy.includes("script-src 'self'"), true);
   assert.equal(contentSecurityPolicy.includes("object-src 'none'"), true);
-  assert.equal(contentSecurityPolicy.includes('unsafe-eval'), false);
+  assert.match(contentSecurityPolicy, /script-src 'self' 'wasm-unsafe-eval'(?:;|$)/u);
+  assert.equal(contentSecurityPolicy.includes("'unsafe-eval'"), false);
+  assert.doesNotMatch(contentSecurityPolicy, /script-src[^;]*'unsafe-inline'/u);
 });
 
 test('test CA and executable overrides require an unpackaged, explicit test launch', () => {

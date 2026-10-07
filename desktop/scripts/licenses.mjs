@@ -47,7 +47,18 @@ export async function collectLicenses(bundles) {
       if (!files.length) throw new Error(`Missing bundled dependency license: ${identity}`);
       for (const file of files) await copyFile(join(directory, file), join(output, file));
     }
-    manifest.push({ name: metadata.name, version: metadata.version, license: metadata.license });
+    if (metadata.name === '@jitsi/rnnoise-wasm') {
+      if (metadata.version !== '0.2.1') throw new Error('Review RNNoise attribution before upgrading.');
+      await copyFile(
+        '../third_party/npm-attributions/jitsi-rnnoise-wasm-0.2.1/LICENSE-RNNOISE-BSD-3-Clause',
+        join(output, 'LICENSE-RNNOISE-BSD-3-Clause'),
+      );
+    }
+    manifest.push({
+      name: metadata.name,
+      version: metadata.version,
+      license: metadata.name === '@jitsi/rnnoise-wasm' ? 'Apache-2.0 AND BSD-3-Clause' : metadata.license,
+    });
   }
   await writeFile('dist/licenses/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
 }

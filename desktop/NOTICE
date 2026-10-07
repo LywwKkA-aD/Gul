@@ -6,6 +6,10 @@ included in the main, preload, and renderer bundles, with exact versions.
 IBM Plex Sans, IBM Plex Mono and Martian Mono use SIL Open Font License 1.1.
 Fonts are bundled locally and are not fetched while the application runs.
 
+Microphone noise suppression includes @jitsi/rnnoise-wasm 0.2.1 (Apache-2.0)
+and RNNoise 0.2 (BSD-3-Clause). Both license texts are included in
+THIRD_PARTY_LICENSES/npm/@jitsi/rnnoise-wasm/0.2.1. The model is bundled locally.
+
 Electron includes Chromium and Node.js. Their notices are distributed with
 the Electron framework. Xray is a separate bundled executable; its license
 and checked binary digest are distributed in the xray resource directory.

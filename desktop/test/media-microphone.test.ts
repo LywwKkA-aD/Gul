@@ -21,6 +21,9 @@ function harness(overrides: Record<string, unknown> = {}) {
     async applyConstraints(options: unknown) {
       this.constraints.push(options);
     },
+    async restartTrack(options: unknown) {
+      this.constraints.push(options);
+    },
   };
   const processor = {
     closed: 0,
@@ -126,13 +129,63 @@ test('failed Chromium constraints roll preferences back while keeping manual mut
   const { microphone, track, room } = harness();
   await microphone.start(room as any, undefined, () => true);
   microphone.apply({ muted: true, deafened: true });
-  track.applyConstraints = async () => {
+  track.restartTrack = async () => {
     throw new Error('device is gone');
   };
   await assert.rejects(microphone.configure({ echoCancellation: false }), /настройк/iu);
   assert.equal(microphone.settings.echoCancellation, true);
   assert.equal(track.mediaStreamTrack.enabled, false);
   await microphone.stop();
+});
+test('processing flags restart capture with mono48k/device constraints instead of ineffective dynamic constraints', async () => {
+  const { microphone, track, room } = harness();
+  track.applyConstraints = async () => {
+    assert.fail('Chromium may resolve dynamic flags without changing its capture processing.');
+  };
+  await microphone.start(room as any, 'chosen-input', () => true);
+  await microphone.configure({ noiseSuppression: false, autoGainControl: false });
+  assert.deepEqual(track.constraints, [
+    {
+      deviceId: { exact: 'chosen-input' },
+      channelCount: 1,
+      sampleRate: 48000,
+      noiseSuppression: false,
+      autoGainControl: false,
+      echoCancellation: true,
+    },
+  ]);
+  assert.equal(track.mediaStreamTrack.enabled, true);
+  await microphone.stop();
+});
+test('processing restart stays silent through manual/PTT mute and late cancellation', async () => {
+  const { microphone, track, room } = harness();
+  await microphone.start(room as any, undefined, () => true);
+  let finish!: () => void;
+  track.restartTrack = async () => {
+    assert.equal(track.mediaStreamTrack.enabled, false);
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    // The capture promise can acquire a replacement after the old raw track stopped.
+    track.mediaStreamTrack = { enabled: true };
+  };
+  const change = microphone.configure({ noiseSuppression: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  microphone.apply({ muted: false, deafened: false });
+  assert.equal(track.mediaStreamTrack.enabled, false);
+  microphone.apply({ muted: true, deafened: false });
+  finish();
+  await change;
+  assert.equal(track.mediaStreamTrack.enabled, false);
+  await microphone.synchronize({ muted: false, deafened: false });
+  assert.equal(track.mediaStreamTrack.enabled, true);
+  const cancelled = microphone.configure({ noiseSuppression: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  await microphone.stop();
+  finish();
+  await cancelled;
+  assert.equal(track.stopped, true);
+  assert.equal(track.mediaStreamTrack.enabled, false);
 });
 test('meter reports apply manual state and late callback cannot update a newer channel', async () => {
   let report!: (reading: { level: number; active: boolean }) => void;
@@ -153,4 +206,95 @@ test('meter reports apply manual state and late callback cannot update a newer c
   await microphone.stop();
   report({ level: 1, active: true });
   assert.equal(readings.length, count);
+});
+test('preferences changed during capture reconcile raw flags before publication and processor unmute', async () => {
+  let complete!: (value: any) => void;
+  const pending = new Promise<any>((resolve) => {
+    complete = resolve;
+  });
+  const { microphone, track, room } = harness({ capture: () => pending });
+  const opening = microphone.start(room as any, undefined, () => true);
+  await microphone.configure({ noiseSuppression: false });
+  complete(track);
+  await opening;
+  assert.equal(microphone.settings.noiseSuppression, false);
+  assert.equal((track.constraints[0] as any).noiseSuppression, false);
+  assert.deepEqual((track.constraints[0] as any).deviceId, { exact: 'default' });
+  await microphone.stop();
+});
+test('newer gain patch cannot skip restoring a failed raw processing change', async () => {
+  const { microphone, track, room } = harness();
+  await microphone.start(room as any, undefined, () => true);
+  let reject!: (error: Error) => void;
+  let first = true;
+  track.restartTrack = async (options) => {
+    track.constraints.push(options);
+    if (first) {
+      first = false;
+      await new Promise<void>((_, no) => {
+        reject = no;
+      });
+    }
+  };
+  const changing = microphone.configure({ noiseSuppression: false });
+  const failed = assert.rejects(changing, /настройк/iu);
+  await new Promise((resolve) => setImmediate(resolve));
+  const gain = microphone.configure({ inputGain: 1.5 });
+  reject(new Error('capture failed'));
+  await failed;
+  await gain;
+  assert.equal(microphone.settings.noiseSuppression, true);
+  assert.equal(microphone.settings.inputGain, 1.5);
+  assert.equal((track.constraints.at(-1) as any).noiseSuppression, true);
+  assert.deepEqual((track.constraints.at(-1) as any).deviceId, { exact: 'default' });
+  await microphone.stop();
+});
+test('fallback cannot unmute VAD chosen during the final raw-capture reconciliation', async () => {
+  const fixture = harness({
+    processor: async () => {
+      await fixture.microphone.configure({ noiseSuppression: false });
+      return undefined;
+    },
+  });
+  let finish!: () => void;
+  fixture.track.restartTrack = () =>
+    new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  const opening = fixture.microphone.start(fixture.room as any, undefined, () => true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await fixture.microphone.configure({ mode: 'vad' });
+  finish();
+  await opening;
+  assert.equal(fixture.track.stopped, true);
+  assert.equal(fixture.track.mediaStreamTrack.enabled, false);
+  assert.equal(fixture.microphone.captured, false);
+});
+test('SDK processor restart sees the new noise settings before its readiness handshake', async () => {
+  const { microphone, track, room, processor } = harness();
+  await microphone.start(room as any, undefined, () => true);
+  track.restartTrack = async () => {
+    assert.equal((processor.settings.at(-1) as any)?.noiseSuppression, false);
+    assert.equal(track.mediaStreamTrack.enabled, false);
+  };
+  await microphone.configure({ noiseSuppression: false });
+  await microphone.stop();
+});
+test('late audio-thread failure closes capture, marks processing unavailable and warns once', async () => {
+  let failure!: () => void;
+  const fixture = harness({
+    processor: async (_track: unknown, _settings: unknown, _reading: unknown, onFailure: () => void) => {
+      failure = onFailure;
+      return fixture.processor;
+    },
+  });
+  await fixture.microphone.start(fixture.room as any, undefined, () => true);
+  failure();
+  failure();
+  await fixture.microphone.synchronize({ muted: false, deafened: false });
+  assert.equal(fixture.track.stopped, true);
+  assert.equal(fixture.track.mediaStreamTrack.enabled, false);
+  assert.equal(fixture.microphone.processingAvailable, false);
+  assert.equal(fixture.warnings.length, 1);
+  assert.deepEqual(fixture.readings.at(-1), { level: 0, active: false, available: false });
 });

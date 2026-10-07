@@ -48,9 +48,11 @@ function fakeRoom(switcher?: (id: string) => boolean | Promise<boolean>) {
 }
 
 test('both production room kinds enable the SDK WebAudio mixer for gain above unity', async () => {
-  const room = createRoom();
+  const context = { sampleRate: 48000, close: async () => {} } as unknown as AudioContext;
+  const room = createRoom({ context: () => context });
   try {
-    assert.equal(room.options.webAudioMix, true);
+    assert.equal(typeof room.options.webAudioMix, 'object');
+    assert.equal((room.options.webAudioMix as { audioContext: AudioContext }).audioContext.sampleRate, 48000);
   } finally {
     await disconnect(room);
   }

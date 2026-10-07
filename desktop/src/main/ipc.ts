@@ -1,7 +1,7 @@
 import { globalShortcut, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import type { SessionAuthority } from './session.ts';
 import { appPage } from './security.ts';
-import { audioInput, failure } from './validation.ts';
+import { audioInput, capturePickerInput, failure } from './validation.ts';
 import type { AppServices } from './app-services.ts';
 import { NativeHoldHotkey } from './hotkeys.ts';
 import type { CaptureCapabilities, ScreenAudioLease } from '../shared/contracts.ts';
@@ -12,6 +12,7 @@ interface CaptureServices {
   start(): Promise<ScreenAudioLease>;
   stop(leaseId: string): Promise<void>;
   reset(): Promise<void>;
+  select(requestId: string, sourceKey: string | null): boolean;
 }
 
 /** Only this window's top-level app frame may invoke this fixed IPC allowlist. */
@@ -80,6 +81,10 @@ export function installIPC(
       if (!(await services.servers.forget(value)).persisted) throw failure('GUL_STORAGE_WRITE_FAILED');
     },
     'gul:capture-capabilities': () => capture.capabilities(),
+    'gul:select-capture-source': (_event, value) => {
+      const { requestId, sourceKey } = capturePickerInput(value);
+      if (!capture.select(requestId, sourceKey)) throw failure('GUL_INPUT_INVALID');
+    },
     'gul:screen-audio-start': () => capture.start(),
     'gul:screen-audio-stop': (_event, value) => {
       if (typeof value !== 'string' || !/^[a-f0-9]{32}$/u.test(value)) throw failure('GUL_INPUT_INVALID');

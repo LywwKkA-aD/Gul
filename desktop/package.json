@@ -1,6 +1,6 @@
 {
   "name": "gul",
-  "version": "0.8.0-alpha.3",
+  "version": "0.8.0-alpha.4",
   "private": true,
   "description": "Gul voice and screen sharing",
   "author": "Gul contributors",
@@ -24,6 +24,7 @@
     "build:audio": "node scripts/build-audio.mjs"
   },
   "dependencies": {
+    "@jitsi/rnnoise-wasm": "0.2.1",
     "@livekit/protocol": "1.50.4",
     "livekit-client": "2.22.3",
     "react": "19.2.8",

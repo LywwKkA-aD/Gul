@@ -1,3 +1,5 @@
+import type { CapturePickerRequest } from './capture-picker.ts';
+
 /** Main owns broker credentials; only short-lived media grants cross IPC. */
 export interface AudioState {
   readonly muted: boolean;
@@ -79,10 +81,17 @@ export interface CaptureCapabilities {
   readonly details: string;
   readonly picker: 'portal' | 'application';
 }
-export interface ScreenAudioLease {
+export interface LinuxScreenAudioLease {
   readonly leaseId: string;
   readonly deviceLabel: string;
+  readonly url?: never;
 }
+export interface WindowsScreenAudioLease {
+  readonly leaseId: string;
+  readonly url: string;
+  readonly deviceLabel?: never;
+}
+export type ScreenAudioLease = LinuxScreenAudioLease | WindowsScreenAudioLease;
 export interface AppInfo {
   readonly version: string;
   readonly update: { readonly version: string; readonly url: string } | null;
@@ -93,6 +102,8 @@ export interface DesktopAPI {
   servers(): Promise<ServerList>;
   forgetServer(address: string): Promise<void>;
   captureCapabilities(): Promise<CaptureCapabilities>;
+  onCapturePicker(listener: (request: CapturePickerRequest | null) => void): () => void;
+  selectCaptureSource(requestId: string, sourceKey: string | null): Promise<void>;
   screenAudioStart(): Promise<ScreenAudioLease>;
   screenAudioStop(leaseId: string): Promise<void>;
   onScreenAudioEnded(listener: (leaseId: string) => void): () => void;
