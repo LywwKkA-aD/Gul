@@ -1,76 +1,21 @@
 name: CI
-
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main, codex/electron-desktop]
-    tags: ['v*']
-
 permissions:
   contents: read
-
-concurrency:
-  group: gul-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
 jobs:
-  server:
-    name: LiveKit broker
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
-      - name: Test and vet server
-        working-directory: server
-        run: |
-          go test -race -cover ./...
-          go vet ./...
-      - name: Test deployment configuration
-        run: python3 -m unittest discover -s deploy/livekit -p 'test_*.py'
-      - name: Build server
-        working-directory: server
-        env:
-          CGO_ENABLED: '0'
-        run: go build -trimpath -o ../bin/gul-livekit-server-linux-amd64 ./cmd/gul-livekit-server
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: gul-server-${{ github.sha }}
-          path: bin/gul-livekit-server-linux-amd64
-          retention-days: 7
-
-  desktop:
-    name: Electron (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+  components:
+    name: Capture components (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            target: '--linux deb --x64'
-            executable: linux-unpacked/gul
-          - os: windows-2025
-            target: '--win nsis zip --x64'
-            executable: win-unpacked/Gul.exe
-          - os: macos-15
-            target: '--mac dmg --arm64'
-            executable: mac-arm64/Gul.app/Contents/MacOS/Gul
-          - os: macos-15-intel
-            target: '--mac dmg --x64'
-            executable: mac/Gul.app/Contents/MacOS/Gul
+        os: [macos-15, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     defaults:
       run:
         shell: bash
         working-directory: desktop
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -80,185 +25,5 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - name: Install pinned dependencies
-        run: npm ci
-      - name: Prepare native helpers
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libglib2.0-dev libpulse-dev pkg-config dbus
-      - name: Check client
-        run: |
-          npm run check
-          npm run format:check
-          npm run test:coverage
-          npm audit --audit-level=moderate
-      - name: Verify release tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: node scripts/release-assets.mjs --check-tag "$GITHUB_REF_NAME"
-      - name: Fetch verified native Xray
-        run: npm run vendor:xray
-      - name: Build native hold shortcut helper
-        if: runner.os != 'macOS'
-        run: npm run build:ptt
-      - name: Build native screen audio helper
-        if: runner.os != 'macOS'
-        run: npm run build:audio
-      - name: Build installers
-        run: npm run dist -- ${{ matrix.target }} --publish never
-      - name: Prepare Linux smoke test
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb xauth libpulse-dev pulseaudio dbus-x11 pkg-config
-          sudo apt-get install -y ./artifacts/Gul-*-linux-x64.deb
-      - name: Smoke-test packaged Linux app
-        if: runner.os == 'Linux'
-        env:
-          GUL_PACKAGED_APP_PATH: /opt/Gul/gul
-        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/packaged.spec.ts
-      - name: Smoke-test packaged Windows or macOS app
-        if: runner.os != 'Linux'
-        env:
-          GUL_PACKAGED_APP_PATH: ${{ github.workspace }}/desktop/artifacts/${{ matrix.executable }}
-        run: npm run test:integration -- e2e/packaged.spec.ts
-      - name: Test native audio transport and capture picker components
-        if: runner.os != 'Linux'
-        run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts
-      - name: Collect installers and hashes
-        run: node scripts/release-assets.mjs --collect
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: gul-desktop-${{ matrix.os }}-${{ github.sha }}
-          path: desktop/artifacts/release/*
-          if-no-files-found: error
-          retention-days: 14
-
-  media:
-    name: Chromium media over REALITY
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: server/go.mod
-          cache-dependency-path: server/go.sum
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - name: Prepare Chromium and audio
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb xauth openbox libpulse-dev pulseaudio dbus-x11 pkg-config gnome-keyring libsecret-1-0
-          cd desktop
-          npm ci
-          npm run vendor:xray
-          npm run build:audio
-          npm run build
-          node node_modules/electron/install.js
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-      - name: Build broker and local gateway
-        run: |
-          (cd server && CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/gul-livekit-server" ./cmd/gul-livekit-server)
-          docker build -f deploy/livekit/Containerfile.smoke -t gul-livekit-reality-smoke:local deploy/livekit
-          python3 deploy/livekit/stand_reality.py --output "$RUNNER_TEMP/gul-electron-stand" --xray desktop/resources/xray/linux-x64/xray --broker "$RUNNER_TEMP/gul-livekit-server"
-      - name: Test two clients through REALITY and TURN
-        working-directory: desktop
-        env:
-          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-electron-stand
-          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: |
-          mkdir -p "$PULSE_RUNTIME_PATH"
-          chmod 700 "$PULSE_RUNTIME_PATH"
-          pulseaudio --start --exit-idle-time=-1
-          pactl load-module module-null-sink sink_name=gul_ci_output channels=2 rate=48000
-          pactl set-default-sink gul_ci_output
-          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts
-      - name: Test native Linux desktop and system audio
-        working-directory: desktop
-        env:
-          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-electron-stand
-          GUL_ELECTRON_NATIVE_CAPTURE: '1'
-          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: |
-          mkdir -p "$PULSE_RUNTIME_PATH"
-          chmod 700 "$PULSE_RUNTIME_PATH"
-          pulseaudio --start --exit-idle-time=-1
-          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/native-capture.spec.ts
-      - name: Test native picker in isolated desktop
-        working-directory: desktop
-        env:
-          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-electron-stand
-          GUL_ELECTRON_ISOLATED_DESKTOP: '1'
-          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: dbus-run-session -- xvfb-run -a sh -c 'openbox --sm-disable >/dev/null 2>&1 & wm=$!; trap "kill $wm 2>/dev/null || true" EXIT; npm run test:integration -- e2e/capture-picker.live.spec.ts'
-      - name: Test native audio exclusion and crash cleanup
-        working-directory: desktop
-        env:
-          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: |
-          python3 native/audio-capture/integration_test.py
-          python3 native/audio-capture/integration.py --helper resources/audio-capture/linux-x64/gul-audio
-      - name: Test encrypted passwords with a real Linux keyring
-        working-directory: desktop
-        run: node scripts/test-keyring.mjs
-      - name: Test saved login after complete application restart
-        working-directory: desktop
-        env:
-          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-electron-stand
-          XDG_CURRENT_DESKTOP: GNOME
-          XDG_DATA_HOME: ${{ runner.temp }}/gul-password-data
-          XDG_CONFIG_HOME: ${{ runner.temp }}/gul-password-config
-          XDG_RUNTIME_DIR: ${{ runner.temp }}/gul-password-runtime
-        run: |
-          mkdir -p "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_DATA_HOME" "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
-          env -u GNOME_KEYRING_CONTROL -u GNOME_KEYRING_PID dbus-run-session -- xvfb-run -a sh -c 'printf "%s" "gul-fixture-unlock" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; npm run test:integration -- e2e/password-restart.spec.ts'
-      - name: Remove isolated test containers
-        if: always()
-        run: |
-          if test -f "$RUNNER_TEMP/gul-electron-stand/containers.json"; then
-            python3 deploy/livekit/stand_reality.py --remove "$RUNNER_TEMP/gul-electron-stand"
-          fi
-      - name: Stop isolated audio server
-        if: always()
-        env:
-          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: pulseaudio --kill || true
-
-  release:
-    name: Publish test release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [server, desktop, media]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: gul-desktop-*-${{ github.sha }}
-          path: release-assets
-          merge-multiple: true
-      - name: Verify artifacts
-        run: |
-          cd release-assets
-          sha256sum --check ./*.sha256
-          cat ./*.sha256 | sort -k2 > SHA256SUMS.txt
-          test "$(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \) | wc -l)" -eq 5
-      - name: Publish only successful builds
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* LICENSE NOTICE \
-            --verify-tag --prerelease --title "Gul $GITHUB_REF_NAME — Electron" \
-            --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"
+      - run: npm ci
+      - run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts

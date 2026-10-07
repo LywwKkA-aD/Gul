@@ -27,11 +27,17 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
   const timer = setInterval(() => {
     // Match hardware sample time rather than accumulating setInterval drift.
     const due = Math.floor((performance.now() - started) / 10);
+    // A busy runner can pause this JS producer. Native capture drops obsolete
+    // queued PCM rather than sending an unbounded burst into the 120ms bridge.
+    const discontinuity = due - sequence > 3;
+    if (discontinuity) sequence = due - 3;
+    let first = true;
     while (sequence < due) {
       const frame = Buffer.alloc(16 + 480 * 8);
       frame.writeUInt32LE(0x314c5547, 0);
       frame.writeUInt32LE(sequence, 4);
       frame.writeUInt32LE(480, 8);
+      if (discontinuity && first) frame.writeUInt32LE(1, 12);
       for (let index = 0; index < 480; index++) {
         const sample = sequence * 480 + index;
         frame.writeFloatLE(0.2 * Math.sin((2 * Math.PI * 440 * sample) / 48000), 16 + index * 8);
@@ -39,6 +45,7 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
       }
       ++sequence;
       bridge.send(frame);
+      first = false;
     }
   }, 4);
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
@@ -162,15 +169,32 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
           }
         ).__gulPCMProof.inspect(),
       );
-    await expect
-      .poll(
-        async () => {
-          const sample = await inspect();
-          return sample.energy > -35 && sample.separation > 30 && sample.ended === 0;
-        },
-        { timeout: 10_000 },
-      )
-      .toBe(true);
+    let last: Awaited<ReturnType<typeof inspect>> | undefined;
+    try {
+      await expect
+        .poll(
+          async () => {
+            last = await inspect();
+            return last.energy > -35 && last.separation > 30 && last.ended === 0;
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+    } catch (error) {
+      console.info(
+        'GUL_PCM_PROOF',
+        JSON.stringify({
+          channels: last?.channels,
+          ended: last?.ended,
+          live: last?.live,
+          energy: last?.energy,
+          separation: last?.separation,
+          contexts: last?.contexts,
+          bridgeFailed,
+        }),
+      );
+      throw error;
+    }
     const measured = await inspect();
     // LiveKit can briefly create and close a context while detecting capture defaults.
     const runningContexts = measured.contexts.filter((context) => context.state !== 'closed');
