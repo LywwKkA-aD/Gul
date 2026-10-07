@@ -1,4 +1,5 @@
 #include "tone-test.hpp"
+#include "writer.hpp"
 #include <cstdio>
 #include <string>
 #include <memory>
