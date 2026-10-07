@@ -45,6 +45,17 @@ os.execvp('paplay', ['paplay', '--raw', '--format=s16le', '--rate=48000', '--cha
     return int(subprocess.check_output([sys.executable, "-c", launcher, path], timeout=3))
 
 
+def private_source(sources, nonce):
+    # PulseAudio may rename the source when its name collides with the private sink.
+    # Match the same unique device description as the renderer, never a sink monitor.
+    label = "Gul-Screen-Audio-" + nonce
+    matches = [source["name"] for source in sources
+               if source.get("properties", {}).get("device.description") == label
+               and source.get("monitor_of_sink_name") is None and source.get("name")]
+    assert len(matches) == 1, "Expected one private, non-monitor screen audio source"
+    return matches[0]
+
+
 def record(source, seconds=1):
     process = subprocess.Popen(
         ["parec", "--raw", "--format=s16le", "--rate=48000", "--channels=2", "--device=" + source],
@@ -52,6 +63,7 @@ def record(source, seconds=1):
     )
     try:
         data = process.stdout.read(48000 * seconds * 4)
+        assert len(data) == 48000 * seconds * 4, "PulseAudio returned incomplete capture PCM"
         return struct.unpack("<" + "h" * (len(data) // 2), data)[::2]
     finally:
         process.terminate()
@@ -115,14 +127,15 @@ def main():
             time.sleep(0.6)
             assert pulse("get-default-sink") == hardware, "Capture changed the output device"
             assert pulse("get-default-source") == hardware + ".monitor", "Capture changed the microphone"
-            shared = record(private)
+            device = private_source(json.loads(pulse("--format=json", "list", "sources")), nonce)
+            shared = record(device)
             audible = record(hardware + ".monitor")
             game, gul = amplitude(shared, 440), amplitude(shared, 880)
             assert game > 0.04 and gul < game / 100, (game, gul)
             assert amplitude(audible, 440) > 0.04 and amplitude(audible, 880) > 0.04, "Callers were muted or rerouted"
             players.append(foreign_player(os.path.join(directory, "new-game.pcm")))
             time.sleep(0.4)
-            added = record(private)
+            added = record(device)
             assert amplitude(added, 660) > 0.04, "New playback streams were not captured"
             assert amplitude(added, 880) < 0.0005, "Gul leaked when another stream appeared"
             done.set()

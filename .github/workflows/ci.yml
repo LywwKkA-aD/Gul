@@ -192,7 +192,9 @@ jobs:
         working-directory: desktop
         env:
           PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
-        run: python3 native/audio-capture/integration.py --helper resources/audio-capture/linux-x64/gul-audio
+        run: |
+          python3 native/audio-capture/integration_test.py
+          python3 native/audio-capture/integration.py --helper resources/audio-capture/linux-x64/gul-audio
       - name: Test encrypted passwords with a real Linux keyring
         working-directory: desktop
         run: node scripts/test-keyring.mjs
