@@ -36,8 +36,8 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- 258 unit/security/lifecycle tests: на macOS 256 passed/2 platform skips;
-  TS line coverage — 90.80%.
+- 260 unit/security/lifecycle tests: на macOS 258 passed/2 platform skips;
+  TS line coverage — 90.84%.
 - Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
   всего module — 87.3%.
 - Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,

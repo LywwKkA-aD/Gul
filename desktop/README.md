@@ -41,8 +41,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Набор — 258 unit tests, на macOS 256 passed/2 platform skips; TS line coverage —
-90.80%. Installed packaged smoke
+Набор — 260 unit tests, на macOS 258 passed/2 platform skips; TS line coverage —
+90.84%. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:

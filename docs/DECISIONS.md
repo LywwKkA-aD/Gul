@@ -86,6 +86,8 @@ placeholder VP8 в publisher local offers и SDK-munged remote answers.
 Epoch, capture generation и принадлежность Room защищают новую демонстрацию
 от запоздавшей очистки прежней. Regression использует управляемую задержку
 unpublish, а Electron E2E повторяет включения в одиночном канале и с зрителями.
+Просмотр и захват повторно проверяют своё поколение запроса после ожидания
+очистки, до создания Room: отменённое действие не оставляет лишнее соединение.
 
 Список участников и нижняя панель используют один SVG с зачёркиванием для
 mute/deafen. Login и sidebar показывают существующий appicon.png; asset также
@@ -113,8 +115,8 @@ password/broker bearer; media JWT привязаны к роли, комнате
 
 ## Проверка решений
 
-Набор — 258 unit tests: macOS 256 passed/2 platform skips. TS line coverage —
-90.80%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
+Набор — 260 unit tests: macOS 258 passed/2 platform skips. TS line coverage —
+90.84%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
 Linux DEB установлен.
 Windows helper прошёл регистрацию/освобождение F8 hook, Linux portal —
 семь DBus сценариев. Это не доказательство физического hold PTT.
