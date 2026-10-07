@@ -43,8 +43,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Локально 345 tests: 343 passed/2 platform skips на macOS. TS coverage:
-89.62% строк, 90.41% ветвей, 88.70% функций. Installed packaged smoke
+Локально 348 tests: 346 passed/2 platform skips на macOS. TS coverage:
+89.66% строк, 90.46% ветвей, 88.70% функций. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
@@ -66,7 +66,9 @@ Chromium; `e2e/sdp-bundle.live.spec.ts` проверяет одиночные п
 Новые проверки: `e2e/voice-noise.live.spec.ts` сравнивает записанную речь с
 синтетическим шумом при выключенном/включённом шумодаве через два клиента;
 `e2e/windows-screen-pcm.spec.ts` проверяет stereo PCM bridge/worklet и очистку
-без записи личного рабочего стола. `e2e/capture-picker-ui.spec.ts` использует
+без записи личного рабочего стола. В CI этот Windows backend проверяется на
+Windows и Linux; macOS использует собственный Chromium capture и проверяет
+упаковку/picker отдельно. `e2e/capture-picker-ui.spec.ts` использует
 только синтетические источники. Native picker test запускается только на Linux
 в отдельном рабочем столе с `GUL_ELECTRON_ISOLATED_DESKTOP=1`.
 
