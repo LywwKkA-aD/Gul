@@ -10,6 +10,7 @@ import {
   nativeDisplayTestEnvironment,
 } from './linux-audio-fixture.ts';
 import { installMicrophoneCalibration } from './microphone-calibration.ts';
+import { selectFixtureMicrophone } from './fixture-microphone.ts';
 
 const require = createRequire(import.meta.url);
 const fixture = process.env.GUL_ELECTRON_STAND_DIR;
@@ -224,6 +225,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
       await page.getByLabel('Твой ник', { exact: true }).fill(`desktop-peer-${i}`);
       await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
       await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
+      await selectFixtureMicrophone(page, i);
     }
     const [a, b] = pages;
     await expect.poll(() => audible(b, 'voice'), { timeout: 15_000 }).toBeGreaterThan(0.005);

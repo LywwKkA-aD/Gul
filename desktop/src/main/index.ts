@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol, session, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, desktopCapturer, Menu, protocol, session, Tray, nativeImage } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRealityGateway } from '../transport/gateway.ts';
@@ -129,6 +129,13 @@ async function createWindow(): Promise<void> {
     getCapabilities: captureCapabilities,
     ...(testCapture
       ? {
+          // Xvfb has no window manager; the fixture exercises a real screen capture.
+          getSources: () =>
+            desktopCapturer.getSources({
+              types: ['screen'],
+              thumbnailSize: { width: 0, height: 0 },
+              fetchWindowIcons: false,
+            }),
           pick: async (sources) => ({
             response: sources.findIndex((source) => source.id.startsWith('screen:')) + 1,
             checkboxChecked: true,
