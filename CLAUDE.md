@@ -16,6 +16,7 @@
 - `desktop/src/preload`: узкий IPC bridge; renderer не получает Node API.
 - `desktop/src/renderer`: React UI и LiveKit media lifecycle.
 - `desktop/src/transport`: фиксированный REALITY/SOCKS/TLS/WSS/TURN путь.
+- `desktop/native/ptt`: узкие OS adapters глобального удержания клавиши.
 - `server`: самостоятельный Go module, broker и JSON wire model.
 - `deploy/livekit`: действующий deployment и отдельный локальный Docker fixture.
 
@@ -59,6 +60,12 @@ OpenSSL в PATH для transport tests. Go версия закреплена в 
 
 Windows 10/Linux system audio может включать Gul voices; UI сообщает об этом.
 Own-audio exclusion на Windows 11/macOS — запрос к платформе, не гарантия.
-Глобальное hold PTT требует OS adapter и проверки; toggle служит доступным режимом.
+Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
+Физическое hold PTT требует проверки; toggle служит доступным режимом.
+Набор — 186 unit tests, на macOS 184 passed/2 platform skips; TS line coverage —
+93.10%, server — 87.3%. Все четыре packaged CI цели прошли sandbox smoke, Linux
+DEB установлен. Native Linux capture проверен на DISPLAY/PulseAudio: movingframes,
+720p bounds, stereo PCM 440 Гц L / 880 Гц R через TURN/TCP. Physical mic, Windows 10 ↔ Ubuntu 26
+game capture, физическое hold PTT, часовой soak и публикацию проверять отдельно.
 GitHub release публикует CI после проверок. Коммиты — `[feat]`, `[fix]`, `[ref]`,
 `[docs]`, `[test]`, `[updt]`, `[del]`; перед commit выполнить подходящие проверки.

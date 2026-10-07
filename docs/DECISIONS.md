@@ -43,7 +43,9 @@ Legacy source/deploy/build удалены из текущего дерева.
 Возможность подписаться на чужой экран не зависит от наличия местного capture
 backend или пользовательского разрешения. Только выбранная демонстрация
 подписывается для playback; переключение/остановка просмотра освобождает tracks.
-Захват требует явного выбора, согласия на звук и актуальной channel epoch.
+Демонстрация автоматически запрашивает изображение и системный звук после
+выбора источника; захват требует актуальной channel epoch. Громкость просмотра
+регулируется отдельно в диапазоне 0–200%.
 
 ## 2026-10-07 — Честная семантика системного звука
 
@@ -67,9 +69,17 @@ password/broker bearer; media JWT привязаны к роли, комнате
 
 ## Проверка решений
 
-Настоящие Electron-клиенты через удалённый REALITY сервер прошли голос/чат
-и 20 циклов synthetic screen+audio. Самостоятельный broker прошёл race tests,
-TLS/TURN/ACL smoke; покрытие broker 92.8%, Go module 87.3% на момент переноса.
-Остаются реальный Windows 10 ↔ Ubuntu 26 game capture, глобальное hold PTT,
-целевые установщики и длительный нагрузочный прогон. Synthetic источники
-подтверждают транспорт, а не возможности конкретной ОС/игры.
+Набор — 186 unit tests: macOS 184 passed/2 platform skips. TS line coverage —
+93.10%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
+Linux DEB установлен.
+Windows helper прошёл регистрацию/освобождение F8 hook, Linux portal —
+семь DBus сценариев. Это не доказательство физического hold PTT.
+
+Два Electron клиента через обновлённый удалённый REALITY сервер прошли
+synthetic voice, чат и 20 циклов screen+audio. Самостоятельный broker прошёл
+race/vet/build и TLS/TURN/ACL smoke; broker coverage — 92.8% при переносе.
+
+Native Linux capture на DISPLAY/PulseAudio стенде подтвердил движущиеся кадры
+в пределах 720p и stereo PCM 440 Гц L / 880 Гц R через TURN/TCP.
+Остаются physical mic, игра Windows 10 ↔ Ubuntu 26, физические
+клавиши и часовой soak. Публикация выполняется после успешного релизного workflow.

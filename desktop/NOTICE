@@ -1,4 +1,4 @@
-Gul Electron preview includes React, React DOM, LiveKit JS, its generated
+Gul desktop includes React, React DOM, LiveKit JS, its generated
 protocol code, and the JavaScript packages listed in THIRD_PARTY_LICENSES.
 That directory includes license texts for the modules and font files actually
 included in the main, preload, and renderer bundles, with exact versions.

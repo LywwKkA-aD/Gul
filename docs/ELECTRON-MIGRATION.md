@@ -26,7 +26,7 @@ ICE. Путь фиксирован, redirect и прямой fallback запре
 | Голос | WebRTC mono48k, AEC/NS/AGC, input gain/уровень, AudioWorklet VAD |
 | Управление | Mute/deafen, устройства, gain 0–200% и local mute отдельно |
 | Общение | Каналы/roster, чат с историей в памяти по каналам, RTT |
-| Экран | In-app source selection, 720p30, stereo audio, watch/fullscreen/stop |
+| Экран | Выбор источника, automatic system audio, 720p30, viewer gain 0–200%, fullscreen/stop |
 | Сохранение | Адрес/ник и password только с согласием через protected safeStorage |
 | Приложение | Диагностика ZIP, GitHub update notice, tray/корректное закрытие |
 | Клавиши | Toggle; hold через платформенный backend с отказом при недоступности |
@@ -36,30 +36,40 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- Unit/security/lifecycle tests и порог покрытия 80% для проверяемых TS модулей.
-- Самостоятельный Go broker: race/vet/build; покрытие broker — 92.8%, всего module — 87.3%.
-- Реальный локальный HTTPS/TURN/REALITY smoke: certificate verification,
-  правильное назначение, неверный пароль и запрещённые IP/порты.
-- Два настоящих Electron клиента через удалённый сервер: голос в обе стороны,
-  чат, декодированное синтетическое видео, stereo audio и 20 циклов демонстрации.
+- 186 unit/security/lifecycle tests: на macOS 184 passed/2 platform skips;
+  TS line coverage — 93.10%.
+- Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
+  всего module — 87.3%.
+- Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,
+  Linux x64, macOS arm64/x64; Linux DEB действительно установлен.
+- Windows native F8 hook: регистрация/освобождение. Linux GlobalShortcuts
+  portal: семь DBus сценариев lifecycle/отказов.
+- Локальный HTTPS/TURN/REALITY smoke: certificate verification, назначение,
+  неверный пароль и запрещённые адреса/порты.
+- Два настоящих Electron клиента через обновлённый удалённый VPS: двусторонний
+  synthetic voice, чат, decoded video/stereo audio и 20 циклов демонстрации.
+- Native Linux X11/Xvfb/PulseAudio capture: movingframes, 720p bounds и
+  stereo PCM 440 Гц L / 880 Гц R через TURN/TCP.
 
-Последний пункт использует тестовые источники. Он не подтверждает native
-capture выбранной игры, аппаратный encoder или качество звука на целевых ПК.
+Synthetic источники проверяют медиатранспорт. Native hook registration/portal
+сценарии не проверяют физическое удержание клавиши в игре. Windows CI runner
+не заменяет runtime проверку компьютера с Windows 10.
 
 ## Проверки перед стабильной версией
 
-1. Windows 10 ↔ Ubuntu 26: реальные кадры/звук игры в обе стороны, stereo,
-   задержка, корректный stop/channel switch и отсутствие audio feedback.
-2. Windows native hold helper и Linux GlobalShortcuts portal: focus loss,
-   отпускание клавиши, отмена разрешения, занятое сочетание и cleanup.
-3. CI build/install/packaged smoke Windows/Linux/macOS и настоящий Linux
-   PulseAudio loopback capture; отдельно от synthetic media tests.
+1. Физический микрофон, качество AEC/NS и корректный выбор устройств на целевых ПК.
+2. Windows 10 ↔ Ubuntu 26/Wayland: реальная игра/звук в обе стороны, задержка,
+   stop/channel switch и отсутствие audio feedback.
+3. Физическое hold PTT: отпускание клавиши, focus loss и отсутствие
+   залипшего микрофона на целевых компьютерах.
 4. Часовая игровая сессия с измерением CPU/RAM и потерь сети.
 
-Windows 10/Linux loopback может включать Gul voices; отдельный вывод Gul или
-выключение incoming playback предотвращает возврат голосов. На Windows 11/macOS
-исключение собственного звука запрашивается и зависит от capability ОС.
-Ни работающий транспорт, ни успешный installer build не заменяют эти проверки.
+Демонстрация автоматически запрашивает изображение и системный звук;
+у зрителя отдельная громкость 0–200%. Windows 10/Linux whole-output loopback
+может включать голоса Gul. Выберите Gul отдельный вывод или отключите incoming
+playback, чтобы не возвращать голоса. Windows 11/macOS own-audio exclusion
+запрашивается и зависит от capability ОС/источника.
 
-Команды: [README](../README.md), deployment/E2E:
+Релизный workflow публикует материалы после успешных проверок;
+публикация GitHub релиза отдельно подтверждается его результатом. Команды: [README](../README.md), deployment/E2E:
 [deploy/livekit](../deploy/livekit/README.md), полный план: [PLAN](../PLAN.md).

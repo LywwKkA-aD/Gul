@@ -35,7 +35,10 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-React/OS adapters дополнительно проверяются Electron E2E/packaged smoke.
+Набор — 186 unit tests, на macOS 184 passed/2 platform skips; TS line coverage —
+93.10%. Installed packaged smoke
+с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
+Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
 
 ```sh
@@ -45,14 +48,17 @@ GUL_ELECTRON_STAND_DIR=/absolute/path/to/stand \
 ```
 
 Этот сценарий использует два Electron клиента, synthetic голос, видео и stereo
-screen audio. Native game capture, системный loopback и удержание клавиши на
-Windows 10/Ubuntu 26 требуют отдельных платформенных проверок.
+screen audio; он прошёл через обновлённый VPS с 20 циклами демонстрации.
+Native Linux X11/Xvfb/PulseAudio capture подтвердил movingframes, 720p bounds
+и stereo PCM 440 Гц L / 880 Гц R через TURN/TCP. Physical mic, игра Windows 10 ↔ Ubuntu 26,
+физическое удержание клавиши, Wayland на Ubuntu 26 и часовой soak требуют отдельных проверок.
 Для packaged smoke задайте `GUL_PACKAGED_APP_PATH` и запустите
 `npm run test:integration -- e2e/packaged.spec.ts`.
 
 Секреты принадлежат main; renderer sandboxed и получает только media grants.
 Saved password использует защищённый safeStorage после явного согласия;
 диагностика не содержит credentials, профили, IP или чат. Screen capture
-запрашивает изображение и системный звук вместе после выбора источника; watch разрешения
+автоматически запрашивает изображение и системный звук вместе после выбора
+источника, viewer gain 0–200%; watch разрешения
 на местный capture не требует. Ограничения loopback и статус проверок
 описаны в root README.
