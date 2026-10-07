@@ -1,6 +1,6 @@
 # Gul desktop
 
-Единственный клиент Gul **0.8.0-alpha.3**: Electron, TypeScript, React и
+Единственный клиент Gul **0.8.0-alpha.4**: Electron, TypeScript, React и
 LiveKit JS. Chromium владеет голосом, экраном и playback; официальный
 Xray v26.3.27 поставляется отдельным executable. Go клиент отсутствует;
 серверный broker находится в `../server/`.
@@ -22,8 +22,10 @@ npm run dev
 
 Xray скачивается по закреплённому archive SHA-256; executable не хранится
 в Git. `npm run pack` создаёт распакованное приложение; `npm run dist -- --publish never`
-собирает установщик текущей платформы. Native Windows hold helper собирается
-`node scripts/build-ptt.mjs` на Windows x64 с MSVC. На Linux установите
+собирает установщик текущей платформы. Windows x64 с MSVC собирает оба
+помощника: `npm run build:ptt` и `npm run build:audio`. WASAPI helper проверяет
+process loopback и исключает дерево процессов Gul; без поддержки API доступно
+только видео, без общего микса. На Linux установите
 `g++ pkg-config libglib2.0-dev libpulse-dev` и перед запуском/упаковкой выполните
 `npm run build:ptt` и `npm run build:audio`. Последний помощник захватывает звуки
 приложений отдельно от Gul через локальный PulseAudio/PipeWire socket.
@@ -41,8 +43,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Набор — 260 unit tests, на macOS 258 passed/2 platform skips; TS line coverage —
-90.84%. Installed packaged smoke
+Локально 339 tests: 337 passed/2 platform skips на macOS. TS coverage:
+89.57% строк, 90.18% ветвей, 88.67% функций. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
@@ -61,6 +63,21 @@ Native Linux X11/Xvfb/PulseAudio capture подтвердил movingframes, 720p
 `e2e/sdp-sdk.spec.ts` использует закреплённый LiveKit PCTransport и настоящий
 Chromium; `e2e/sdp-bundle.live.spec.ts` проверяет одиночные повторные запуски,
 ответы SFU, позднего третьего зрителя и повторный вход без SDK fallback.
+Новые проверки: `e2e/voice-noise.live.spec.ts` сравнивает записанную речь с
+синтетическим шумом при выключенном/включённом шумодаве через два клиента;
+`e2e/windows-screen-pcm.spec.ts` проверяет stereo PCM bridge/worklet и очистку
+без записи личного рабочего стола. `e2e/capture-picker-ui.spec.ts` использует
+только синтетические источники. Native picker test запускается только на Linux
+в отдельном рабочем столе с `GUL_ELECTRON_ISOLATED_DESKTOP=1`.
+
+Windows `npm run build:audio` компилирует protocol/queue/quality tests и probe
+исключения собственного процесса. При отсутствии render endpoint runner
+пропускает аудиопробу, поэтому успешный CI не доказывает захват на Windows 10.
+RNNoise WASM 0.2.1 закреплён в lockfile и включён в voice worklet, исполняется
+без сети; PCM микрофона не передаётся через IPC. Голосовой AudioContext —
+48 kHz, обработанный микрофон mono; screen audio остаётся stereo без DSP.
+Алгоритмическая задержка RNNoise с адаптером render blocks — около 30 мс.
+
 Physical mic, игра Windows 10 ↔ Ubuntu 26,
 физическое удержание клавиши, Wayland на Ubuntu 26 и часовой soak требуют отдельных проверок.
 Для packaged smoke задайте `GUL_PACKAGED_APP_PATH` и запустите

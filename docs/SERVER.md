@@ -1,6 +1,6 @@
 # Сервер Gul
 
-Клиент 0.8.0-alpha.3 работает с LiveKit через встроенный VLESS + REALITY.
+Клиент 0.8.0-alpha.4 работает с LiveKit через встроенный VLESS + REALITY.
 Go broker выделен в самостоятельный `server/`; старые голосовые серверы и
 транспортные эксперименты текущей версии не нужны. Подробная установка,
 конфиги systemd/firewall и локальный fixture: [deploy/livekit](../deploy/livekit/README.md).
@@ -69,7 +69,7 @@ Firewall защищает внутренние plaintext/admin/TURN порты �
 На последней проверке серверные службы active, перезапусков и OOM нет;
 HTTPS healthz прошёл с проверкой TLS. Server module coverage — 87.3%; broker CI прошёл. Native Linux capture
 на DISPLAY/PulseAudio стенде подтвердил movingframes в пределах 720p и stereo
-PCM 440 Гц L / 880 Гц R через TURN/TCP. Physical mic, игра Windows 10 ↔ Ubuntu 26,
+PCM 440 Гц L / 660 Гц R через TURN/TCP. Physical mic, игра Windows 10 ↔ Ubuntu 26,
 физическое PTT и часовой soak остаются отдельными проверками.
 Контейнеры локального stand останавливаются только по его inventory;
 приватные файлы после остановки сохраняются.

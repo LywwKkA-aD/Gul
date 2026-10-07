@@ -1,6 +1,6 @@
 # Работа с Gul
 
-Текущий клиент **0.8.0-alpha.1**: Electron + TypeScript + React + LiveKit JS.
+Текущий клиент **0.8.0-alpha.4**: Electron + TypeScript + React + LiveKit JS.
 Официальный Xray v26.3.27 встроен отдельным executable. Go находится только в
 `server/` и обслуживает broker API. Legacy клиент и эксперименты удалены.
 
@@ -45,8 +45,9 @@ OpenSSL в PATH для transport tests. Go версия закреплена в 
   сырые сетевые логи или приватные fixture configs.
 - Renderer sandbox/contextIsolation; проверять IPC отправителя, входы,
   media grants и эпохи. Не добавлять прямой сетевой fallback.
-- Захват и PCM принадлежат Chromium; не передавать кадры/аудио через JSON IPC.
-  Voice DSP не применяется к stereo screen audio.
+- Chromium владеет кодированием и playback; native screen PCM приходит через
+  приватный Linux source или ограниченный Windows WebSocket, без JSON IPC.
+  Voice DSP/RNNoise не применяется к stereo screen audio.
 - Password storage только по явному согласию через защищённый safeStorage;
   Linux basic_text запрещён. Не записывать пароль в localStorage/settings.
 - Смена канала/выход должны остановить capture и закрыть старые потоки;
@@ -58,14 +59,11 @@ OpenSSL в PATH для transport tests. Go версия закреплена в 
 - Код/идентификаторы/коммиты — английские, общение/пользовательские тексты —
   русские. Небольшие модули, максимум 800 строк, без эмодзи.
 
-Windows 10/Linux system audio может включать Gul voices; UI сообщает об этом.
-Own-audio exclusion на Windows 11/macOS — запрос к платформе, не гарантия.
-Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
-Физическое hold PTT требует проверки; toggle служит доступным режимом.
-Набор — 186 unit tests, на macOS 184 passed/2 platform skips; TS line coverage —
-93.10%, server — 87.3%. Все четыре packaged CI цели прошли sandbox smoke, Linux
-DEB установлен. Native Linux capture проверен на DISPLAY/PulseAudio: movingframes,
-720p bounds, stereo PCM 440 Гц L / 880 Гц R через TURN/TCP. Physical mic, Windows 10 ↔ Ubuntu 26
-game capture, физическое hold PTT, часовой soak и публикацию проверять отдельно.
+Linux и поддерживаемый Windows process loopback исключают Gul voices.
+При недоступном Windows API не использовать общий output mix: только видео.
+macOS exclusion зависит от ОС/источника. Native capture capability проверяется
+по фактическому backend, а не номеру ОС. Физический mic/игра Windows 10 ↔ Ubuntu 26,
+Wayland и часовой soak проверяются отдельно. Synthetic Windows PCM bridge
+и runner без render endpoint не доказывают native Windows 10 audio exclusion.
 GitHub release публикует CI после проверок. Коммиты — `[feat]`, `[fix]`, `[ref]`,
 `[docs]`, `[test]`, `[updt]`, `[del]`; перед commit выполнить подходящие проверки.

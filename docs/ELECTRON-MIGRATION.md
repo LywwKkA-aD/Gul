@@ -1,6 +1,6 @@
 # Миграция Gul на Electron
 
-**0.8.0-alpha.3:** миграция исходников завершена. `desktop/` — единственный
+**0.8.0-alpha.4:** миграция исходников завершена. `desktop/` — единственный
 клиент на Electron/TypeScript/React/LiveKit JS. `server/` — самостоятельный
 Go broker. Legacy client/services/frontend, native Go DSP, старые lab/deploy
 и сборочные файлы удалены. Сохранены иконки, нужные attribution и
@@ -23,7 +23,7 @@ ICE. Путь фиксирован, redirect и прямой fallback запре
 
 | Область | Реализация |
 |---|---|
-| Голос | WebRTC mono48k, AEC/NS/AGC, input gain/уровень, AudioWorklet VAD |
+| Голос | Mono48k, WebRTC AEC/AGC, RNNoise, input gain/уровень, AudioWorklet VAD |
 | Управление | Mute/deafen, устройства, gain 0–200% и local mute отдельно |
 | Общение | Каналы/roster, чат с историей в памяти по каналам, RTT |
 | Экран | Выбор источника, automatic system audio, 720p30, viewer gain 0–200%, fullscreen/stop |
@@ -36,8 +36,8 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- 260 unit/security/lifecycle tests: на macOS 258 passed/2 platform skips;
-  TS line coverage — 90.84%.
+- 339 unit/security/lifecycle tests: локально macOS 337 passed/2 platform skips;
+  покрытие TS строк/ветвей/функций — 89.57%/90.18%/88.67%, порог 80%.
 - Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
   всего module — 87.3%.
 - Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,
@@ -67,10 +67,16 @@ Synthetic источники проверяют медиатранспорт. Na
 
 Демонстрация автоматически запрашивает изображение и системный звук;
 у зрителя отдельная громкость 0–200%. Linux helper исключает Gul из захвата,
-сохраняя обычный вывод. Windows 10
-whole-output loopback может включать голоса Gul: там отдельный вывод или
-отключение incoming playback остаются обходными решениями. Windows 11/macOS
-own-audio exclusion запрашивается и зависит от capability ОС/источника.
+сохраняя обычный вывод. Windows alpha.4 использует встроенный WASAPI helper
+с исключением дерева Gul и проверкой поддержки API. PCM идёт по ограниченному
+локальному WebSocket, разрешённому только текущему окну/захвату; через IPC
+передаются лишь параметры разрешения. При недоступности API передаётся только
+видео. На macOS own-audio exclusion запрашивается и зависит от источника.
+
+Alpha.4 добавляет RNNoise в голосовой AudioWorklet и реальное переподключение
+capture при изменении AEC/NS/AGC. Отмена, mute/PTT и поздние ошибки процессора
+не открывают необработанный микрофон. Новый picker внутри Gul показывает
+превью и подтверждение; Linux Wayland сохраняет системный portal.
 
 Релизный workflow публикует материалы после успешных проверок;
 публикация GitHub релиза отдельно подтверждается его результатом. Команды: [README](../README.md), deployment/E2E:
