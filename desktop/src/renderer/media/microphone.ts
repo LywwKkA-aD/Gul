@@ -21,6 +21,20 @@ export interface MicrophoneDependencies {
   readonly warning: (message: string, muted: boolean) => void;
   readonly reading: (reading: MicReading) => void;
 }
+function stopInputs(inputs: readonly MediaStreamTrack[]): void {
+  for (const input of inputs) if (input.readyState !== 'ended') input.stop();
+}
+function stopCapture(track: LocalAudioTrack): void {
+  // SDK sender replacement can still reference its prior raw track while the
+  // public stream already contains a recapture awaiting processor/sender adoption.
+  const inputs = track.mediaStream?.getTracks() ?? [];
+  track.stop();
+  stopInputs(inputs);
+}
+interface CapturedInput {
+  readonly settings: VoiceSettings;
+  readonly device: string;
+}
 
 /** Local audio stays fail-closed through capture, processor setup, device restart and room changes. */
 export class Microphone {
@@ -64,20 +78,20 @@ export class Microphone {
     let track: LocalAudioTrack | undefined;
     let processor: VoiceProcessorHandle | undefined;
     let published = false;
-    let capturedSettings = this.preferences;
+    let capturedInput: CapturedInput = { settings: this.preferences, device: device ?? 'default' };
     try {
-      track = await (this.dependencies.capture ?? microphone)(device, capturedSettings);
+      track = await (this.dependencies.capture ?? microphone)(device, capturedInput.settings);
       if (!valid()) {
-        track.stop();
+        stopCapture(track);
         return;
       }
       this.track = track;
       this.ready = false;
       track.mediaStreamTrack.enabled = false;
       await track.mute();
-      capturedSettings = await this.reconcile(track, capturedSettings, valid);
+      capturedInput = await this.reconcile(track, capturedInput, valid);
       if (!valid()) {
-        track.stop();
+        stopCapture(track);
         return;
       }
       await room.localParticipant.publishTrack(track, {
@@ -89,7 +103,7 @@ export class Microphone {
       });
       published = true;
       if (!valid()) {
-        track.stop();
+        stopCapture(track);
         await unpublish(room, track);
         return;
       }
@@ -125,16 +139,16 @@ export class Microphone {
       }
       if (!valid()) {
         await processor?.destroy();
-        track.stop();
+        stopCapture(track);
         await unpublish(room, track);
         return;
       }
       if (!processor && (this.preferences.mode !== 'continuous' || this.preferences.inputGain !== 1))
         throw new Error();
       if (processor?.failed) throw new Error();
-      capturedSettings = await this.reconcile(track, capturedSettings, valid, processor);
+      await this.reconcile(track, capturedInput, valid, processor);
       if (!valid()) {
-        track.stop();
+        stopCapture(track);
         await processor?.destroy();
         await unpublish(room, track);
         return;
@@ -148,7 +162,7 @@ export class Microphone {
       await this.synchronize(this.state);
     } catch {
       await processor?.destroy();
-      track?.stop();
+      if (track) stopCapture(track);
       if (published && track) await unpublish(room, track);
       if (valid()) {
         this.track = undefined;
@@ -212,15 +226,16 @@ export class Microphone {
         this.processor?.update(next);
         await track.restartTrack(voiceCaptureOptions(next, this.device ?? 'default'));
         if (this.track !== track || !this.ready) {
-          track.stop();
+          stopCapture(track);
           return;
         }
       }
       if (this.settingsRevision !== revision) return;
       if (!restart) this.processor?.update(next);
     } catch {
+      if (restart && track) stopInputs(track.mediaStream?.getTracks() ?? []);
       if (restart && track && this.track !== track) {
-        track.stop();
+        stopCapture(track);
         return;
       }
       if (this.settingsRevision === revision) {
@@ -229,7 +244,7 @@ export class Microphone {
         if (restart && track && this.track === track && this.ready) {
           try {
             await track.restartTrack(voiceCaptureOptions(previous, this.device ?? 'default'));
-            if (this.track !== track) track.stop();
+            if (this.track !== track) stopCapture(track);
           } catch {
             if (this.track === track) {
               await this.stop();
@@ -253,21 +268,22 @@ export class Microphone {
   }
   private async reconcile(
     track: LocalAudioTrack,
-    captured: VoiceSettings,
+    captured: CapturedInput,
     current: () => boolean,
     processor?: VoiceProcessorHandle,
-  ): Promise<VoiceSettings> {
+  ): Promise<CapturedInput> {
     while (
       current() &&
-      (captured.echoCancellation !== this.preferences.echoCancellation ||
-        captured.noiseSuppression !== this.preferences.noiseSuppression ||
-        captured.autoGainControl !== this.preferences.autoGainControl)
+      (captured.settings.echoCancellation !== this.preferences.echoCancellation ||
+        captured.settings.noiseSuppression !== this.preferences.noiseSuppression ||
+        captured.settings.autoGainControl !== this.preferences.autoGainControl ||
+        captured.device !== (this.device ?? 'default'))
     ) {
-      const next = this.preferences;
-      processor?.update(next);
-      await track.restartTrack(voiceCaptureOptions(next, this.device ?? 'default'));
+      const next: CapturedInput = { settings: this.preferences, device: this.device ?? 'default' };
+      processor?.update(next.settings);
+      await track.restartTrack(voiceCaptureOptions(next.settings, next.device));
       if (!current()) {
-        track.stop();
+        stopCapture(track);
         return next;
       }
       captured = next;
@@ -282,7 +298,7 @@ export class Microphone {
     this.processor = undefined;
     this.ready = false;
     this.opening = false;
-    track?.stop();
+    if (track) stopCapture(track);
     await processor?.destroy();
   }
 }

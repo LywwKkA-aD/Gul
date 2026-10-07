@@ -22,6 +22,7 @@ export class VoiceProcessor
   readonly name = 'gul-voice';
   processedTrack?: MediaStreamTrack;
   private source?: MediaStreamAudioSourceNode;
+  private adoptedInput?: MediaStreamTrack;
   private node?: AudioWorkletNode;
   private generation = 0;
   private settings: VoiceSettings;
@@ -131,13 +132,22 @@ export class VoiceProcessor
       this.processedTrack = output;
       source.connect(node);
       node.connect(destination);
+      this.adoptedInput = options.track;
     } catch {
       if (this.generation === generation) await this.destroy();
       throw new Error('Не удалось запустить обработку микрофона.');
     }
   }
   async restart(options: AudioProcessorOptions): Promise<void> {
-    await this.init(options);
+    const previous = this.adoptedInput;
+    try {
+      await this.init(options);
+    } catch {
+      // LiveKit adopts a recaptured raw track only after processor.restart resolves.
+      // Its stop() still references the prior raw track when this handshake fails.
+      if (options.track !== previous) options.track.stop();
+      throw new Error('Не удалось запустить обработку микрофона.');
+    }
   }
   update = (settings: VoiceSettings): void => {
     this.settings = voiceSettings(this.settings, settings);
@@ -162,6 +172,7 @@ export class VoiceProcessor
     const output = this.processedTrack;
     this.node = undefined;
     this.source = undefined;
+    this.adoptedInput = undefined;
     this.processedTrack = undefined;
     if (node) {
       node.onprocessorerror = null;

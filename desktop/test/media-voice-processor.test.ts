@@ -4,6 +4,7 @@ import { VoiceProcessor } from '../src/renderer/media/voice-processor.ts';
 import { defaultVoiceSettings } from '../src/renderer/media/voice-gate.ts';
 
 function harness(module?: Promise<void>, ready = true) {
+  let automaticReady = ready;
   const output = {
     enabled: true,
     stops: 0,
@@ -62,7 +63,7 @@ function harness(module?: Promise<void>, ready = true) {
   const processor = new VoiceProcessor(defaultVoiceSettings, (reading) => readings.push(reading), {
     node: () => {
       nodes++;
-      if (ready)
+      if (automaticReady)
         queueMicrotask(() =>
           port.onmessage?.({ data: { type: 'ready', neuralNoise: true, sampleRate: 48000 } }),
         );
@@ -87,6 +88,9 @@ function harness(module?: Promise<void>, ready = true) {
     modules: () => modules,
     nodes: () => nodes,
     failures: () => failures,
+    pauseReadiness: () => {
+      automaticReady = false;
+    },
   };
 }
 test('processor uses the SDK context, preserves muted track and destroys output without touching raw capture', async () => {
@@ -174,4 +178,58 @@ test('SDK device restart omitting audioContext retains shared context and explic
   processor.setMuted(false);
   assert.equal(output.enabled, true);
   await processor.destroy();
+});
+test('cancelled or failed SDK restart stops the new raw capture that the SDK has not adopted yet', async () => {
+  for (const failure of ['cancel', 'error']) {
+    const live = harness();
+    await live.processor.init(live.options);
+    live.pauseReadiness();
+    let stops = 0;
+    const raw = {
+      enabled: false,
+      stop() {
+        stops++;
+      },
+    };
+    const restarting = live.processor.restart({ ...live.options, track: raw });
+    const rejected = assert.rejects(restarting, /обработк/iu);
+    await new Promise((resolve) => setImmediate(resolve));
+    if (failure === 'cancel') await live.processor.destroy();
+    else (live.node as any).onprocessorerror();
+    await rejected;
+    assert.equal(stops, 1, failure);
+  }
+});
+test('initial processor failure preserves the raw Chromium fallback, and successful restart leaves new raw live', async () => {
+  const failing = harness(undefined, false);
+  let stops = 0;
+  const raw = {
+    enabled: false,
+    stop() {
+      stops++;
+    },
+  };
+  const opening = failing.processor.init({ ...failing.options, track: raw });
+  const rejected = assert.rejects(opening, /обработк/iu);
+  await new Promise((resolve) => setImmediate(resolve));
+  (failing.node as any).onprocessorerror();
+  await rejected;
+  assert.equal(stops, 0);
+  const live = harness();
+  await live.processor.init({ ...live.options, track: raw });
+  const newRaw = {
+    enabled: true,
+    stop() {
+      stops++;
+    },
+  };
+  await live.processor.restart({ ...live.options, track: newRaw });
+  assert.equal(stops, 0);
+  live.pauseReadiness();
+  const restarting = live.processor.restart({ ...live.options, track: newRaw });
+  const failed = assert.rejects(restarting, /обработк/iu);
+  await new Promise((resolve) => setImmediate(resolve));
+  (live.node as any).onprocessorerror();
+  await failed;
+  assert.equal(stops, 0, 'A failed restart of the already adopted raw must preserve fallback.');
 });

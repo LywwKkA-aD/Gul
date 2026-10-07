@@ -62,6 +62,7 @@ export interface Dependencies {
     track: LocalAudioTrack,
     settings: VoiceSettings,
     reading: (reading: Pick<VoiceReading, 'level' | 'active'>) => void,
+    failure: () => void,
   ) => Promise<VoiceProcessorHandle | undefined>;
   readonly captureFactory?: (withAudio: boolean) => Promise<ScreenCapture>;
   readonly audioElementFactory?: () => HTMLAudioElement;

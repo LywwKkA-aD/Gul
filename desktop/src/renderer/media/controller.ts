@@ -24,6 +24,7 @@ import { createRoom, disconnect, unpublish } from './rooms.ts';
 import { Playback } from './playback.ts';
 import { Devices } from './devices.ts';
 import { Microphone } from './microphone.ts';
+import { microphoneReading } from './microphone-reading.ts';
 import type { VoiceSettings } from './voice-gate.ts';
 import { screenPublishOptions } from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
@@ -78,15 +79,17 @@ export class MediaController {
     this.mic = new Microphone({
       capture: dependencies.micFactory,
       processor: dependencies.voiceProcessorFactory,
-      warning: (warning, muted) => this.update({ warning, ...(muted ? { muted: true } : {}) }),
-      reading: ({ level, active, available }) => {
-        const micLevel = Math.round(level * 1000) / 1000;
-        if (
-          this.snapshot.micLevel !== micLevel ||
-          this.snapshot.voiceActive !== active ||
-          this.snapshot.voiceProcessingAvailable !== available
-        )
-          this.update({ micLevel, voiceActive: active, voiceProcessingAvailable: available });
+      warning: (warning, muted) => {
+        if (muted) {
+          ++this.audioRevision;
+          this.preferences = Object.freeze({ ...this.preferences, muted: true });
+        }
+        this.update({ warning, ...(muted ? this.preferences : {}) });
+        if (muted) this.applyAudio();
+      },
+      reading: (reading) => {
+        const patch = microphoneReading(reading, this.snapshot);
+        if (patch) this.update(patch);
       },
     });
     setLogLevel(LogLevel.silent);

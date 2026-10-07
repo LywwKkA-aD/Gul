@@ -222,6 +222,32 @@ test('preferences changed during capture reconcile raw flags before publication 
   assert.deepEqual((track.constraints[0] as any).deviceId, { exact: 'default' });
   await microphone.stop();
 });
+test('device changes during initial capture reconcile before publication and while processing opens', async () => {
+  let captured!: (value: any) => void;
+  let processing!: (value: any) => void;
+  const capture = new Promise<any>((resolve) => {
+    captured = resolve;
+  });
+  const processor = new Promise<any>((resolve) => {
+    processing = resolve;
+  });
+  const fixture = harness({ capture: () => capture, processor: () => processor });
+  fixture.room.localParticipant.publishTrack = async () => {
+    assert.deepEqual((fixture.track.constraints.at(-1) as any).deviceId, { exact: 'second-input' });
+    assert.equal(fixture.track.mediaStreamTrack.enabled, false);
+  };
+  const opening = fixture.microphone.start(fixture.room as any, 'first-input', () => true);
+  fixture.microphone.useDevice('second-input');
+  captured(fixture.track);
+  await new Promise((resolve) => setImmediate(resolve));
+  fixture.microphone.useDevice('third-input');
+  processing(fixture.processor);
+  await opening;
+  assert.equal(fixture.track.constraints.length, 2);
+  assert.deepEqual((fixture.track.constraints.at(-1) as any).deviceId, { exact: 'third-input' });
+  assert.equal(fixture.track.mediaStreamTrack.enabled, true);
+  await fixture.microphone.stop();
+});
 test('newer gain patch cannot skip restoring a failed raw processing change', async () => {
   const { microphone, track, room } = harness();
   await microphone.start(room as any, undefined, () => true);
@@ -297,4 +323,52 @@ test('late audio-thread failure closes capture, marks processing unavailable and
   assert.equal(fixture.microphone.processingAvailable, false);
   assert.equal(fixture.warnings.length, 1);
   assert.deepEqual(fixture.readings.at(-1), { level: 0, active: false, available: false });
+});
+test('leaving during SDK sender replacement closes its pending public raw stream before adoption', async () => {
+  const { microphone, track, room } = harness();
+  await microphone.start(room as any, undefined, () => true);
+  let reject!: (error: Error) => void;
+  const pendingRaw = {
+    readyState: 'live',
+    stop() {
+      this.readyState = 'ended';
+    },
+  };
+  track.restartTrack = async () => {
+    (track as any).mediaStream = { getTracks: () => [pendingRaw] };
+    // The processor is ready, but sender.replaceTrack has not adopted this raw.
+    await new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
+  };
+  const changing = microphone.configure({ noiseSuppression: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  await microphone.stop();
+  assert.equal(pendingRaw.readyState, 'ended');
+  reject(new Error('Sender closed.'));
+  await changing;
+  assert.equal(microphone.captured, false);
+});
+test('a rejected SDK sender replacement closes pending raw before rolling capture preferences back', async () => {
+  const { microphone, track, room } = harness();
+  await microphone.start(room as any, undefined, () => true);
+  const pendingRaw = {
+    readyState: 'live',
+    stop() {
+      this.readyState = 'ended';
+    },
+  };
+  let attempts = 0;
+  track.restartTrack = async () => {
+    if (++attempts === 1) {
+      (track as any).mediaStream = { getTracks: () => [pendingRaw] };
+      throw new Error('Sender replacement failed.');
+    }
+    assert.equal(pendingRaw.readyState, 'ended', 'Rollback must not orphan the failed recapture.');
+  };
+  await assert.rejects(microphone.configure({ noiseSuppression: false }), /настройк/iu);
+  assert.equal(attempts, 2);
+  assert.equal(pendingRaw.readyState, 'ended');
+  assert.equal(microphone.settings.noiseSuppression, true);
+  await microphone.stop();
 });
