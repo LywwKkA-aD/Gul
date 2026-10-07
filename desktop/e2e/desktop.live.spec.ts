@@ -230,7 +230,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
       // with the default noise settings is verified in voice-noise.live.spec.ts.
       await page.getByRole('button', { name: 'Настройки', exact: true }).click();
       const suppression = page.getByRole('checkbox', { name: 'Шумоподавление', exact: true });
-      await suppression.uncheck();
+      if (await suppression.isChecked()) await suppression.click();
       await expect(suppression).not.toBeChecked();
       await expect(suppression).toBeEnabled();
       await page.keyboard.press('Escape');
