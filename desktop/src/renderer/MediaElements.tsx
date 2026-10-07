@@ -49,6 +49,7 @@ export function Video({ track, local }: { track: Track; local: boolean }) {
 
 export function Icon({
   name,
+  off = false,
 }: {
   name:
     | 'mic'
@@ -62,6 +63,7 @@ export function Icon({
     | 'expand'
     | 'collapse'
     | 'close';
+  off?: boolean;
 }) {
   const paths = {
     close: <path d="M6 6l12 12M18 6L6 18" />,
@@ -134,6 +136,7 @@ export function Icon({
       aria-hidden="true"
     >
       {paths[name]}
+      {off && <path className="icon-slash" d="M3 21 21 3" strokeWidth="2" />}
     </svg>
   );
 }

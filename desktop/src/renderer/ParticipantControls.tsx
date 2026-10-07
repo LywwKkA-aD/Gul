@@ -39,17 +39,17 @@ export function ParticipantRow({
       </span>
       <span className="member-states">
         {(user.selfMute || user.selfDeaf) && (
-          <span title="Микрофон выключен">
-            <Icon name="mic" />
+          <span role="img" aria-label="Микрофон выключен" title="Микрофон выключен">
+            <Icon name="mic" off />
           </span>
         )}
         {user.selfDeaf && (
-          <span title="Звук выключен">
-            <Icon name="deaf" />
+          <span role="img" aria-label="Звук выключен" title="Звук выключен">
+            <Icon name="deaf" off />
           </span>
         )}
         {locallyMuted && (
-          <span title="Вы выключили этого участника">
+          <span role="img" aria-label="Вы выключили этого участника" title="Вы выключили этого участника">
             <Icon name="volumeOff" />
           </span>
         )}

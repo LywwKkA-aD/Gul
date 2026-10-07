@@ -11,6 +11,7 @@ import type {
 import { MediaController } from './media/controller.ts';
 import type { ChatEntry } from './media/model.ts';
 import { Icon } from './MediaElements.tsx';
+import { GulLogo } from './GulLogo.tsx';
 import { ChannelList, flattenChannels } from './ChannelList.tsx';
 import { ChatPanel } from './ChatPanel.tsx';
 import { EphemeralChatHistory } from './chat-history.ts';
@@ -420,7 +421,7 @@ export function App() {
         <div className="workspace">
           <aside className="sidebar">
             <div className="server-heading">
-              <div className="server-icon">G</div>
+              <GulLogo className="server-icon" />
               <div>
                 <strong>Наш сервер</strong>
                 <small className="subtle">{snapshot.state === 'connected' ? 'В сети' : 'Подключение…'}</small>
@@ -479,8 +480,7 @@ export function App() {
                     )
                   }
                 >
-                  <Icon name="mic" />
-                  {micOff && <span className="slash" />}
+                  <Icon name="mic" off={micOff} />
                 </button>
                 <button
                   className={`icon-button ${snapshot.deafened ? 'danger' : ''}`}
@@ -490,8 +490,7 @@ export function App() {
                     void run(() => media.setAudio({ muted: snapshot.muted, deafened: !snapshot.deafened }))
                   }
                 >
-                  <Icon name="deaf" />
-                  {snapshot.deafened && <span className="slash" />}
+                  <Icon name="deaf" off={snapshot.deafened} />
                 </button>
                 <button
                   className={`icon-button ${snapshot.sharing ? 'active' : ''}`}

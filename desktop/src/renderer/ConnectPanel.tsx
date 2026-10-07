@@ -1,6 +1,7 @@
 import type { SavedServerInfo, ServerList } from '../shared/contracts.ts';
 import { SavedServers } from './SavedServers.tsx';
 import { selectedSavedServer, savedPasswordMessage } from './saved-login.ts';
+import { GulLogo } from './GulLogo.tsx';
 
 export function ConnectPanel({
   address,
@@ -43,7 +44,7 @@ export function ConnectPanel({
   return (
     <main className="connect-page">
       <section className="connect-card">
-        <div className="brand-symbol">g</div>
+        <GulLogo className="brand-symbol" />
         <h1>Заходи. Общайся.</h1>
         <p className="subtle">Голос, игры и экран — вместе.</p>
         <form

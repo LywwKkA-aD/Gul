@@ -83,6 +83,11 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
       .toBe(true);
     const page = await app.firstWindow();
     await expect(page.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
+    const logo = page.getByRole('img', { name: 'Gul', exact: true });
+    await expect(logo).toBeVisible();
+    await expect
+      .poll(() => logo.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 1024))
+      .toBe(true);
     const boundary = await page.evaluate(() => ({
       node: typeof (window as unknown as { require?: unknown }).require,
       api: typeof window.gul?.connect,

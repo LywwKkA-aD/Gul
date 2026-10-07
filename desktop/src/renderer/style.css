@@ -154,15 +154,8 @@ p {
 .brand-symbol {
   height: 56px;
   width: 56px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-lg);
-  background: var(--accent-weak);
-  color: var(--accent);
-  font-size: 38px;
-  font-family: var(--font-display);
-  font-weight: 500;
+  display: block;
+  object-fit: contain;
   margin-bottom: var(--s-6);
 }
 .connect-card h1 {

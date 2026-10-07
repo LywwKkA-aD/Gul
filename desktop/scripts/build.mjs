@@ -42,7 +42,7 @@ const bundles = await Promise.all([
     target: 'chrome152',
     minify: true,
     outfile: 'dist/renderer/app.js',
-    loader: { '.woff2': 'file', '.woff': 'file' },
+    loader: { '.woff2': 'file', '.woff': 'file', '.png': 'file' },
     define: { 'process.env.NODE_ENV': '"production"' },
   }),
 ]);
