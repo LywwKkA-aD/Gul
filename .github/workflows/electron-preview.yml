@@ -1,0 +1,82 @@
+name: Electron preview
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/electron-preview.yml']
+  push:
+    branches: ['codex/electron-desktop']
+    paths: ['desktop/**', '.github/workflows/electron-preview.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Electron (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: '--linux deb --x64'
+            executable: 'linux-unpacked/gul-desktop'
+          - os: windows-2025
+            target: '--win nsis zip --x64'
+            executable: 'win-unpacked/Gul.exe'
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install pinned dependencies
+        run: npm ci
+      - name: Check TypeScript, formatting and coverage
+        run: |
+          npm run check
+          npm run format:check
+          npm run test:coverage
+          npm audit --audit-level=moderate
+      - name: Fetch verified native Xray
+        run: npm run vendor:xray
+      - name: Build installers without publishing
+        run: npm run dist -- ${{ matrix.target }} --publish never
+      - name: Prepare Linux sandbox helper for unpackaged smoke test
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root artifacts/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 artifacts/linux-unpacked/chrome-sandbox
+      - name: Smoke-test packaged Linux app
+        if: runner.os == 'Linux'
+        env:
+          GUL_PACKAGED_APP_PATH: ${{ github.workspace }}/desktop/artifacts/${{ matrix.executable }}
+        run: xvfb-run -a npm run test:integration -- e2e/packaged.spec.ts
+      - name: Smoke-test packaged Windows app
+        if: runner.os == 'Windows'
+        env:
+          GUL_PACKAGED_APP_PATH: ${{ github.workspace }}/desktop/artifacts/${{ matrix.executable }}
+        run: npm run test:integration -- e2e/packaged.spec.ts
+      - name: Upload preview installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gul-electron-${{ matrix.os }}
+          path: |
+            desktop/artifacts/*.deb
+            desktop/artifacts/*.exe
+            desktop/artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 7

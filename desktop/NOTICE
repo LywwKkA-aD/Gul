@@ -1,0 +1,15 @@
+Gul Electron preview includes React, React DOM, LiveKit JS, its generated
+protocol code, and the JavaScript packages listed in THIRD_PARTY_LICENSES.
+That directory includes license texts for the modules and font files actually
+included in the main, preload, and renderer bundles, with exact versions.
+
+IBM Plex Sans, IBM Plex Mono and Martian Mono use SIL Open Font License 1.1.
+Fonts are bundled locally and are not fetched while the application runs.
+
+Electron includes Chromium and Node.js. Their notices are distributed with
+the Electron framework. Xray is a separate bundled executable; its license
+and checked binary digest are distributed in the xray resource directory.
+
+LiveKit server, TURN and the Gul session broker run separately and are not
+embedded in this desktop application. The original Gul application license
+is included as LICENSE.

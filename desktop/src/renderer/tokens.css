@@ -1,0 +1,73 @@
+/* Gul's original palette, shared by the new desktop layout. */
+:root {
+  --bg-0: #eef0f4;
+  --bg-1: #ffffff;
+  --bg-2: #ffffff;
+  --bg-3: #f4f5f8;
+  --bg-4: #e6e9ef;
+  --line: #d3d8e0;
+  --line-soft: #e5e8ee;
+  --text-1: #262a33;
+  --text-2: #545c6b;
+  --text-3: #656c7c;
+
+  --sb-0: #141b31;
+  --sb-1: #1b2440;
+  --sb-2: #26314f;
+  --sb-3: #2e3a5c;
+  --sb-line: #29334f;
+  --sb-text-1: #f3f5f9;
+  --sb-text-2: #b9c1d4;
+  --sb-text-3: #8f99b2;
+  --sb-active: color-mix(in oklab, var(--accent) 46%, var(--sb-1));
+  --sb-accent: color-mix(in oklab, var(--accent), white 45%);
+  --sb-danger: color-mix(in oklab, var(--danger), white 26%);
+  --sb-success: color-mix(in oklab, var(--success), white 30%);
+
+  --accent: #2f52de;
+  --accent-hover: color-mix(in oklab, var(--accent), black 10%);
+  --accent-active: color-mix(in oklab, var(--accent), black 22%);
+  --accent-weak: color-mix(in oklab, var(--accent) 10%, var(--bg-1));
+  --accent-line: color-mix(in oklab, var(--accent) 45%, var(--line));
+  --accent-text: color-mix(in oklab, var(--accent), black 8%);
+  --on-accent: #ffffff;
+
+  --speak: color-mix(in oklab, var(--accent), white 14%);
+  --speak-halo: color-mix(in oklab, var(--speak) 42%, transparent);
+  --danger: #ce4a55;
+  --danger-text: color-mix(in oklab, var(--danger), black 14%);
+  --danger-weak: color-mix(in oklab, var(--danger) 12%, var(--bg-1));
+  --success: #2e9e77;
+  --warning: #c8842a;
+  --warning-text: color-mix(in oklab, var(--warning), black 30%);
+  --warning-weak: color-mix(in oklab, var(--warning) 14%, var(--bg-1));
+
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --sidebar-w: 240px;
+  --members-w: 220px;
+  --header-h: 64px;
+  --titlebar-h: 40px;
+
+  --sh-sm: 0 0 0 1px var(--line);
+  --sh-md: 0 0 0 1px var(--line), 0 6px 16px rgb(20 27 49 / 10%);
+  --sh-lg: 0 0 0 1px var(--line), 0 22px 48px rgb(20 27 49 / 22%);
+  --font-display: 'Martian Mono', 'IBM Plex Mono', ui-monospace, monospace;
+  --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-ui: 14px;
+  --fs-sm: 13px;
+  --fs-xs: 11px;
+  --t-fast: 90ms;
+  --e-out: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --muted: var(--text-3);
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+artifacts/
+resources/xray/*/xray
+resources/xray/*/xray.exe
+test-results/
+playwright-report/

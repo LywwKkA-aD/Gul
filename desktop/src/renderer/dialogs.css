@@ -1,0 +1,120 @@
+.app-dialog {
+  width: min(460px, 90vw);
+  max-height: min(680px, 88vh);
+  padding: 30px;
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  overflow: auto;
+}
+.app-dialog::backdrop {
+  background: rgb(20 27 49 / 48%);
+}
+.app-dialog h2 {
+  font-size: 20px;
+  font-weight: 500;
+  margin: 0 28px 24px 0;
+}
+.app-dialog label {
+  margin-bottom: 20px;
+}
+.app-dialog p {
+  font-size: 12px;
+}
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 13px;
+  font-size: 23px;
+  color: var(--muted);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-md);
+}
+.modal-close:hover {
+  color: var(--text-1);
+  background: var(--bg-4);
+}
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 24px;
+}
+.settings-tabs button {
+  border-radius: var(--r-md);
+  padding: 8px 14px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.settings-tabs button:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+.settings-tabs button[aria-selected='true'] {
+  color: var(--accent-text);
+  background: var(--accent-weak);
+}
+.settings-help {
+  margin-top: 20px;
+}
+.secondary-button {
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.secondary-button:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+  background: var(--accent-weak);
+}
+.checkbox-control {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+}
+.shortcut-picker {
+  display: flex;
+  gap: 8px;
+}
+.shortcut-picker input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+}
+.dialog-error {
+  padding-top: 16px;
+}
+.participant-dialog {
+  width: min(370px, 90vw);
+}
+.participant-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.participant-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.volume-control > span {
+  display: flex;
+  justify-content: space-between;
+}
+.volume-control output {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.volume-control input {
+  margin: 5px 0;
+}
