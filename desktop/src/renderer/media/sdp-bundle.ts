@@ -77,7 +77,11 @@ export function conformVp8Placeholders(sdp: string, placeholders: ReadonlySet<st
 }
 
 interface Transport {
-  getTransceivers(): readonly { readonly mid: string | null; readonly sender: { readonly track: unknown } }[];
+  getTransceivers(): readonly {
+    readonly mid: string | null;
+    readonly direction?: string;
+    readonly sender: { readonly track: { readonly readyState?: string } | null };
+  }[];
   setMungedSDP(sd: RTCSessionDescriptionInit, munged?: string, remote?: boolean): Promise<void>;
 }
 const guarded = new WeakSet<object>();
@@ -87,7 +91,30 @@ interface Engine {
   on(event: string, listener: (publisher: Transport) => void): unknown;
 }
 
-/** Version-pinned, instance-local integration: never changes global WebRTC or remote/server SDP. */
+function placeholderMids(transport: Transport, sdp: string, localOffer: boolean): ReadonlySet<string> {
+  const transceivers = transport.getTransceivers();
+  const assigned = new Map(transceivers.filter((t) => t.mid !== null).map((t) => [t.mid!, t]));
+  const unassigned = transceivers.some((t) => t.mid === null);
+  return new Set(
+    sdp.split(/(?=m=)/).flatMap((section) => {
+      const mid = /^a=mid:([^\r\n]+)$/m.exec(section)?.[1];
+      if (!mid) return [];
+      const transceiver = assigned.get(mid);
+      // Initial createOffer has SDP mids before getTransceivers assigns them. An
+      // explicit non-sending section is safe to conform without positional mapping.
+      const placeholder = transceiver
+        ? !transceiver.sender.track ||
+          transceiver.direction === 'inactive' ||
+          transceiver.sender.track.readyState === 'ended'
+        : localOffer && unassigned && /^a=(recvonly|inactive)\r?$/m.test(section);
+      return placeholder ? [mid] : [];
+    }),
+  );
+}
+
+/** Instance-local integration for the pinned SDK's publisher offers and munged answers.
+ * Remote offers and original server descriptions remain untouched.
+ */
 export function installBundleWorkaround(room: Room): void {
   if (ownedRooms.has(room)) return;
   const watch = (next?: Engine) => {
@@ -99,13 +126,12 @@ export function installBundleWorkaround(room: Room): void {
         throw new Error('Версия WebRTC транспорта несовместима с демонстрацией.');
       const original = publisher.setMungedSDP;
       publisher.setMungedSDP = function (sd, munged, remote) {
-        const mids = new Set(
-          this.getTransceivers()
-            .filter((transceiver) => transceiver.mid !== null && !transceiver.sender.track)
-            .map((transceiver) => transceiver.mid!),
-        );
+        const localOffer = !remote && sd.type === 'offer';
+        const publisherAnswer = remote && sd.type === 'answer';
         const outgoing =
-          !remote && sd.type === 'offer' && munged ? conformVp8Placeholders(munged, mids) : munged;
+          munged && (localOffer || publisherAnswer)
+            ? conformVp8Placeholders(munged, placeholderMids(this, munged, localOffer))
+            : munged;
         return original.call(this, sd, outgoing, remote);
       };
       guarded.add(publisher);

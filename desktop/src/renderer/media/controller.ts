@@ -28,6 +28,7 @@ import type { VoiceSettings } from './voice-gate.ts';
 import { screenPublishOptions } from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
 import { speakingIdentities } from './speaking.ts';
+import { ScreenCleanup } from './screen-cleanup.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
 
 interface Capture extends ScreenCapture {
@@ -47,6 +48,7 @@ export class MediaController {
   private voice?: Room;
   private screen?: Room;
   private openingScreen?: Promise<Room | undefined>;
+  private readonly screenCleanup = new ScreenCleanup();
   private readonly mic: Microphone;
   private capture?: Capture;
   private stagedCapture?: ScreenCapture;
@@ -404,19 +406,23 @@ export class MediaController {
     }
   };
   stopScreen = async (): Promise<void> => {
-    ++this.captureGeneration;
+    const generation = ++this.captureGeneration;
+    const epoch = this.epoch;
+    const room = this.screen;
     const capture = this.capture;
     this.capture = undefined;
     if (this.stagedCapture) this.discard(this.stagedCapture);
     this.stagedCapture = undefined;
     this.update({
       sharing: false,
-      pendingShare: false,
+      pendingShare: true,
       screenAudio: 'off',
       videos: this.snapshot.videos.filter((video) => !video.local),
     });
-    if (capture) await this.release(capture);
+    if (capture) await this.screenCleanup.add(epoch, this.release(capture));
+    if (this.epoch !== epoch || this.captureGeneration !== generation || this.screen !== room) return;
     if (!this.watching) await this.closeScreen();
+    if (this.epoch === epoch && (!this.screen || this.screen === room)) this.update({ pendingShare: false });
   };
   watchScreen = async (identity: string | null): Promise<void> => {
     if (
@@ -459,6 +465,7 @@ export class MediaController {
     }
   };
   private async ensureScreen(grant: MediaGrant, epoch: number): Promise<Room | undefined> {
+    await this.screenCleanup.wait(epoch);
     if (!this.session || !validGrant(grant, this.session, 'screen') || this.epoch !== epoch)
       throw new Error('Invalid screen grant');
     if (this.openingScreen) return this.openingScreen;
@@ -495,21 +502,27 @@ export class MediaController {
     }
   }
   private async closeScreen() {
+    const epoch = this.epoch;
     const room = this.screen;
     this.screen = undefined;
     this.openingScreen = undefined;
     this.watching = null;
     this.unbind.get(room!)?.();
     this.unbind.delete(room!);
-    ++this.captureGeneration;
+    const generation = ++this.captureGeneration;
     const capture = this.capture;
     this.capture = undefined;
     if (this.stagedCapture) this.discard(this.stagedCapture);
     this.stagedCapture = undefined;
     this.clearScreenPlayback();
-    this.update({ sharing: false, pendingShare: false, screenAudio: 'off', videos: [] });
+    this.update({ sharing: false, pendingShare: true, screenAudio: 'off', videos: [] });
     this.refreshScreens();
-    await Promise.all([capture ? this.release(capture) : undefined, disconnect(room)]);
+    this.screenCleanup.add(
+      epoch,
+      Promise.all([capture ? this.release(capture) : undefined, disconnect(room)]).then(() => {}),
+    );
+    await this.screenCleanup.wait(epoch);
+    if (this.epoch === epoch && this.captureGeneration === generation) this.update({ pendingShare: false });
   }
   private currentCapture(capture: Capture) {
     return (

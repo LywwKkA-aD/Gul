@@ -52,8 +52,11 @@ function command(
 /** One private local audio server per peer prevents two test Gul trees recapturing one another.
  * paplay is foreign to each Electron tree; the real helper must include it by PID, not name.
  */
-export async function isolatedGameAudio(): Promise<AudioFixture> {
-  if (process.platform !== 'linux') return { environments: [{}, {}], close: async () => {} };
+export async function isolatedGameAudio(peerCount = 2): Promise<AudioFixture> {
+  if (!Number.isInteger(peerCount) || peerCount < 1 || peerCount > 3)
+    throw new Error('Invalid isolated audio peer count.');
+  if (process.platform !== 'linux')
+    return { environments: Array.from({ length: peerCount }, () => ({})), close: async () => {} };
   const root = await mkdtemp(join(tmpdir(), 'gul-external-game-'));
   const file = join(root, 'stereo.wav');
   const duration = 240;
@@ -114,7 +117,7 @@ export async function isolatedGameAudio(): Promise<AudioFixture> {
       });
       return child;
     };
-    for (let peer = 0; peer < 2; peer++) {
+    for (let peer = 0; peer < peerCount; peer++) {
       const directory = join(root, `peer-${peer}`);
       const runtime = join(directory, 'runtime');
       const config = join(directory, 'config');

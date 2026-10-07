@@ -120,9 +120,54 @@ async function instrument(page: Page) {
     const peers: RTCPeerConnection[] = [];
     const failures: string[] = [];
     const mismatches: boolean[] = [];
+    const records: {
+      side: string;
+      type: string;
+      mismatch: boolean;
+      nullMids: number;
+      retained: number;
+      hint: boolean;
+    }[] = [];
     Object.defineProperty(window, '__gulSDPPeers', { value: peers });
     Object.defineProperty(window, '__gulSDPFailures', { value: failures });
     Object.defineProperty(window, '__gulSDPMismatches', { value: mismatches });
+    Object.defineProperty(window, '__gulSDPRecords', { value: records });
+    const observe = (peer: RTCPeerConnection, description: RTCLocalSessionDescriptionInit, side: string) => {
+      if (!description.sdp || !description.type || !['offer', 'answer'].includes(description.type)) return;
+      const parts = description.sdp.split(/(?=m=)/);
+      const groups = [...parts[0].matchAll(/^a=group:BUNDLE (.+)$/gm)].map(
+        (match) => new Set(match[1].trim().split(/\s+/)),
+      );
+      const video = parts.filter(
+        (part) => /^m=video /.test(part) && (!/^m=video 0\b/.test(part) || /^a=bundle-only\r?$/m.test(part)),
+      );
+      const codecs = video.flatMap((part) => {
+        const mid = /^a=mid:(.+)$/m.exec(part)?.[1].trim();
+        const payload = /^a=rtpmap:(\d+) VP8\/90000\r?$/im.exec(part)?.[1];
+        if (!mid || !payload) return [];
+        const config = new RegExp(`^a=fmtp:${payload} (.+)$`, 'm').exec(part)?.[1].trim() ?? '';
+        return [{ mid, payload, config }];
+      });
+      const mismatch = groups.some((group) => {
+        const bundled = codecs.filter((codec) => group.has(codec.mid));
+        return bundled.some((codec) =>
+          bundled.some((other) => other.payload === codec.payload && other.config !== codec.config),
+        );
+      });
+      if (mismatch) mismatches.push(true);
+      const transceivers = peer.getTransceivers();
+      records.push({
+        side,
+        type: description.type,
+        mismatch,
+        nullMids: transceivers.filter((t) => t.mid === null).length,
+        retained: transceivers.filter(
+          (t) =>
+            Boolean(t.sender.track) && (t.direction === 'inactive' || t.sender.track?.readyState === 'ended'),
+        ).length,
+        hint: description.sdp.includes('x-google-start-bitrate=1800'),
+      });
+    };
     window.RTCPeerConnection = class extends original {
       constructor(config?: RTCConfiguration) {
         super(config);
@@ -133,33 +178,17 @@ async function instrument(page: Page) {
         success?: VoidFunction,
         failure?: RTCPeerConnectionErrorCallback,
       ) {
-        if (description?.type === 'offer' && description.sdp) {
-          const codecs = description.sdp
-            .split(/(?=m=)/)
-            .filter(
-              (part) =>
-                /^m=video /.test(part) && (!/^m=video 0\b/.test(part) || /^a=bundle-only$/m.test(part)),
-            )
-            .flatMap((part) => {
-              const payload = /^a=rtpmap:(\d+) VP8\/90000$/im.exec(part)?.[1];
-              if (!payload) return [];
-              const config = new RegExp(`^a=fmtp:${payload} (.+)$`, 'm').exec(part)?.[1].trim() ?? '';
-              return [{ payload, config }];
-            });
-          if (
-            codecs.some((codec) =>
-              codecs.some((other) => other.payload === codec.payload && other.config !== codec.config),
-            )
-          )
-            mismatches.push(true);
-        }
+        if (description) observe(this, description, 'local');
         try {
           return await (success && failure
             ? super.setLocalDescription(description ?? {}, success, failure)
             : super.setLocalDescription(description));
         } catch (error) {
-          if (/bundled payload type collision|codec collision/i.test(String(error)))
-            failures.push('VP8 BUNDLE collision');
+          failures.push(
+            /bundled payload type collision|codec collision/i.test(String(error))
+              ? 'VP8 BUNDLE collision'
+              : 'Description rejected',
+          );
           throw error;
         }
       }
@@ -168,13 +197,17 @@ async function instrument(page: Page) {
         success?: VoidFunction,
         failure?: RTCPeerConnectionErrorCallback,
       ) {
+        observe(this, description, 'remote');
         try {
           return await (success && failure
             ? super.setRemoteDescription(description, success, failure)
             : super.setRemoteDescription(description));
         } catch (error) {
-          if (/bundled payload type collision|codec collision/i.test(String(error)))
-            failures.push('VP8 BUNDLE collision');
+          failures.push(
+            /bundled payload type collision|codec collision/i.test(String(error))
+              ? 'VP8 BUNDLE collision'
+              : 'Description rejected',
+          );
           throw error;
         }
       }
@@ -231,7 +264,132 @@ async function decoded(page: Page) {
     .toBe(true);
 }
 
-test('two REALITY clients simultaneously publish, watch, pause and resubscribe without BUNDLE fallback', async () => {
+test('solo REALITY publisher keeps local offers and remote answers conformed over repeated screen rooms', async () => {
+  test.skip(!fixture, 'Set GUL_ELECTRON_STAND_DIR to the isolated REALITY fixture.');
+  const address = (await readFile(resolve(fixture!, 'address'), 'utf8')).trim();
+  const password = (await readFile(resolve(fixture!, 'join-password'), 'utf8')).trim();
+  const ca = resolve(fixture!, 'ca.pem');
+  const dataRoot = await mkdtemp(join(tmpdir(), 'gul-sdp-solo-'));
+  const gameAudio = await isolatedGameAudio();
+  let app: ElectronApplication | undefined;
+  try {
+    app = await electron.launch({
+      executablePath: require('electron'),
+      args: ['.', '--gul-electron-test', ...mediaTestArguments, `--user-data-dir=${dataRoot}`],
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        ...nativeDisplayTestEnvironment,
+        ...gameAudio.environments[0],
+        GUL_ELECTRON_TEST_CA: ca,
+      },
+    });
+    const page = await app.firstWindow();
+    page.on('console', (message) => {
+      if (/^GUL_(SCREEN|CAPTURE)_FAILURE [A-Za-z ]+$/.test(message.text())) console.info(message.text());
+    });
+    await instrument(page);
+    await privateLoginForm(page, address, password);
+    await page.getByLabel('Твой ник', { exact: true }).fill('sdp-solo');
+    await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
+    await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
+    await expect(page.locator('.channel-users > button')).toHaveCount(1);
+    for (let cycle = 0; cycle < 12; cycle++) {
+      await expect(page.locator('.channel-users > button')).toHaveCount(1);
+      await page.getByRole('button', { name: 'Показать экран', exact: true }).click();
+      try {
+        await expect(page.getByRole('button', { name: 'Остановить демонстрацию', exact: true })).toBeVisible({
+          timeout: 20_000,
+        });
+      } catch (error) {
+        console.info(
+          'GUL_SDP_SOLO_FAILED',
+          await page.evaluate(() => {
+            const records = (
+              window as unknown as { __gulSDPRecords: { side: string; type: string; mismatch: boolean }[] }
+            ).__gulSDPRecords;
+            return {
+              localMismatches: records.filter((r) => r.side === 'local' && r.mismatch).length,
+              remoteOfferMismatches: records.filter(
+                (r) => r.side === 'remote' && r.type === 'offer' && r.mismatch,
+              ).length,
+              remoteAnswerMismatches: records.filter(
+                (r) => r.side === 'remote' && r.type === 'answer' && r.mismatch,
+              ).length,
+              descriptionRejections: (window as unknown as { __gulSDPFailures: string[] }).__gulSDPFailures
+                .length,
+            };
+          }),
+        );
+        throw error;
+      }
+      await expect
+        .poll(() =>
+          page
+            .locator('video')
+            .evaluateAll((videos) =>
+              videos.some(
+                (video) => (video as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames > 3,
+              ),
+            ),
+        )
+        .toBe(true);
+      await page.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
+      await expect(page.locator('video')).toHaveCount(0);
+      if (cycle % 3 === 2) {
+        await page.getByRole('button', { name: cycle % 2 ? 'Игра' : 'Общая', exact: true }).click();
+        await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible();
+      }
+    }
+    const facts = await page.evaluate(() => {
+      const scope = window as unknown as {
+        __gulSDPRecords: {
+          side: string;
+          type: string;
+          mismatch: boolean;
+          nullMids: number;
+          retained: number;
+          hint: boolean;
+        }[];
+        __gulSDPFailures: string[];
+      };
+      return {
+        localOfferMismatches: scope.__gulSDPRecords.filter(
+          (r) => r.side === 'local' && r.type === 'offer' && r.mismatch,
+        ).length,
+        remoteOfferMismatches: scope.__gulSDPRecords.filter(
+          (r) => r.side === 'remote' && r.type === 'offer' && r.mismatch,
+        ).length,
+        remoteAnswerMismatches: scope.__gulSDPRecords.filter(
+          (r) => r.side === 'remote' && r.type === 'answer' && r.mismatch,
+        ).length,
+        firstOfferHints: scope.__gulSDPRecords.filter((r) => r.side === 'local' && r.nullMids > 0 && r.hint)
+          .length,
+        hintedOffers: scope.__gulSDPRecords.filter((r) => r.side === 'local' && r.type === 'offer' && r.hint)
+          .length,
+        collisionFailures: scope.__gulSDPFailures.filter((failure) => failure === 'VP8 BUNDLE collision')
+          .length,
+        descriptionRejections: scope.__gulSDPFailures.length,
+      };
+    });
+    console.info('GUL_SDP_SOLO_PROOF', JSON.stringify(facts));
+    expect(facts.hintedOffers).toBeGreaterThan(10);
+    expect(facts.localOfferMismatches).toBe(0);
+    expect(facts.remoteOfferMismatches).toBe(0);
+    expect(facts.remoteAnswerMismatches).toBe(0);
+    expect(facts.collisionFailures).toBe(0);
+    expect(facts.descriptionRejections).toBe(0);
+  } finally {
+    try {
+      await app?.close();
+    } finally {
+      await gameAudio.close();
+      await rm(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test('three REALITY clients publish, late join, watch, restart and rejoin without BUNDLE fallback', async () => {
   test.skip(!fixture, 'Set GUL_ELECTRON_STAND_DIR to the isolated REALITY fixture.');
   const address = (await readFile(resolve(fixture!, 'address'), 'utf8')).trim();
   const password = (await readFile(resolve(fixture!, 'join-password'), 'utf8')).trim();
@@ -245,9 +403,9 @@ test('two REALITY clients simultaneously publish, watch, pause and resubscribe w
   const pages: Page[] = [];
   let stopGameAudio = async () => {};
   try {
-    const gameAudio = await isolatedGameAudio();
+    const gameAudio = await isolatedGameAudio(3);
     stopGameAudio = gameAudio.close;
-    for (let i = 0; i < 2; i++) {
+    const connectPeer = async (i: number) => {
       const app = await electron.launch({
         executablePath: require('electron'),
         args: [
@@ -272,7 +430,9 @@ test('two REALITY clients simultaneously publish, watch, pause and resubscribe w
       await page.getByLabel('Твой ник', { exact: true }).fill(`sdp-peer-${i}`);
       await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
       await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
-    }
+      return page;
+    };
+    for (let i = 0; i < 2; i++) await connectPeer(i);
     const [a, b] = pages;
     await Promise.all(
       pages.map((page) => page.getByRole('button', { name: 'Показать экран', exact: true }).click()),
@@ -280,17 +440,34 @@ test('two REALITY clients simultaneously publish, watch, pause and resubscribe w
     await a.getByRole('button', { name: /sdp-peer-1.*Смотреть экран/ }).click();
     await b.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
     await Promise.all(pages.map(decoded));
+    const c = await connectPeer(2);
+    await c.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
+    await decoded(c);
+    await c.getByRole('button', { name: 'Показать экран', exact: true }).click();
+    await a.getByRole('button', { name: /sdp-peer-2.*Смотреть экран/ }).click();
+    await decoded(a);
     for (let cycle = 0; cycle < 3; cycle++) {
       await a.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
       await expect(b.locator('.screen-viewer video')).toHaveCount(0);
       await a.getByRole('button', { name: 'Показать экран', exact: true }).click();
       await b.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
       await decoded(b);
+      await c.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
+      await decoded(c);
       await b.getByRole('button', { name: 'Игра', exact: true }).click();
       await expect(b.getByText('Голос подключён', { exact: true })).toBeVisible();
       await b.getByRole('button', { name: 'Общая', exact: true }).click();
       await b.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
       await decoded(b);
+      if (cycle === 1) {
+        await c.getByRole('button', { name: 'Отключиться', exact: true }).click();
+        await expect(c.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
+        await privateLoginForm(c, address, password);
+        await c.getByRole('button', { name: 'Подключиться', exact: true }).click();
+        await expect(c.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
+        await c.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
+        await decoded(c);
+      }
     }
     for (const page of pages) {
       expect(
@@ -319,6 +496,19 @@ test('two REALITY clients simultaneously publish, watch, pause and resubscribe w
       expect(relays.length).toBeGreaterThan(0);
       expect(relays.every(Boolean)).toBe(true);
     }
+    console.info(
+      'GUL_SDP_THREE_PEER_PROOF',
+      JSON.stringify({
+        peers: 3,
+        publicationRestarts: 3,
+        lateJoins: 1,
+        fullRejoins: 1,
+        channelRejoins: 3,
+        mismatches: 0,
+        collisionFailures: 0,
+        relayTcp: true,
+      }),
+    );
   } finally {
     try {
       await Promise.all(apps.map((app) => app.close()));

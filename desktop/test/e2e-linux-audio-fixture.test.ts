@@ -4,7 +4,18 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { daemonEnvironment, stopFixtureProcess } from '../e2e/linux-audio-fixture.ts';
+import { daemonEnvironment, isolatedGameAudio, stopFixtureProcess } from '../e2e/linux-audio-fixture.ts';
+
+test('private audio fixture bounds requested peer count before opening any process or directory', async () => {
+  for (const peers of [0, 4, -1, 1.5, Number.NaN]) {
+    await assert.rejects(isolatedGameAudio(peers), /peer count/);
+  }
+  if (process.platform !== 'linux') {
+    const fixture = await isolatedGameAudio(3);
+    assert.equal(fixture.environments.length, 3);
+    await fixture.close();
+  }
+});
 
 test('private Pulse daemon cannot claim the Electron portal bus or change peer environment', () => {
   const directory = join(tmpdir(), 'gul-private-audio-unit');

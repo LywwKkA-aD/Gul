@@ -82,7 +82,7 @@ test('zero-port bundle-only video remains bundled; rejected media and LF line en
   );
 });
 
-test('owned SDK publisher only repairs local offers; remote SDP and unrelated transport methods stay untouched', async () => {
+test('owned SDK publisher repairs offers and SDK-munged answers; remote offers and original SDP stay untouched', async () => {
   const engine = new EventEmitter();
   const called: { sd: RTCSessionDescriptionInit; munged?: string; remote?: boolean }[] = [];
   const publisher = {
@@ -101,12 +101,15 @@ test('owned SDK publisher only repairs local offers; remote SDP and unrelated tr
   await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
   assert.equal(called[0].munged, conformVp8Placeholders(sdp, new Set(['1'])));
   await publisher.setMungedSDP({ type: 'answer', sdp }, sdp, true);
-  assert.equal(called[1].munged, sdp);
+  assert.equal(called[1].munged, conformVp8Placeholders(sdp, new Set(['1'])));
+  assert.equal(called[1].sd.sdp, sdp, 'the original SFU description remains available to the SDK fallback');
+  await publisher.setMungedSDP({ type: 'offer', sdp }, sdp, true);
+  assert.equal(called[2].munged, sdp, 'subscriber/server offers are never conformed');
   await publisher.setMungedSDP({ type: 'rollback' });
-  assert.equal(called[2].munged, undefined);
+  assert.equal(called[3].munged, undefined);
   engine.emit('transportsCreated', publisher);
   await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
-  assert.equal(called.length, 4, 'a reconnect event cannot stack wrappers');
+  assert.equal(called.length, 5, 'a reconnect event cannot stack wrappers');
   assert.notEqual(publisher.setMungedSDP, original);
 });
 
@@ -125,11 +128,65 @@ test('full Room engine recreation and null transceiver mids cannot lose or broad
     },
   };
   room.engine.emit('transportsCreated', publisher);
-  const sdp = header + section('0', 'x-google-start-bitrate=1800') + section('1');
+  const sdp =
+    header +
+    section('0', 'x-google-start-bitrate=1800').replace('recvonly', 'sendonly') +
+    section('1').replace('recvonly', 'sendrecv');
   await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
   assert.equal(received, sdp, 'unknown mids must not cause an arbitrary media section rewrite');
   publisher.getTransceivers = () => [{ mid: '1', sender: { track: null } }];
   await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
   assert.equal(received, conformVp8Placeholders(sdp, new Set(['1'])));
   assert.throws(() => room.engine.emit('transportsCreated', {}), /несовместима/);
+});
+
+test('first SDK offer identifies explicit non-sending SDP sections before transceiver mids are assigned', async () => {
+  const engine = new EventEmitter();
+  let received = '';
+  const publisher = {
+    getTransceivers: () => [
+      { mid: null, sender: { track: null } },
+      { mid: null, sender: { track: { readyState: 'live' } } },
+    ],
+    async setMungedSDP(_sd: RTCSessionDescriptionInit, munged?: string) {
+      received = munged ?? '';
+    },
+  };
+  installBundleWorkaround({ engine } as any);
+  engine.emit('transportsCreated', publisher);
+  const real = section('1', 'x-google-start-bitrate=1800').replace('recvonly', 'sendonly');
+  const sdp = header + section('0') + real;
+  await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
+  assert.equal(received, header + section('0', 'x-google-start-bitrate=1800') + real);
+});
+
+test('an inactive SDK transceiver with its ended sender track is still an unused local section', async () => {
+  const engine = new EventEmitter();
+  let received = '';
+  const publisher = {
+    getTransceivers: () => [
+      { mid: '0', direction: 'sendonly', sender: { track: { readyState: 'live' } } },
+      { mid: '1', direction: 'inactive', sender: { track: { readyState: 'ended' } } },
+    ],
+    async setMungedSDP(_sd: RTCSessionDescriptionInit, munged?: string) {
+      received = munged ?? '';
+    },
+  };
+  installBundleWorkaround({ engine } as any);
+  engine.emit('transportsCreated', publisher);
+  const real = section('0', 'x-google-start-bitrate=1800').replace('recvonly', 'sendonly');
+  const stale = section('1').replace('recvonly', 'inactive') + 'a=msid:old old-track\r\n';
+  const sdp = header + real + stale;
+  await publisher.setMungedSDP({ type: 'offer', sdp }, sdp);
+  assert.equal(
+    received,
+    header +
+      real +
+      stale
+        .replace('a=recvonly', 'a=inactive')
+        .replace(
+          'a=rtpmap:96 VP8/90000\r\n',
+          'a=rtpmap:96 VP8/90000\r\na=fmtp:96 x-google-start-bitrate=1800\r\n',
+        ),
+  );
 });
