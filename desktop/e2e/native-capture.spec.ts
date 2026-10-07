@@ -94,6 +94,37 @@ async function instrumentPeers(page: Page) {
   });
 }
 
+async function captureDiagnostics(app: ElectronApplication, page: Page) {
+  const renderer: string[] = [];
+  page.on('console', (message) => {
+    const value = message.text();
+    if (
+      /^(?:GUL_CAPTURE_FAILURE|GUL_SCREEN_FAILURE (?:capture|authorization|connection|constraints|publication)) (?:NotAllowedError|NotFoundError|NotReadableError|OverconstrainedError|AbortError|InvalidStateError|NotSupportedError|SecurityError|TypeMismatchError|UnknownError)$/u.test(
+        value,
+      )
+    )
+      renderer.splice(0, Math.max(0, renderer.length - 15), value);
+  });
+  await app.evaluate(({ BrowserWindow }) => {
+    const stages: unknown[] = [];
+    Object.defineProperty(globalThis, '__gulCaptureDiagnostics', { value: stages });
+    const contents = BrowserWindow.getAllWindows()[0]
+      .webContents as unknown as import('node:events').EventEmitter;
+    contents.on('gul-capture-diagnostic', (facts: unknown) => {
+      stages.splice(0, Math.max(0, stages.length - 31), facts);
+    });
+  });
+  return async () => ({
+    main: await app.evaluate(
+      () => (globalThis as unknown as { __gulCaptureDiagnostics: unknown[] }).__gulCaptureDiagnostics,
+    ),
+    renderer,
+    permissionAlert: await page
+      .getByText('Не удалось начать демонстрацию. Проверьте разрешение на захват экрана.', { exact: true })
+      .isVisible(),
+  });
+}
+
 async function selectedRelay(page: Page): Promise<boolean> {
   return page.evaluate(async () => {
     const peers = (window as unknown as { __gulNativePeers: RTCPeerConnection[] }).__gulNativePeers;
@@ -150,6 +181,7 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
   let oldSink: string | undefined;
   let module: string | undefined;
   let player: ChildProcess | undefined;
+  const diagnostics: (() => Promise<unknown>)[] = [];
   try {
     oldSink = await pulse('get-default-sink');
     module = await pulse('load-module', 'module-null-sink', `sink_name=${sink}`, 'channels=2', 'rate=48000');
@@ -169,6 +201,7 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       apps.push(app);
       const page = await app.firstWindow();
       pages.push(page);
+      diagnostics.push(await captureDiagnostics(app, page));
       await expect(page.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
       await instrumentPeers(page);
       await page.getByLabel('Адрес сервера', { exact: true }).fill(address);
@@ -189,6 +222,8 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       audioServer: 'detected',
     });
     player = await startTone(dataRoot, sink);
+    await apps[0].evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+    await publisher.bringToFront();
     await publisher.getByRole('button', { name: 'Показать экран', exact: true }).click();
     const watch = viewer.getByRole('button', { name: /native-publisher.*Смотреть экран/ });
     await expect(watch).toBeVisible({ timeout: 20_000 });
@@ -247,6 +282,10 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     await publisher.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
     await expect(viewer.locator('video')).toHaveCount(0);
     await expect(viewer.locator('audio[data-source="screen"]')).toHaveCount(0);
+  } catch (error) {
+    const facts = await Promise.all(diagnostics.map((read) => read().catch(() => ({ closed: true }))));
+    console.info('GUL_NATIVE_CAPTURE_DIAGNOSTICS', JSON.stringify(facts));
+    throw error;
   } finally {
     player?.kill();
     await Promise.all(apps.map((app) => app.close().catch(() => {})));

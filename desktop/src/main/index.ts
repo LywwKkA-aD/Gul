@@ -113,7 +113,10 @@ async function createWindow(): Promise<void> {
     authority,
     testCapture
       ? {
-          pick: async () => ({ response: 1, checkboxChecked: true }),
+          pick: async (sources) => ({
+            response: sources.findIndex((source) => source.id.startsWith('screen:')) + 1,
+            checkboxChecked: true,
+          }),
         }
       : undefined,
   );

@@ -26,6 +26,7 @@ import { Devices } from './devices.ts';
 import { Microphone } from './microphone.ts';
 import type { VoiceSettings } from './voice-gate.ts';
 import { screenPublishOptions } from './screen-settings.ts';
+import { captureFailureName } from './capture-diagnostics.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
 
 interface Capture extends ScreenCapture {
@@ -296,6 +297,7 @@ export class MediaController {
     this.update({ pendingShare: true, error: '', warning: '' });
     let captured: ScreenCapture | undefined;
     let capture: Capture | undefined;
+    let stage = 'capture';
     try {
       // Trigger selection before the first await so the original gesture reaches Chromium.
       captured = await (this.dependencies.captureFactory ?? captureScreen)(withAudio);
@@ -304,12 +306,14 @@ export class MediaController {
         return;
       }
       this.stagedCapture = captured;
+      stage = 'authorization';
       const grant = await granted;
       if (!grant || !validGrant(grant, session, 'screen')) throw new Error('Invalid screen grant');
       if (this.epoch !== epoch || generation !== this.captureGeneration) {
         this.discard(captured);
         return;
       }
+      stage = 'connection';
       const room = await this.ensureScreen(grant, epoch);
       if (!room || this.epoch !== epoch || generation !== this.captureGeneration) {
         this.discard(captured);
@@ -338,12 +342,14 @@ export class MediaController {
       captured.tracks.forEach((track) => track.on('ended', capture!.ended));
       if (captured.tracks.some((track) => track.mediaStreamTrack.readyState === 'ended'))
         throw new Error('Capture ended');
+      stage = 'constraints';
       await video[0].mediaStreamTrack.applyConstraints({
         width: { max: 1280 },
         height: { max: 720 },
         frameRate: { max: 30 },
       });
       const h264 = (await this.dependencies.preferH264?.()) ?? false;
+      stage = 'publication';
       for (const track of captured.tracks) {
         if (!this.currentCapture(capture)) return;
         const isVideo = track.kind === Track.Kind.Video;
@@ -371,7 +377,8 @@ export class MediaController {
           warning:
             withAudio && !audio.length ? 'Источник не передал звук. Выберите доступный источник аудио.' : '',
         });
-    } catch {
+    } catch (error) {
+      console.debug('GUL_SCREEN_FAILURE', stage, captureFailureName(error));
       if (capture) await this.release(capture);
       else if (captured) {
         this.discard(captured);

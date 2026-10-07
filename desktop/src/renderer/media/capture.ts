@@ -7,6 +7,7 @@ import {
 import type { ScreenCapture } from './model.ts';
 import { defaultVoiceSettings, type VoiceSettings } from './voice-gate.ts';
 import { screenResolution } from './screen-settings.ts';
+import { captureFailureName } from './capture-diagnostics.ts';
 
 export function voiceCaptureOptions(settings: VoiceSettings, deviceId?: string) {
   return {
@@ -25,23 +26,28 @@ export function microphone(
   return createLocalAudioTrack(voiceCaptureOptions(settings, deviceId));
 }
 export async function captureScreen(withAudio: boolean): Promise<ScreenCapture> {
-  const tracks = await createLocalScreenTracks({
-    resolution: screenResolution,
-    audio: withAudio
-      ? {
-          channelCount: 2,
-          sampleRate: 48000,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          restrictOwnAudio: true,
-        }
-      : false,
-    systemAudio: withAudio ? 'include' : 'exclude',
-    selfBrowserSurface: 'exclude',
-    contentHint: 'motion',
-  });
-  return { tracks: tracks as (LocalVideoTrack | LocalAudioTrack)[] };
+  try {
+    const tracks = await createLocalScreenTracks({
+      resolution: screenResolution,
+      audio: withAudio
+        ? {
+            channelCount: 2,
+            sampleRate: 48000,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            restrictOwnAudio: true,
+          }
+        : false,
+      systemAudio: withAudio ? 'include' : 'exclude',
+      selfBrowserSurface: 'exclude',
+      contentHint: 'motion',
+    });
+    return { tracks: tracks as (LocalVideoTrack | LocalAudioTrack)[] };
+  } catch (error) {
+    console.debug('GUL_CAPTURE_FAILURE', captureFailureName(error));
+    throw error;
+  }
 }
 export function audioElement(): HTMLAudioElement {
   const element = document.createElement('audio');
