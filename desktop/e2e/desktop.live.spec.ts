@@ -3,13 +3,22 @@ import { createRequire } from 'node:module';
 import { readFile, mkdtemp, rm, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { privateLoginForm } from './login-form.ts';
+import {
+  isolatedGameAudio,
+  mediaTestArguments,
+  nativeDisplayTestEnvironment,
+} from './linux-audio-fixture.ts';
+import { installMicrophoneCalibration } from './microphone-calibration.ts';
 
 const require = createRequire(import.meta.url);
 const fixture = process.env.GUL_ELECTRON_STAND_DIR;
 test.skip(!fixture, 'Start the isolated REALITY fixture and set GUL_ELECTRON_STAND_DIR.');
 
 async function synthetic(page: Page) {
-  await page.evaluate(() => {
+  await page.evaluate(installMicrophoneCalibration, process.platform === 'linux');
+  await page.evaluate((linux) => {
+    const nativeDisplay = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
     const peers: RTCPeerConnection[] = [];
     const captures: MediaStream[] = [];
     const playbackMeters: AnalyserNode[] = [];
@@ -24,30 +33,6 @@ async function synthetic(page: Page) {
       }
       return result;
     } as AudioNode['connect'];
-    // Keep native getUserMedia permissions; inject a calibration tone at the captured device's audio graph.
-    const sourceFor = AudioContext.prototype.createMediaStreamSource;
-    AudioContext.prototype.createMediaStreamSource = function (stream: MediaStream) {
-      const input = stream.getAudioTracks()[0];
-      if (!input || !input.label.includes('Fake') || !input.getSettings().deviceId)
-        return Reflect.apply(sourceFor, this, [stream]) as MediaStreamAudioSourceNode;
-      const destination = this.createMediaStreamDestination();
-      const oscillator = this.createOscillator();
-      const gain = this.createGain();
-      oscillator.frequency.value = 330;
-      gain.gain.value = 0.1;
-      oscillator.connect(gain).connect(destination);
-      oscillator.start();
-      const source = Reflect.apply(sourceFor, this, [destination.stream]) as MediaStreamAudioSourceNode;
-      const disconnect = source.disconnect.bind(source);
-      source.disconnect = () => {
-        disconnect();
-        oscillator.stop();
-        oscillator.disconnect();
-        gain.disconnect();
-        destination.stream.getTracks().forEach((track) => track.stop());
-      };
-      return source;
-    };
     const Original = window.RTCPeerConnection;
     Object.defineProperty(window, '__gulTestPeers', { value: peers });
     Object.defineProperty(window, '__gulTestCaptures', { value: captures });
@@ -80,7 +65,9 @@ async function synthetic(page: Page) {
       };
       return destination.stream;
     };
-    navigator.mediaDevices.getDisplayMedia = async () => {
+    navigator.mediaDevices.getDisplayMedia = async (options) => {
+      // Called during the real button gesture: production main still grants source consent.
+      const native = linux ? await nativeDisplay(options) : undefined;
       const canvas = document.createElement('canvas');
       canvas.width = 1280;
       canvas.height = 720;
@@ -93,17 +80,18 @@ async function synthetic(page: Page) {
         context.fillRect((frame * 10) % 1200, 200, 80, 80);
       }, 33);
       const stream = canvas.captureStream(30);
-      stream.addTrack(audio().getAudioTracks()[0]);
+      if (!linux) stream.addTrack(audio().getAudioTracks()[0]);
       const track = stream.getVideoTracks()[0];
       const stop = track.stop.bind(track);
       track.stop = () => {
         clearInterval(timer);
         stop();
+        native?.getTracks().forEach((track) => track.stop());
       };
       captures.push(stream);
       return stream;
     };
-  });
+  }, process.platform === 'linux');
 }
 
 async function audible(page: Page, kind: string) {
@@ -205,7 +193,10 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     .catch(() => undefined);
   const apps: ElectronApplication[] = [];
   const dataRoot = await mkdtemp(join(tmpdir(), 'gul-electron-e2e-'));
+  let stopGameAudio = async () => {};
   try {
+    const gameAudio = await isolatedGameAudio();
+    stopGameAudio = gameAudio.close;
     const pages: Page[] = [];
     for (let i = 0; i < 2; i++) {
       const app = await electron.launch({
@@ -213,19 +204,24 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
         args: [
           '.',
           '--gul-electron-test',
-          '--use-fake-device-for-media-stream',
+          ...mediaTestArguments,
           `--user-data-dir=${join(dataRoot, String(i))}`,
         ],
-        env: { ...process.env, NODE_ENV: 'test', ...(fixtureCA ? { GUL_ELECTRON_TEST_CA: fixtureCA } : {}) },
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          ...nativeDisplayTestEnvironment,
+          ...gameAudio.environments[i],
+          ...(fixtureCA ? { GUL_ELECTRON_TEST_CA: fixtureCA } : {}),
+        },
       });
       apps.push(app);
       const page = await app.firstWindow();
       pages.push(page);
       await expect(page.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
       await synthetic(page);
-      await page.getByLabel('Адрес сервера', { exact: true }).fill(address);
+      await privateLoginForm(page, address, password);
       await page.getByLabel('Твой ник', { exact: true }).fill(`desktop-peer-${i}`);
-      await page.getByLabel('Пароль', { exact: true }).fill(password);
       await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
       await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
     }
@@ -412,7 +408,14 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await expect(restoredPage.getByLabel('Адрес сервера', { exact: true })).toHaveValue(address);
     await expect(restoredPage.getByLabel('Пароль', { exact: true })).toHaveValue('');
   } finally {
-    await Promise.all(apps.map((app) => app.close()));
-    await rm(dataRoot, { recursive: true, force: true });
+    try {
+      await Promise.all(apps.map((app) => app.close()));
+    } finally {
+      try {
+        await stopGameAudio();
+      } finally {
+        await rm(dataRoot, { recursive: true, force: true });
+      }
+    }
   }
 });

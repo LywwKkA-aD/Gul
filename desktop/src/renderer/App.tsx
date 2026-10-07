@@ -20,6 +20,7 @@ import { ConnectPanel } from './ConnectPanel.tsx';
 import { ConnectionLifecycle } from './connection-lifecycle.ts';
 import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
+import { selectedSavedServer, passwordSaveNotice } from './saved-login.ts';
 import {
   ParticipantControls,
   ParticipantRow,
@@ -65,7 +66,11 @@ export function App() {
   const [username, setUsername] = useState(() => readSavedString('gul.username'));
   const [password, setPassword] = useState('');
   const [rememberPassword, setRememberPassword] = useState(false);
-  const [savedServers, setSavedServers] = useState<ServerList>({ servers: [], storage: 'unavailable' });
+  const [savedServers, setSavedServers] = useState<ServerList>({
+    servers: [],
+    storage: 'unavailable',
+    lastSave: null,
+  });
   const [capabilities, setCapabilities] = useState<CaptureCapabilities | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [error, setError] = useState('');
@@ -109,6 +114,9 @@ export function App() {
       active = false;
     };
   }, [api]);
+  useEffect(() => {
+    setRememberPassword(selectedSavedServer(savedServers, address)?.rememberPassword ?? false);
+  }, [savedServers, address]);
   useEffect(() => {
     if (!session) return;
     let active = true;
@@ -264,7 +272,7 @@ export function App() {
         channel === undefined
           ? savedServers.servers.some((server) => server.address === address.trim() && server.hasPassword) &&
             !password
-            ? api.connectSaved(address, username)
+            ? api.connectSaved(address, username, rememberPassword)
             : api.connect({ address, username, password }, rememberPassword)
           : api.channel(channel),
       );
@@ -396,7 +404,7 @@ export function App() {
             setAddress(server.address);
             setUsername(server.username);
             setPassword('');
-            setRememberPassword(false);
+            setRememberPassword(server.rememberPassword);
           }}
           onForget={(value) =>
             void run(async () => {
@@ -404,6 +412,7 @@ export function App() {
               setSavedServers(await api.servers());
             })
           }
+          onRefreshSaved={() => void run(async () => setSavedServers(await api.servers()))}
           onConnect={() => void enter()}
           onCancel={() => void run(leave)}
         />
@@ -529,9 +538,9 @@ export function App() {
               <h1>{selectedChannel?.name ?? 'Голосовой канал'}</h1>
               <span className="subtle">{users.length} в канале</span>
             </div>
-            {(error || snapshot.error || snapshot.warning) && (
+            {(error || snapshot.error || snapshot.warning || passwordSaveNotice(savedServers, address)) && (
               <div className={error || snapshot.error ? 'notice error' : 'notice'} role="alert">
-                {error || snapshot.error || snapshot.warning}
+                {error || snapshot.error || snapshot.warning || passwordSaveNotice(savedServers, address)}
               </div>
             )}
             <ScreenPanel

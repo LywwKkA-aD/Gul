@@ -4,6 +4,7 @@ import type { MediaController } from './media/controller.ts';
 import { VoiceSettingsPanel } from './VoiceSettingsPanel.tsx';
 import { Dialog } from './Dialog.tsx';
 import { shortcutFromKey, type Preferences } from './preferences.ts';
+import { audioDeviceOptions } from './audio-device-options.ts';
 
 export function SettingsDialog({
   preferences,
@@ -103,9 +104,7 @@ export function SettingsDialog({
       {tab === 'sound' ? (
         <section role="tabpanel" id="sound-settings" aria-labelledby="sound-tab">
           {(['audioinput', 'audiooutput'] as const).map((kind) => {
-            const available = devices.filter(
-              (device) => device.kind === kind && device.deviceId !== 'default',
-            );
+            const available = audioDeviceOptions(devices, kind);
             const savedUnavailable =
               preferences[kind] !== 'default' &&
               !available.some((device) => device.deviceId === preferences[kind]);

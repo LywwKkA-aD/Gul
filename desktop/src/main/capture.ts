@@ -2,7 +2,14 @@ import { desktopCapturer, dialog, type BrowserWindow, type DesktopCapturerSource
 import type { SessionAuthority } from './session.ts';
 import { captureAllowed } from './security.ts';
 import { getCaptureCapabilities } from './capture-capabilities.ts';
-import { CaptureChooser, type CaptureChoice, type CaptureCapabilities } from './capture-policy.ts';
+import {
+  CaptureChooser,
+  capturePickerMode,
+  captureSourceLabel,
+  type CaptureChoice,
+  type CaptureCapabilities,
+} from './capture-policy.ts';
+import { DisplayCaptureConsent } from './capture-consent.ts';
 import { captureRequestFacts, type CaptureStage } from './capture-diagnostics.ts';
 
 export interface CaptureDependencies {
@@ -20,10 +27,12 @@ export function installDisplayCapture(
   window: BrowserWindow,
   authority: SessionAuthority,
   dependencies: CaptureDependencies = {},
-): void {
+): DisplayCaptureConsent {
   const chooser = new CaptureChooser();
+  const consent = new DisplayCaptureConsent();
   window.webContents.session.setDisplayMediaRequestHandler(
     (request, callback) => {
+      const requestCurrent = consent.beginRequest();
       const epoch = authority.mediaEpoch();
       const report = (
         stage: CaptureStage,
@@ -49,6 +58,7 @@ export function installDisplayCapture(
         }
       };
       const valid = () =>
+        requestCurrent() &&
         epoch !== null &&
         authority.mediaEpoch() === epoch &&
         !window.isDestroyed() &&
@@ -70,6 +80,8 @@ export function installDisplayCapture(
           });
           const selection = await chooser.choose({
             valid,
+            portalSelection: capturePickerMode(process.platform, process.env) === 'portal',
+            loopbackAudio: process.platform !== 'linux',
             audioRequested: request.audioRequested,
             capabilities,
             getSources: async () => {
@@ -102,7 +114,7 @@ export function installDisplayCapture(
                       ? details
                       : 'Передаётся только изображение: системный звук недоступен для этого источника или ОС. ' +
                         details,
-                    buttons: ['Отмена', ...sources.map((source) => source.name)],
+                    buttons: ['Отмена', ...sources.map(captureSourceLabel)],
                     cancelId: 0,
                     defaultId: 0,
                     noLink: true,
@@ -123,6 +135,7 @@ export function installDisplayCapture(
             },
           });
           report(selection ? 'granted' : 'cancelled', { audio: Boolean(selection?.audio) });
+          if (selection) consent.accept(valid, request.audioRequested, capabilities.systemAudio);
           callback(selection);
         } catch {
           report('failed');
@@ -136,4 +149,5 @@ export function installDisplayCapture(
     },
     { useSystemPicker: false },
   );
+  return consent;
 }

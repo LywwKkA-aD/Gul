@@ -4,6 +4,15 @@ import { appPage } from './security.ts';
 import { audioInput, failure } from './validation.ts';
 import type { AppServices } from './app-services.ts';
 import { NativeHoldHotkey } from './hotkeys.ts';
+import type { CaptureCapabilities, ScreenAudioLease } from '../shared/contracts.ts';
+import { runWithCaptureReset } from './capture-reset.ts';
+
+interface CaptureServices {
+  capabilities(): Promise<CaptureCapabilities>;
+  start(): Promise<ScreenAudioLease>;
+  stop(leaseId: string): Promise<void>;
+  reset(): Promise<void>;
+}
 
 /** Only this window's top-level app frame may invoke this fixed IPC allowlist. */
 export function installIPC(
@@ -11,6 +20,7 @@ export function installIPC(
   getWindow: () => BrowserWindow | undefined,
   services: AppServices,
   holdExecutable: string,
+  capture: CaptureServices,
 ): () => void {
   let shortcut: string | undefined;
   let shortcutMode: 'toggle' | 'hold' = 'toggle';
@@ -48,7 +58,10 @@ export function installIPC(
     'gul:connect': async (_event, value) => {
       services.journal.record('connect-start');
       try {
-        const result = await services.connections.connect(value);
+        const result = await runWithCaptureReset(
+          () => capture.reset(),
+          () => services.connections.connect(value),
+        );
         services.journal.record('connect-ok', { channelId: result.channelId });
         return result;
       } catch (error) {
@@ -56,26 +69,41 @@ export function installIPC(
         throw error;
       }
     },
-    'gul:connect-saved': (_event, value) => services.connections.connectSaved(value),
+    'gul:connect-saved': (_event, value) =>
+      runWithCaptureReset(
+        () => capture.reset(),
+        () => services.connections.connectSaved(value),
+      ),
     'gul:servers': () => services.serverList(),
     'gul:forget-server': async (_event, value) => {
       if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
-      await services.servers.forget(value);
+      if (!(await services.servers.forget(value)).persisted) throw failure('GUL_STORAGE_WRITE_FAILED');
     },
-    'gul:capture-capabilities': () => services.capabilities(),
+    'gul:capture-capabilities': () => capture.capabilities(),
+    'gul:screen-audio-start': () => capture.start(),
+    'gul:screen-audio-stop': (_event, value) => {
+      if (typeof value !== 'string' || !/^[a-f0-9]{32}$/u.test(value)) throw failure('GUL_INPUT_INVALID');
+      return capture.stop(value);
+    },
     'gul:app-info': () => services.info(),
     'gul:open-update': () => services.openUpdate(),
     'gul:diagnostics': (event) => services.diagnostics(current(event)),
     'gul:record-diagnostic': (_event, value) => services.record(value),
     'gul:disconnect': async () => {
       emit(false);
-      await services.connections.disconnect();
+      await runWithCaptureReset(
+        () => capture.reset(),
+        () => services.connections.disconnect(),
+      );
     },
     'gul:state': () => authority.state(),
-    'gul:channel': (_event, value) => {
+    'gul:channel': async (_event, value) => {
       emit(false);
       services.journal.record('channel-change', { channelId: value });
-      return authority.channel(value as number);
+      return runWithCaptureReset(
+        () => capture.reset(),
+        () => authority.channel(value as number),
+      );
     },
     'gul:audio': (_event, value) => {
       const state = audioInput(value);

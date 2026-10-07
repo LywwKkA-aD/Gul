@@ -12,6 +12,7 @@ import type {
   ServerList,
   CaptureCapabilities,
   AppInfo,
+  ScreenAudioLease,
 } from '../shared/contracts.ts';
 
 if (contextBridge.executeInMainWorld({ func: installDeviceAudioGuard }) !== true)
@@ -29,11 +30,21 @@ async function invoke<T>(channel: string, value?: unknown): Promise<T> {
 const api: DesktopAPI = Object.freeze({
   connect: (input: ConnectInput, rememberPassword = false) =>
     invoke<MediaSession>('gul:connect', { input, rememberPassword }),
-  connectSaved: (address: string, username: string) =>
-    invoke<MediaSession>('gul:connect-saved', { address, username }),
+  connectSaved: (address: string, username: string, rememberPassword = true) =>
+    invoke<MediaSession>('gul:connect-saved', { address, username, rememberPassword }),
   servers: () => invoke<ServerList>('gul:servers'),
   forgetServer: (address: string) => invoke<void>('gul:forget-server', address),
   captureCapabilities: () => invoke<CaptureCapabilities>('gul:capture-capabilities'),
+  screenAudioStart: () => invoke<ScreenAudioLease>('gul:screen-audio-start'),
+  screenAudioStop: (leaseId: string) => invoke<void>('gul:screen-audio-stop', leaseId),
+  onScreenAudioEnded: (listener: (leaseId: string) => void) => {
+    if (typeof listener !== 'function') throw new TypeError('GUL_INPUT_INVALID');
+    const handler = (_event: Electron.IpcRendererEvent, leaseId: unknown) => {
+      if (typeof leaseId === 'string' && /^[a-f0-9]{32}$/u.test(leaseId)) listener(leaseId);
+    };
+    ipcRenderer.on('gul:screen-audio-ended', handler);
+    return () => ipcRenderer.removeListener('gul:screen-audio-ended', handler);
+  },
   appInfo: () => invoke<AppInfo>('gul:app-info'),
   openUpdate: () => invoke<void>('gul:open-update'),
   diagnostics: () => invoke<boolean>('gul:diagnostics'),

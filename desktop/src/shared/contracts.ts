@@ -58,10 +58,17 @@ export interface SavedServerInfo {
   readonly username: string;
   readonly lastUsed: number;
   readonly hasPassword: boolean;
+  readonly rememberPassword: boolean;
+  readonly passwordStatus: 'saved' | 'missing' | 'unavailable' | 'locked' | 'save-failed';
 }
 export interface ServerList {
   readonly servers: readonly SavedServerInfo[];
   readonly storage: 'protected' | 'unavailable';
+  readonly lastSave: {
+    readonly address: string;
+    readonly status: 'saved' | 'not-requested' | 'unavailable' | 'encrypt-failed' | 'write-failed';
+    readonly persisted: boolean;
+  } | null;
 }
 export interface CaptureCapabilities {
   readonly platform: string;
@@ -70,6 +77,11 @@ export interface CaptureCapabilities {
   readonly ownAudioExcluded: boolean;
   readonly audioServer: 'detected' | 'not-detected' | 'not-required';
   readonly details: string;
+  readonly picker: 'portal' | 'application';
+}
+export interface ScreenAudioLease {
+  readonly leaseId: string;
+  readonly deviceLabel: string;
 }
 export interface AppInfo {
   readonly version: string;
@@ -77,10 +89,13 @@ export interface AppInfo {
 }
 export interface DesktopAPI {
   connect(input: ConnectInput, rememberPassword?: boolean): Promise<MediaSession>;
-  connectSaved(address: string, username: string): Promise<MediaSession>;
+  connectSaved(address: string, username: string, rememberPassword?: boolean): Promise<MediaSession>;
   servers(): Promise<ServerList>;
   forgetServer(address: string): Promise<void>;
   captureCapabilities(): Promise<CaptureCapabilities>;
+  screenAudioStart(): Promise<ScreenAudioLease>;
+  screenAudioStop(leaseId: string): Promise<void>;
+  onScreenAudioEnded(listener: (leaseId: string) => void): () => void;
   appInfo(): Promise<AppInfo>;
   openUpdate(): Promise<void>;
   diagnostics(): Promise<boolean>;

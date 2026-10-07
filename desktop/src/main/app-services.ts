@@ -35,7 +35,11 @@ export class AppServices {
       );
   }
   serverList(): ServerList {
-    return { servers: this.servers.list(), storage: this.servers.storageStatus() };
+    return {
+      servers: this.servers.list(),
+      storage: this.servers.storageStatus(),
+      lastSave: this.connections.lastSave(),
+    };
   }
   async info(): Promise<AppInfo> {
     await this.updateCheck;
@@ -44,8 +48,8 @@ export class AppServices {
       update: this.update ? { version: this.update.version, url: this.update.url } : null,
     };
   }
-  capabilities() {
-    return getCaptureCapabilities();
+  capabilities(options?: { linuxExcludedAudio: boolean }) {
+    return getCaptureCapabilities(options);
   }
   async openUpdate(): Promise<void> {
     if (this.update && trustedReleaseURL(this.update.url)) await shell.openExternal(this.update.url);

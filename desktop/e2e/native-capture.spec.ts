@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { readFile, mkdtemp, rm, access, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { privateLoginForm } from './login-form.ts';
 
 const require = createRequire(import.meta.url);
 const exec = promisify(execFile);
@@ -22,11 +23,11 @@ async function pulse(...args: string[]): Promise<string> {
 /** The test plays real stereo PCM into PulseAudio; it never replaces a browser capture API. */
 async function startTone(directory: string, sink: string): Promise<ChildProcess> {
   const rate = 48000;
-  const seconds = 20;
+  const seconds = 90;
   const pcm = Buffer.alloc(rate * seconds * 4);
   for (let sample = 0; sample < rate * seconds; sample++) {
     pcm.writeInt16LE(Math.round(3276 * Math.sin((2 * Math.PI * 440 * sample) / rate)), sample * 4);
-    pcm.writeInt16LE(Math.round(3276 * Math.sin((2 * Math.PI * 880 * sample) / rate)), sample * 4 + 2);
+    pcm.writeInt16LE(Math.round(3276 * Math.sin((2 * Math.PI * 660 * sample) / rate)), sample * 4 + 2);
   }
   const path = join(directory, 'stereo.pcm');
   await writeFile(path, pcm, { mode: 0o600 });
@@ -44,7 +45,7 @@ async function startTone(directory: string, sink: string): Promise<ChildProcess>
 async function remoteStereo(page: Page) {
   return page.evaluate(async () => {
     const element = document.querySelector<HTMLAudioElement>('audio[data-source="screen"]');
-    if (!element?.srcObject) return { peak: 0, separation: -100 };
+    if (!element?.srcObject) return { peak: 0, separation: -100, ownExclusion: -100 };
     const context = new AudioContext({ sampleRate: 48000 });
     const source = context.createMediaStreamSource(element.srcObject as MediaStream);
     const splitter = context.createChannelSplitter(2);
@@ -64,13 +65,18 @@ async function remoteStereo(page: Page) {
         peak = Math.max(peak, ...samples.map(Math.abs));
         const spectrum = new Float32Array(analyser.frequencyBinCount);
         analyser.getFloatFrequencyData(spectrum);
-        return [440, 880].map((frequency) => {
+        return [440, 660, 880].map((frequency) => {
           const bin = Math.round((frequency * analyser.fftSize) / context.sampleRate);
           return Math.max(...spectrum.slice(bin - 2, bin + 3));
         });
       });
       const separation = Math.min(energies[0][0] - energies[0][1], energies[1][1] - energies[1][0]);
-      return { peak, separation: Number.isFinite(separation) ? separation : -100 };
+      const ownExclusion = Math.min(energies[0][0] - energies[0][2], energies[1][1] - energies[1][2]);
+      return {
+        peak,
+        separation: Number.isFinite(separation) ? separation : -100,
+        ownExclusion: Number.isFinite(ownExclusion) ? ownExclusion : -100,
+      };
     } finally {
       source.disconnect();
       splitter.disconnect();
@@ -78,6 +84,65 @@ async function remoteStereo(page: Page) {
       await context.close();
     }
   });
+}
+
+/** Gul's real Chromium AudioService output must remain audible but never enter the private mix. */
+async function startOwnTone(page: Page) {
+  await page.evaluate(async () => {
+    const context = new AudioContext({ sampleRate: 48000 });
+    const tone = context.createOscillator();
+    const gain = context.createGain();
+    tone.frequency.value = 880;
+    gain.gain.value = 0.12;
+    tone.connect(gain).connect(context.destination);
+    tone.start();
+    await context.resume();
+    Object.defineProperty(window, '__gulOwnToneStop', {
+      value: async () => {
+        tone.stop();
+        gain.disconnect();
+        await context.close();
+      },
+    });
+  });
+}
+
+async function hardwareOutput(sink: string) {
+  const recorder = spawn(
+    'parec',
+    ['--raw', '--format=s16le', '--rate=48000', '--channels=2', `--device=${sink}.monitor`],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const required = 48000 * 4;
+  const timeout = setTimeout(() => recorder.kill('SIGKILL'), 5000);
+  try {
+    recorder.stdout!.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size >= required) recorder.kill('SIGTERM');
+    });
+    await once(recorder, 'exit');
+    const pcm = Buffer.concat(chunks).subarray(0, required);
+    expect(pcm.length).toBe(required);
+    return [440, 660, 880].map((frequency) => {
+      const amplitudes = [0, 1].map((channel) => {
+        let cosine = 0,
+          sine = 0;
+        for (let sample = 0; sample < 48000; sample++) {
+          const value = pcm.readInt16LE(sample * 4 + channel * 2) / 32768;
+          cosine += value * Math.cos((2 * Math.PI * frequency * sample) / 48000);
+          sine += value * Math.sin((2 * Math.PI * frequency * sample) / 48000);
+        }
+        return (2 * Math.hypot(cosine, sine)) / 48000;
+      });
+      return Math.max(...amplitudes);
+    });
+  } finally {
+    clearTimeout(timeout);
+    recorder.kill();
+  }
 }
 
 async function instrumentPeers(page: Page) {
@@ -237,7 +302,7 @@ async function movingDesktop(page: Page): Promise<boolean> {
   });
 }
 
-test('native Linux desktop and PulseAudio stereo loopback reach another Electron client through REALITY', async () => {
+test('native Linux game stereo excludes Gul while callers remain audible through REALITY', async () => {
   const directory = resolve(fixture!);
   const address = (await readFile(join(directory, 'address'), 'utf8')).trim();
   const password = (await readFile(join(directory, 'join-password'), 'utf8')).trim();
@@ -247,9 +312,11 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     .catch(() => undefined);
   const dataRoot = await mkdtemp(join(tmpdir(), 'gul-native-capture-'));
   const sink = `gul_native_${process.pid}`;
+  const microphoneSink = `${sink}_microphone`;
   const apps: ElectronApplication[] = [];
   let oldSink: string | undefined;
-  let module: string | undefined;
+  let oldSource: string | undefined;
+  const modules: string[] = [];
   let player: ChildProcess | undefined;
   const diagnostics: (() => Promise<unknown>)[] = [];
   const deviceProbes: {
@@ -260,8 +327,32 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
   }[] = [];
   try {
     oldSink = await pulse('get-default-sink');
-    module = await pulse('load-module', 'module-null-sink', `sink_name=${sink}`, 'channels=2', 'rate=48000');
+    oldSource = await pulse('get-default-source');
+    modules.push(
+      await pulse('load-module', 'module-null-sink', `sink_name=${sink}`, 'channels=2', 'rate=48000'),
+    );
+    // Chromium does not enumerate monitor sources as microphones. A dedicated silent
+    // fixture input makes native GUM real without feeding game/Gul playback back into voice.
+    modules.push(
+      await pulse(
+        'load-module',
+        'module-null-sink',
+        `sink_name=${microphoneSink}`,
+        'channels=2',
+        'rate=48000',
+      ),
+    );
+    modules.push(
+      await pulse(
+        'load-module',
+        'module-remap-source',
+        `master=${microphoneSink}.monitor`,
+        `source_name=${microphoneSink}`,
+        'source_properties=device.description=Gul-Test-Native-Microphone',
+      ),
+    );
     await pulse('set-default-sink', sink);
+    await pulse('set-default-source', microphoneSink);
     const pages: Page[] = [];
     for (let i = 0; i < 2; i++) {
       const app = await electron.launch({
@@ -280,13 +371,15 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       diagnostics.push(await captureDiagnostics(app, page));
       await expect(page.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
       await instrumentPeers(page);
-      await page.getByLabel('Адрес сервера', { exact: true }).fill(address);
+      await privateLoginForm(page, address, password);
       await page.getByLabel('Твой ник', { exact: true }).fill(i ? 'native-viewer' : 'native-publisher');
-      await page.getByLabel('Пароль', { exact: true }).fill(password);
       await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
       await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
-      // Both applications share this test's null sink. Avoid digitally recapturing viewer playback.
-      await page.getByRole('button', { name: 'Выключить звук', exact: true }).click();
+      // Only the viewer is deafened to isolate its playback on this shared test null sink.
+      // The publisher keeps hearing Gul's real AudioService output throughout capture.
+      await page
+        .getByRole('button', { name: i ? 'Выключить звук' : 'Выключить микрофон', exact: true })
+        .click();
     }
     const [publisher, viewer] = pages;
     const desktopId = await apps[0].evaluate(
@@ -318,10 +411,14 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       platform: 'linux',
       backend: 'pipewire-pulse',
       systemAudio: true,
-      ownAudioExcluded: false,
+      ownAudioExcluded: true,
       audioServer: 'detected',
     });
     player = await startTone(dataRoot, sink);
+    await startOwnTone(publisher);
+    const privateSourcesBefore = (await pulse('list', 'short', 'sources'))
+      .split('\n')
+      .filter((line) => line.includes('gul_share_')).length;
     await apps[0].evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await publisher.bringToFront();
     await publisher.getByRole('button', { name: 'Показать экран', exact: true }).click();
@@ -361,11 +458,23 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       .poll(
         async () => {
           const measurement = await remoteStereo(viewer);
-          return measurement.peak > 0.02 && measurement.separation > 12;
+          return measurement.peak > 0.02 && measurement.separation > 12 && measurement.ownExclusion > 35;
         },
         { timeout: 15_000 },
       )
       .toBe(true);
+    const audible = await hardwareOutput(sink);
+    expect(audible[0]).toBeGreaterThan(0.03);
+    expect(audible[1]).toBeGreaterThan(0.03);
+    expect(audible[2]).toBeGreaterThan(0.03);
+    await expect(publisher.getByRole('button', { name: 'Выключить звук', exact: true })).toBeVisible();
+    console.info(
+      'GUL_NATIVE_AUDIO_PROOF',
+      JSON.stringify({
+        screen: await remoteStereo(viewer),
+        hardware: audible.map((value) => Number(value.toFixed(4))),
+      }),
+    );
     await expect
       .poll(
         () =>
@@ -393,6 +502,17 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     await publisher.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
     await expect(viewer.locator('video')).toHaveCount(0);
     await expect(viewer.locator('audio[data-source="screen"]')).toHaveCount(0);
+    await expect
+      .poll(
+        async () =>
+          (await pulse('list', 'short', 'sources')).split('\n').filter((line) => line.includes('gul_share_'))
+            .length,
+        { timeout: 5000 },
+      )
+      .toBe(privateSourcesBefore);
+    await publisher.evaluate(() =>
+      (window as unknown as { __gulOwnToneStop: () => Promise<void> }).__gulOwnToneStop(),
+    );
     for (const probe of deviceProbes) {
       expect(
         probe.outcome === 'unavailable' || (probe.outcome === 'denied' && probe.name === 'NotAllowedError'),
@@ -408,8 +528,9 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
   } finally {
     player?.kill();
     await Promise.all(apps.map((app) => app.close().catch(() => {})));
+    for (const module of [...modules].reverse()) await pulse('unload-module', module).catch(() => {});
     if (oldSink) await pulse('set-default-sink', oldSink).catch(() => {});
-    if (module) await pulse('unload-module', module).catch(() => {});
+    if (oldSource) await pulse('set-default-source', oldSource).catch(() => {});
     await rm(dataRoot, { recursive: true, force: true });
   }
 });

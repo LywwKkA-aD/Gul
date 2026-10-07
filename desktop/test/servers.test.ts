@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile, stat, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, stat, symlink, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -52,6 +52,8 @@ test('metadata stays public; encrypted passwords survive restart only inside mai
   assert.equal(result.persisted, true);
   const rows = store.list();
   assert.equal(rows[0].hasPassword, true);
+  assert.equal(rows[0].rememberPassword, true);
+  assert.equal(rows[0].passwordStatus, 'saved');
   assert.equal(Object.hasOwn(rows[0], 'password'), false);
   assert.ok(Object.isFrozen(rows));
   assert.ok(Object.isFrozen(rows[0]));
@@ -60,6 +62,7 @@ test('metadata stays public; encrypted passwords survive restart only inside mai
   const reopened = new SavedServerStore({ file, safeStorage: secure(), platform: 'linux' });
   await reopened.load();
   assert.deepEqual(reopened.resolve(address), { kind: 'ready', input });
+  assert.equal(reopened.list()[0].rememberPassword, true);
 });
 
 test('Linux basic_text never encrypts, stores or reads a password', async (t) => {
@@ -75,7 +78,11 @@ test('Linux basic_text never encrypts, stores or reads a password', async (t) =>
   const { store, file } = await fixture(t, adapter);
   assert.equal((await store.remember(input)).passwordSaved, false);
   assert.equal(store.list()[0].hasPassword, false);
-  assert.equal((await readFile(file, 'utf8')).includes('password'), false);
+  assert.equal(store.list()[0].rememberPassword, true);
+  assert.equal(store.list()[0].passwordStatus, 'unavailable');
+  const document = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(Object.hasOwn(document.servers[0], 'encryptedPassword'), false);
+  assert.equal((await readFile(file, 'utf8')).includes(input.password), false);
   assert.deepEqual(store.resolve(address), {
     kind: 'password-required',
     address,
@@ -92,12 +99,154 @@ test('a locked or corrupt keyring falls back to manual input without exposing er
     throw Error('Password and path must remain private');
   };
   assert.equal(store.list()[0].hasPassword, false);
+  assert.equal(store.list()[0].rememberPassword, true);
+  assert.equal(store.list()[0].passwordStatus, 'locked');
   assert.deepEqual(store.resolve(address), {
     kind: 'password-required',
     address,
     username: input.username,
     reason: 'locked',
   });
+  adapter.decryptString = secure().decryptString;
+  assert.equal(store.list()[0].hasPassword, true);
+  assert.equal(store.list()[0].passwordStatus, 'saved');
+});
+
+test('transient encryption refusal preserves ciphertext and consent while blocking a stale previous password', async (t) => {
+  const adapter = secure();
+  const { store, file } = await fixture(t, adapter);
+  await store.remember(input);
+  const previous = JSON.parse(await readFile(file, 'utf8')).servers[0].encryptedPassword;
+  adapter.encryptString = () => {
+    throw Error('private keyring refusal');
+  };
+  const changed = { ...input, password: 'changed-private-fixture' };
+  const result = await store.remember(changed);
+  assert.equal(result.passwordSaved, false);
+  assert.equal(result.status, 'encrypt-failed');
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).servers[0].encryptedPassword, previous);
+  assert.equal(store.list()[0].hasPassword, false);
+  assert.equal(store.list()[0].rememberPassword, true);
+  assert.equal(store.list()[0].passwordStatus, 'save-failed');
+  const reopened = new SavedServerStore({ file, safeStorage: secure(), platform: 'linux' });
+  await reopened.load();
+  assert.equal(reopened.list()[0].hasPassword, false);
+  assert.equal(reopened.list()[0].passwordStatus, 'save-failed');
+  await reopened.remember(changed);
+  assert.deepEqual(reopened.resolve(address), { kind: 'ready', input: changed });
+});
+
+test('failed replacement may keep an already persisted identical password usable without pretending encryption succeeded', async (t) => {
+  const adapter = secure();
+  const { store, file } = await fixture(t, adapter);
+  await store.remember(input);
+  adapter.encryptString = () => {
+    throw Error('private refusal');
+  };
+  const result = await store.remember(input);
+  assert.equal(result.status, 'encrypt-failed');
+  assert.equal(store.list()[0].hasPassword, true);
+  assert.equal(store.list()[0].passwordStatus, 'save-failed');
+  const reopened = new SavedServerStore({ file, safeStorage: secure(), platform: 'linux' });
+  await reopened.load();
+  assert.deepEqual(reopened.resolve(address), { kind: 'ready', input });
+});
+
+test('alpha1 encrypted profiles migrate consent and a transient unlock failure never changes disk ciphertext', async (t) => {
+  const adapter = secure();
+  const { file } = await fixture(t, adapter);
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 1,
+      servers: [
+        {
+          address,
+          username: input.username,
+          lastUsed: 1,
+          encryptedPassword: adapter
+            .encryptString(JSON.stringify({ address, password: input.password }))
+            .toString('base64'),
+        },
+      ],
+    }),
+  );
+  const original = await readFile(file, 'utf8');
+  const reopened = new SavedServerStore({ file, safeStorage: adapter, platform: 'linux' });
+  await reopened.load();
+  assert.equal(reopened.list()[0].rememberPassword, true);
+  adapter.decryptString = () => {
+    throw Error('private lock');
+  };
+  assert.equal(reopened.list()[0].passwordStatus, 'locked');
+  assert.equal(await readFile(file, 'utf8'), original);
+  adapter.decryptString = secure().decryptString;
+  assert.equal(reopened.list()[0].hasPassword, true);
+});
+
+test('a failed atomic replacement keeps the committed profile and blocks using its different old password', async (t) => {
+  const { store, file } = await fixture(t);
+  await store.remember(input);
+  await rm(file);
+  await mkdir(file);
+  const result = await store.remember({ ...input, username: 'Changed', password: 'new-private-fixture' });
+  assert.equal(result.status, 'write-failed');
+  assert.equal(result.passwordSaved, false);
+  assert.equal(store.list()[0].username, input.username);
+  assert.equal(store.list()[0].hasPassword, false);
+  assert.equal(store.list()[0].passwordStatus, 'save-failed');
+  assert.equal((await store.forget(address)).persisted, false);
+  assert.equal(store.list().length, 1);
+});
+
+test('write failures on different profiles preserve each stale-password fence until that profile is committed', async (t) => {
+  const { store, file } = await fixture(t);
+  const second = { ...input, address: address.replace('server.test', 'other.test') };
+  await store.remember(input);
+  await store.remember(second);
+  await rm(file);
+  await mkdir(file);
+  await store.remember({ ...input, password: 'new-private-a' });
+  await store.remember({ ...second, password: 'new-private-b' });
+  for (const row of store.list()) {
+    assert.equal(row.hasPassword, false);
+    assert.equal(row.passwordStatus, 'save-failed');
+  }
+  await rm(file, { recursive: true });
+  await store.remember({ ...second, password: 'new-private-b' });
+  assert.equal(store.resolve(input.address).kind, 'password-required');
+  assert.equal(store.resolve(second.address).kind, 'ready');
+  await store.remember({ ...input, password: 'new-private-a' });
+  assert.equal(store.resolve(input.address).kind, 'ready');
+});
+
+test('eviction drops orphan failure markers without displacing fences of retained profiles', async (t) => {
+  let timestamp = 0;
+  const { file } = await fixture(t);
+  const store = new SavedServerStore({
+    file,
+    safeStorage: secure(),
+    platform: 'linux',
+    now: () => ++timestamp,
+  });
+  const profile = (index: number) => ({
+    ...input,
+    address: address.replace('server.test', `s${index}.test`),
+  });
+  for (let index = 0; index < 8; index++) await store.remember(profile(index));
+  await rm(file);
+  await mkdir(file);
+  for (const index of [1, 2, 3, 4, 5, 6, 7, 0])
+    await store.remember({ ...profile(index), password: 'changed-private-fixture' });
+  await rm(file, { recursive: true });
+  await store.remember(profile(8));
+  assert.equal(store.resolve(profile(0).address).kind, 'missing');
+  await rm(file);
+  await mkdir(file);
+  await store.remember({ ...profile(8), password: 'changed-private-fixture' });
+  assert.equal(store.list().length, 8);
+  for (let index = 1; index < 9; index++)
+    assert.equal(store.resolve(profile(index).address).kind, 'password-required');
 });
 
 test('ciphertext is bound to its original address and cannot authenticate another server', async (t) => {
@@ -120,6 +269,7 @@ test('successful reconnect updates one row; an empty password deletes stale cred
   assert.equal(store.list().length, 1);
   assert.equal(store.list()[0].username, 'Changed');
   assert.equal(store.list()[0].hasPassword, false);
+  assert.equal(store.list()[0].rememberPassword, false);
   assert.equal((await readFile(file, 'utf8')).includes('encryptedPassword'), false);
   assert.equal(store.resolve(address).kind, 'password-required');
   await store.forget(address);
@@ -180,7 +330,9 @@ test('storage write failure costs persistence without rejecting the accepted con
   await store.load();
   const result = await store.remember(input);
   assert.equal(result.persisted, false);
-  assert.equal(store.list().length, 1);
+  assert.equal(result.passwordSaved, false);
+  assert.equal(result.status, 'write-failed');
+  assert.equal(store.list().length, 0);
   assert.equal((await store.forget(address)).persisted, false);
   assert.deepEqual(store.list(), []);
 });

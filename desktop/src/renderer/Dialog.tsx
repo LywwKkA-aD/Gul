@@ -45,7 +45,7 @@ export function Dialog({
       <button className="modal-close" aria-label={`Закрыть: ${title}`} onClick={onClose}>
         ×
       </button>
-      {children}
+      <div className="dialog-scroll">{children}</div>
     </dialog>
   );
 }

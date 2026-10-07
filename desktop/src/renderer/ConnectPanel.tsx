@@ -1,5 +1,6 @@
 import type { SavedServerInfo, ServerList } from '../shared/contracts.ts';
 import { SavedServers } from './SavedServers.tsx';
+import { selectedSavedServer, savedPasswordMessage } from './saved-login.ts';
 
 export function ConnectPanel({
   address,
@@ -15,6 +16,7 @@ export function ConnectPanel({
   onRemember,
   onChoose,
   onForget,
+  onRefreshSaved,
   onConnect,
   onCancel,
 }: {
@@ -31,10 +33,13 @@ export function ConnectPanel({
   onRemember: (value: boolean) => void;
   onChoose: (server: SavedServerInfo) => void;
   onForget: (address: string) => void;
+  onRefreshSaved: () => void;
   onConnect: () => void;
   onCancel: () => void;
 }) {
-  const hasPassword = saved.servers.some((server) => server.address === address.trim() && server.hasPassword);
+  const selected = selectedSavedServer(saved, address);
+  const hasPassword = selected?.hasPassword === true;
+  const passwordMessage = savedPasswordMessage(selected);
   return (
     <main className="connect-page">
       <section className="connect-card">
@@ -80,11 +85,21 @@ export function ConnectPanel({
               value={password}
               onChange={(event) => onPassword(event.target.value)}
               required={!hasPassword}
-              placeholder={hasPassword ? 'Сохранён в системе' : ''}
+              placeholder={hasPassword ? 'Пароль сохранён — ввод не нужен' : ''}
               autoComplete="current-password"
               disabled={busy}
             />
           </label>
+          {passwordMessage && (
+            <p className="subtle" role="status">
+              {passwordMessage}
+            </p>
+          )}
+          {selected?.rememberPassword && !hasPassword && selected.passwordStatus !== 'missing' && (
+            <button type="button" className="secondary-button" disabled={busy} onClick={onRefreshSaved}>
+              Повторить чтение сохранённого пароля
+            </button>
+          )}
           <label className="checkbox-control">
             <input
               type="checkbox"

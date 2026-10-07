@@ -1,10 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { release } from 'node:os';
 import { join } from 'node:path';
-import { captureCapabilities, type CaptureCapabilities } from './capture-policy.ts';
+import { captureCapabilities, capturePickerMode, type CaptureCapabilities } from './capture-policy.ts';
 
 /** Report engine support and a local audio-server socket; never expose paths or capture without consent. */
-export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
+export async function getCaptureCapabilities(
+  options: { readonly linuxExcludedAudio?: boolean } = {},
+): Promise<CaptureCapabilities> {
   let pulseDetected = false;
   if (process.platform === 'linux') {
     const paths = [
@@ -25,5 +27,11 @@ export async function getCaptureCapabilities(): Promise<CaptureCapabilities> {
       )
     ).some(Boolean);
   }
-  return captureCapabilities(process.platform, release(), pulseDetected);
+  return captureCapabilities(
+    process.platform,
+    release(),
+    pulseDetected,
+    options.linuxExcludedAudio ?? false,
+    capturePickerMode(process.platform, process.env),
+  );
 }

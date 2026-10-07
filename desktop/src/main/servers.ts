@@ -1,17 +1,15 @@
-import type { ConnectInput } from '../shared/contracts.ts';
+import type { ConnectInput, SavedServerInfo, ServerList } from '../shared/contracts.ts';
 import { parseRealityProfile } from '../transport/profile.ts';
 import { connectInput, failure } from './validation.ts';
 import { protectedStorage, readBoundedJSON, writePrivateJSON, type SafeStorageAdapter } from './storage.ts';
 
 export const SAVED_SERVER_LIMIT = 8;
-export interface SavedServer {
-  readonly address: string;
-  readonly username: string;
-  readonly lastUsed: number;
-  readonly hasPassword: boolean;
-}
-interface StoredServer extends Omit<SavedServer, 'hasPassword'> {
+export type SavedServer = SavedServerInfo;
+export type SaveStatus = NonNullable<ServerList['lastSave']>['status'];
+interface StoredServer extends Omit<SavedServer, 'hasPassword' | 'passwordStatus'> {
   readonly encryptedPassword?: string;
+  readonly passwordBlocked?: true;
+  readonly passwordFailure?: 'unavailable' | 'encrypt-failed';
 }
 export type SavedConnection =
   | { readonly kind: 'ready'; readonly input: ConnectInput }
@@ -19,19 +17,25 @@ export type SavedConnection =
       readonly kind: 'password-required';
       readonly address: string;
       readonly username: string;
-      readonly reason: 'unavailable' | 'locked' | 'missing';
+      readonly reason: 'unavailable' | 'locked' | 'missing' | 'save-failed';
     }
   | { readonly kind: 'missing' };
 export interface RememberResult {
   readonly passwordSaved: boolean;
   readonly persisted: boolean;
   readonly storage: 'protected' | 'unavailable';
+  readonly status: SaveStatus;
 }
 interface Options {
   readonly file: string;
   readonly safeStorage: SafeStorageAdapter;
   readonly platform: string;
   readonly now?: () => number;
+}
+interface FailedWrite {
+  readonly address: string;
+  readonly usablePreviousPassword: boolean;
+  readonly rememberPassword: boolean;
 }
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -57,6 +61,7 @@ export class SavedServerStore {
   private records: readonly StoredServer[] = Object.freeze([]);
   private loaded?: Promise<void>;
   private queue: Promise<unknown> = Promise.resolve();
+  private failedWrites: readonly FailedWrite[] = Object.freeze([]);
   constructor(options: Options) {
     this.options = options;
   }
@@ -72,9 +77,28 @@ export class SavedServerStore {
   }
   list(): readonly SavedServer[] {
     return Object.freeze(
-      this.records.map(({ address, username, lastUsed }) =>
-        Object.freeze({ address, username, lastUsed, hasPassword: this.resolve(address).kind === 'ready' }),
-      ),
+      this.records.map((entry) => {
+        const resolved = this.resolve(entry.address);
+        const failedWrite = this.failedWrites.find((failure) => failure.address === entry.address);
+        const passwordStatus =
+          failedWrite || entry.passwordFailure === 'encrypt-failed' || entry.passwordBlocked
+            ? 'save-failed'
+            : resolved.kind === 'ready'
+              ? 'saved'
+              : resolved.kind === 'password-required' && resolved.reason === 'unavailable'
+                ? 'unavailable'
+                : resolved.kind === 'password-required' && resolved.reason === 'locked'
+                  ? 'locked'
+                  : 'missing';
+        return Object.freeze({
+          address: entry.address,
+          username: entry.username,
+          lastUsed: entry.lastUsed,
+          rememberPassword: failedWrite?.rememberPassword ?? entry.rememberPassword,
+          hasPassword: resolved.kind === 'ready',
+          passwordStatus,
+        });
+      }),
     );
   }
   storageStatus(): 'protected' | 'unavailable' {
@@ -86,7 +110,15 @@ export class SavedServerStore {
       const input = connectInput(value);
       if (!metadata(input)) throw failure('GUL_INPUT_INVALID');
       const storage = this.storageStatus();
+      const previous = this.records.find((entry) => entry.address === input.address);
+      const previousPassword = this.resolve(input.address);
+      const usablePreviousPassword =
+        !!input.password &&
+        previousPassword.kind === 'ready' &&
+        previousPassword.input.password === input.password;
+      const rememberPassword = !!input.password;
       let encryptedPassword: string | undefined;
+      let passwordFailure: StoredServer['passwordFailure'];
       if (input.password && storage === 'protected') {
         try {
           encryptedPassword = ciphertext(
@@ -94,46 +126,86 @@ export class SavedServerStore {
               .encryptString(JSON.stringify({ address: input.address, password: input.password }))
               .toString('base64'),
           );
+          if (!encryptedPassword) passwordFailure = 'encrypt-failed';
         } catch {
-          /* Keyring refusal costs saved credentials, never the accepted login. */
+          passwordFailure = 'encrypt-failed';
         }
-      }
+      } else if (rememberPassword) passwordFailure = 'unavailable';
+      if (passwordFailure) encryptedPassword = previous?.encryptedPassword;
       const lastUsed = Math.max(
         0,
         (this.options.now ?? Date.now)(),
         ...this.records.map((entry) => entry.lastUsed),
       );
-      this.records = Object.freeze(
+      const next = Object.freeze(
         [
           Object.freeze({
             address: input.address,
             username: input.username,
             lastUsed,
+            rememberPassword,
             ...(encryptedPassword ? { encryptedPassword } : {}),
+            ...(passwordFailure ? { passwordFailure } : {}),
+            ...(passwordFailure && encryptedPassword && !usablePreviousPassword
+              ? { passwordBlocked: true as const }
+              : {}),
           }),
           ...this.records.filter((entry) => entry.address !== input.address),
         ].slice(0, SAVED_SERVER_LIMIT),
       );
-      return { passwordSaved: Boolean(encryptedPassword), persisted: await this.save(), storage };
+      const persisted = await this.save(next);
+      if (persisted) {
+        this.records = next;
+        this.failedWrites = Object.freeze(
+          this.failedWrites.filter(
+            (failure) =>
+              failure.address !== input.address && next.some((entry) => entry.address === failure.address),
+          ),
+        );
+      } else if (previous)
+        this.failedWrites = Object.freeze(
+          [
+            Object.freeze({ address: input.address, usablePreviousPassword, rememberPassword }),
+            ...this.failedWrites.filter((failure) => failure.address !== input.address),
+          ].slice(0, SAVED_SERVER_LIMIT),
+        );
+      return {
+        passwordSaved: persisted && !passwordFailure && Boolean(encryptedPassword),
+        persisted,
+        storage,
+        status: !persisted
+          ? 'write-failed'
+          : (passwordFailure ?? (rememberPassword ? 'saved' : 'not-requested')),
+      };
     });
   }
   forget(address: string): Promise<{ readonly persisted: boolean }> {
     return this.serialize(async () => {
       if (typeof address !== 'string' || address.length > 4096) throw failure('GUL_INPUT_INVALID');
-      this.records = Object.freeze(this.records.filter((entry) => entry.address !== address.trim()));
-      return { persisted: await this.save() };
+      const next = Object.freeze(this.records.filter((entry) => entry.address !== address.trim()));
+      const persisted = await this.save(next);
+      if (persisted) {
+        this.records = next;
+        this.failedWrites = Object.freeze(
+          this.failedWrites.filter((failure) => failure.address !== address.trim()),
+        );
+      }
+      return { persisted };
     });
   }
   /** The ready branch contains a secret and must be consumed in main, never sent over IPC. */
   resolve(address: string): SavedConnection {
     const entry = this.records.find((candidate) => candidate.address === address);
     if (!entry) return { kind: 'missing' };
-    const required = (reason: 'unavailable' | 'locked' | 'missing'): SavedConnection => ({
+    const required = (reason: 'unavailable' | 'locked' | 'missing' | 'save-failed'): SavedConnection => ({
       kind: 'password-required',
       address: entry.address,
       username: entry.username,
       reason,
     });
+    const failedWrite = this.failedWrites.find((failure) => failure.address === address);
+    if (entry.passwordBlocked || (failedWrite && !failedWrite.usablePreviousPassword))
+      return required('save-failed');
     if (this.storageStatus() !== 'protected') return required('unavailable');
     if (!entry.encryptedPassword) return required('missing');
     try {
@@ -161,8 +233,10 @@ export class SavedServerStore {
     return this.serialize(async () => {
       if (this.records.length || !record(document) || !Array.isArray(document.servers))
         return { persisted: true };
-      this.records = this.decode(document.servers, true);
-      return { persisted: await this.save() };
+      const next = this.decode(document.servers, true);
+      const persisted = await this.save(next);
+      if (persisted) this.records = next;
+      return { persisted };
     });
   }
   private decode(values: readonly unknown[], legacy: boolean): readonly StoredServer[] {
@@ -175,13 +249,28 @@ export class SavedServerStore {
         legacy && typeof value.last_used === 'number' ? value.last_used * 1000 : value.lastUsed;
       const lastUsed =
         typeof timestamp === 'number' && Number.isSafeInteger(timestamp) && timestamp >= 0 ? timestamp : 0;
-      const encryptedPassword = legacy ? undefined : ciphertext(value.encryptedPassword);
-      return [Object.freeze({ ...info, lastUsed, ...(encryptedPassword ? { encryptedPassword } : {}) })];
+      const encryptedPassword =
+        legacy || value.rememberPassword === false ? undefined : ciphertext(value.encryptedPassword);
+      const rememberPassword = !legacy && (value.rememberPassword === true || !!encryptedPassword);
+      const passwordFailure =
+        rememberPassword && ['unavailable', 'encrypt-failed'].includes(value.passwordFailure as string)
+          ? (value.passwordFailure as StoredServer['passwordFailure'])
+          : undefined;
+      return [
+        Object.freeze({
+          ...info,
+          lastUsed,
+          rememberPassword,
+          ...(encryptedPassword ? { encryptedPassword } : {}),
+          ...(passwordFailure ? { passwordFailure } : {}),
+          ...(rememberPassword && value.passwordBlocked === true ? { passwordBlocked: true as const } : {}),
+        }),
+      ];
     });
     return Object.freeze(entries.sort((a, b) => b.lastUsed - a.lastUsed).slice(0, SAVED_SERVER_LIMIT));
   }
-  private save(): Promise<boolean> {
-    return writePrivateJSON(this.options.file, { version: 1, servers: this.records });
+  private save(records: readonly StoredServer[]): Promise<boolean> {
+    return writePrivateJSON(this.options.file, { version: 1, servers: records });
   }
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.queue

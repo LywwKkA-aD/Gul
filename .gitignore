@@ -28,6 +28,7 @@ desktop/resources/xray/*/xray
 desktop/resources/xray/*/xray.exe
 desktop/resources/ptt/*/gul-ptt
 desktop/resources/ptt/*/gul-ptt.exe
+desktop/resources/audio-capture/*/gul-audio
 *.exe
 *.obj
 *.pdb

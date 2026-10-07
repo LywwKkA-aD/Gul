@@ -3,17 +3,19 @@ import test from 'node:test';
 import { captureCapabilities, CaptureChooser } from '../src/main/capture-policy.ts';
 
 const source = { id: 'screen:0:0', name: 'Screen' };
-test('Linux and Windows10 capture the system mix without claiming own-audio exclusion', () => {
-  for (const [platform, release] of [
-    ['linux', '7.0.0'],
-    ['win32', '10.0.19045'],
-  ] as const) {
-    const capabilities = captureCapabilities(platform, release, true);
-    assert.equal(capabilities.systemAudio, true);
-    assert.equal(capabilities.ownAudioExcluded, false);
-    assert.match(capabilities.details, /голос/iu);
-    assert.doesNotMatch(capabilities.details, /наушники/iu);
-  }
+test('Linux audio exclusion requires the built-in helper and detected audio server', () => {
+  const unavailable = captureCapabilities('linux', '7.0.0', true, false);
+  assert.equal(unavailable.systemAudio, false);
+  assert.equal(unavailable.ownAudioExcluded, false);
+  const linux = captureCapabilities('linux', '7.0.0', true, true);
+  assert.equal(linux.systemAudio, true);
+  assert.equal(linux.ownAudioExcluded, true);
+  assert.doesNotMatch(linux.details, /выключите|другое устройство/iu);
+  assert.equal(captureCapabilities('linux', '7.0.0', false, true).systemAudio, false);
+  const windows = captureCapabilities('win32', '10.0.19045', false);
+  assert.equal(windows.systemAudio, true);
+  assert.equal(windows.ownAudioExcluded, false);
+  assert.match(windows.details, /голос/iu);
   assert.equal(captureCapabilities('win32', '10.0.22000', true).ownAudioExcluded, true);
   assert.equal(captureCapabilities('win32', '10.0.20348', true).ownAudioExcluded, false);
   assert.equal(captureCapabilities('linux', '7.0.0', false).audioServer, 'not-detected');
@@ -30,7 +32,7 @@ test('source selection grants loopback only after requested audio and explicit c
       valid: () => true,
       getSources: async () => [source],
       pick: async () => ({ response: 1, checkboxChecked: consent }),
-      capabilities: captureCapabilities('linux', '7.0.0', true),
+      capabilities: captureCapabilities('linux', '7.0.0', true, true),
       audioRequested: requested,
     });
     assert.deepEqual(selection, { video: source, ...(expected ? { audio: expected } : {}) });
@@ -42,7 +44,7 @@ test('cancelled selection, unsupported audio and session changes cannot grant ca
     valid: () => true,
     getSources: async () => [source],
     pick: async () => ({ response: 0, checkboxChecked: true }),
-    capabilities: captureCapabilities('linux', '7.0.0', true),
+    capabilities: captureCapabilities('linux', '7.0.0', true, true),
     audioRequested: true,
   };
   assert.equal(await chooser.choose(options), null);
@@ -90,7 +92,7 @@ test('concurrent selection is rejected and failed pick releases the chooser', as
     valid: () => true,
     getSources: () => pending,
     pick: async () => ({ response: 1, checkboxChecked: true }),
-    capabilities: captureCapabilities('linux', '7.0.0', true),
+    capabilities: captureCapabilities('linux', '7.0.0', true, true),
     audioRequested: true,
   };
   const first = chooser.choose(options);

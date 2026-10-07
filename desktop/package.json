@@ -1,6 +1,6 @@
 {
   "name": "gul",
-  "version": "0.8.0-alpha.1",
+  "version": "0.8.0-alpha.2",
   "private": true,
   "description": "Gul voice and screen sharing",
   "author": "Gul contributors",
@@ -20,7 +20,8 @@
     "vendor:xray": "node scripts/vendor-xray.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "build:ptt": "node scripts/build-ptt.mjs"
+    "build:ptt": "node scripts/build-ptt.mjs",
+    "build:audio": "node scripts/build-audio.mjs"
   },
   "dependencies": {
     "@livekit/protocol": "1.50.4",
@@ -70,6 +71,13 @@
       {
         "from": "resources/ptt",
         "to": "ptt",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/audio-capture",
+        "to": "audio-capture",
         "filter": [
           "**/*"
         ]
@@ -141,7 +149,8 @@
         "libpulse0",
         "pipewire-pulse | pulseaudio",
         "xdg-desktop-portal",
-        "libglib2.0-0 | libglib2.0-0t64"
+        "libglib2.0-0 | libglib2.0-0t64",
+        "libstdc++6"
       ],
       "artifactName": "Gul-${version}-linux-x64.${ext}"
     },

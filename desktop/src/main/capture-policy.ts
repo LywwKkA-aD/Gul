@@ -5,6 +5,7 @@ export interface CaptureCapabilities {
   readonly ownAudioExcluded: boolean;
   readonly audioServer: 'detected' | 'not-detected' | 'not-required';
   readonly details: string;
+  readonly picker: 'portal' | 'application';
 }
 
 /** Capabilities of the pinned Electron44/Chromium152 implementation, not a promise of audible samples. */
@@ -12,13 +13,16 @@ export function captureCapabilities(
   platform: string,
   release: string,
   pulseDetected: boolean,
+  linuxExcludedAudio = false,
+  picker: 'portal' | 'application' = 'application',
 ): CaptureCapabilities {
   const components = release.split('.').map(Number);
   const windows11 = platform === 'win32' && components[0] === 10 && components[2] >= 22000;
   const coreaudio =
     platform === 'darwin' && (components[0] > 23 || (components[0] === 23 && components[1] >= 2));
-  const systemAudio = platform === 'win32' || platform === 'linux' || coreaudio;
-  const ownAudioExcluded = windows11 || coreaudio;
+  const excludedLinux = platform === 'linux' && pulseDetected && linuxExcludedAudio;
+  const systemAudio = platform === 'win32' || excludedLinux || coreaudio;
+  const ownAudioExcluded = windows11 || coreaudio || excludedLinux;
   return Object.freeze({
     platform,
     backend:
@@ -31,21 +35,40 @@ export function captureCapabilities(
             : 'none',
     systemAudio,
     ownAudioExcluded,
+    picker,
     audioServer: platform === 'linux' ? (pulseDetected ? 'detected' : 'not-detected') : 'not-required',
-    details: !systemAudio
-      ? 'Этот режим передаёт изображение. Системный звук не поддерживается этой версией ОС.'
-      : ownAudioExcluded
-        ? 'Передаётся общий системный звук. Gul запрашивает исключение собственного воспроизведения; это зависит от возможностей ОС и источника.'
-        : 'Передаётся весь системный звук, включая голоса из Gul. Чтобы не возвращать голоса собеседникам, выключите входящий звук Gul на время демонстрации или выберите для Gul другое устройство вывода.' +
-          (platform === 'linux' && !pulseDetected
-            ? ' Аудиосервер не найден: проверьте работу PipeWire/PulseAudio.'
-            : ''),
+    details: excludedLinux
+      ? 'Передаются звуки приложений и игр. Голоса, демонстрации и сигналы Gul исключены; собеседников по-прежнему слышно.'
+      : platform === 'linux'
+        ? 'Системный звук недоступен: встроенный помощник или локальный PipeWire/PulseAudio не готов. Общий микс с голосами Gul не записывается.'
+        : !systemAudio
+          ? 'Этот режим передаёт изображение. Системный звук не поддерживается этой версией ОС.'
+          : ownAudioExcluded
+            ? 'Передаётся общий системный звук. Gul запрашивает исключение собственного воспроизведения; это зависит от возможностей ОС и источника.'
+            : 'Эта версия Windows передаёт общий системный звук, включая голоса Gul. Исключение звука Gul средствами ОС здесь недоступно.',
   });
 }
 
 interface Source {
   readonly id: string;
   readonly name: string;
+}
+/** Match WebRTC's native backend choice; a portal result already carries OS source consent. */
+export function capturePickerMode(
+  platform: string,
+  environment: Readonly<Record<string, string | undefined>>,
+): 'portal' | 'application' {
+  return platform === 'linux' &&
+    environment.XDG_SESSION_TYPE?.startsWith('wayland') &&
+    environment.WAYLAND_DISPLAY !== undefined
+    ? 'portal'
+    : 'application';
+}
+export function captureSourceLabel(source: Source, index: number): string {
+  return (
+    source.name.trim() ||
+    `${source.id.startsWith('screen:') ? 'Экран' : source.id.startsWith('window:') ? 'Окно' : 'Источник'} ${index + 1}`
+  );
 }
 export interface CaptureChoice {
   readonly response: number;
@@ -61,6 +84,8 @@ export interface CaptureOptions<S extends Source> {
   readonly pick: (sources: readonly S[], audio: boolean, details: string) => Promise<CaptureChoice>;
   readonly capabilities: CaptureCapabilities;
   readonly audioRequested: boolean;
+  readonly portalSelection?: boolean;
+  readonly loopbackAudio?: boolean;
 }
 
 /** The broker epoch is checked around both asynchronous user-consent boundaries. */
@@ -73,7 +98,12 @@ export class CaptureChooser {
       const sources = await options.getSources();
       if (!options.valid() || !sources.length) return null;
       const audio = options.audioRequested && options.capabilities.systemAudio;
-      const choice = await options.pick(sources, audio, options.capabilities.details);
+      // Electron resolves a delegated PipeWire list only after OnSelection. A rejected
+      // portal request is never retried or converted into application consent.
+      if (options.portalSelection && sources.length !== 1) return null;
+      const choice = options.portalSelection
+        ? { response: 1, checkboxChecked: audio }
+        : await options.pick(sources, audio, options.capabilities.details);
       if (
         !options.valid() ||
         !Number.isInteger(choice.response) ||
@@ -83,7 +113,9 @@ export class CaptureChooser {
         return null;
       return Object.freeze({
         video: sources[choice.response - 1],
-        ...(audio && choice.checkboxChecked ? { audio: 'loopback' as const } : {}),
+        ...(audio && choice.checkboxChecked && options.loopbackAudio !== false
+          ? { audio: 'loopback' as const }
+          : {}),
       });
     } finally {
       this.choosing = false;

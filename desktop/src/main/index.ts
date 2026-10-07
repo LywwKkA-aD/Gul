@@ -12,6 +12,10 @@ import { installIPC } from './ipc.ts';
 import { AppServices } from './app-services.ts';
 import { TrayLifecycle } from './tray.ts';
 import { installMediaGuard } from './media-guard.ts';
+import { NativeScreenAudio } from './screen-audio.ts';
+import type { DisplayCaptureConsent } from './capture-consent.ts';
+import { failure } from './validation.ts';
+import { claimApplicationInstance } from './application-instance.ts';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -21,6 +25,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsPortal');
 const overrides = testOptions(process.env, app.isPackaged, process.argv);
+const primaryInstance = claimApplicationInstance(app, process.env, app.isPackaged, process.argv);
+if (!primaryInstance) app.exit(0);
 const resourceRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources');
 const xrayPath =
   overrides.xrayPath ??
@@ -43,6 +49,15 @@ let window: BrowserWindow | undefined;
 let quitting = false;
 let uninstallIPC = () => {};
 let services: AppServices;
+let screenAudio: NativeScreenAudio | undefined;
+let displayConsent: DisplayCaptureConsent | undefined;
+async function closeCapture(): Promise<void> {
+  displayConsent?.invalidate();
+  await screenAudio?.close();
+}
+async function captureCapabilities() {
+  return services.capabilities({ linuxExcludedAudio: (await screenAudio?.available()) ?? false });
+}
 const lifecycle = new TrayLifecycle({
   platform: process.platform,
   window: () => window,
@@ -67,6 +82,7 @@ const lifecycle = new TrayLifecycle({
     return tray;
   },
   cleanup: async () => {
+    await closeCapture();
     await services?.close();
     uninstallIPC();
   },
@@ -109,18 +125,30 @@ async function createWindow(): Promise<void> {
     process.env.NODE_ENV === 'test' &&
     process.argv.includes('--gul-electron-test') &&
     process.env.GUL_ELECTRON_TEST_CAPTURE_APPROVED === '1';
-  installDisplayCapture(
-    ownWindow,
-    authority,
-    testCapture
+  const ownConsent = installDisplayCapture(ownWindow, authority, {
+    getCapabilities: captureCapabilities,
+    ...(testCapture
       ? {
           pick: async (sources) => ({
             response: sources.findIndex((source) => source.id.startsWith('screen:')) + 1,
             checkboxChecked: true,
           }),
         }
-      : undefined,
-  );
+      : {}),
+  });
+  const ownAudio = new NativeScreenAudio({
+    executable: join(resourceRoot, 'audio-capture', `${process.platform}-${process.arch}`, 'gul-audio'),
+    consent: ownConsent,
+    onEnded: (leaseId) => {
+      if (!ownWindow.isDestroyed()) ownWindow.webContents.send('gul:screen-audio-ended', leaseId);
+    },
+  });
+  displayConsent = ownConsent;
+  screenAudio = ownAudio;
+  const closeOwnCapture = async () => {
+    ownConsent.invalidate();
+    await ownAudio.close();
+  };
   ownWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   ownWindow.webContents.on('will-navigate', (event, url) => {
     if (!appPage(url)) event.preventDefault();
@@ -132,6 +160,7 @@ async function createWindow(): Promise<void> {
     event.preventDefault();
   });
   ownWindow.on('closed', () => {
+    void closeOwnCapture();
     if (window === ownWindow) window = undefined;
     void authority.disconnect();
   });
@@ -142,6 +171,7 @@ async function createWindow(): Promise<void> {
   // page cannot use Gul IPC or acquire media; the app is loaded only after registration.
   await ownWindow.loadURL('about:blank');
   await installMediaGuard(ownWindow.webContents.debugger, () => {
+    void closeOwnCapture();
     void authority.disconnect();
     // A detached guard must also release any capture that was already running.
     setImmediate(() => {
@@ -152,37 +182,54 @@ async function createWindow(): Promise<void> {
   if (!ownWindow.isDestroyed()) ownWindow.show();
 }
 
-void app
-  .whenReady()
-  .then(async () => {
-    Menu.setApplicationMenu(null);
-    services = new AppServices(authority);
-    await services.initialize();
-    uninstallIPC = installIPC(
-      authority,
-      () => window,
-      services,
-      join(
-        resourceRoot,
-        'ptt',
-        `${process.platform}-${process.arch}`,
-        process.platform === 'win32' ? 'gul-ptt.exe' : 'gul-ptt',
-      ),
-    );
-    await createWindow();
-    if (!overrides.caFile && !process.argv.includes('--gul-electron-test')) lifecycle.initialize();
-    app.on('activate', () => {
-      if (!window) void createWindow();
-    });
-  })
-  .catch(() => {
-    app.exit(1);
+if (primaryInstance) {
+  app.on('second-instance', () => {
+    if (!window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
   });
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-app.on('before-quit', (event) => {
-  if (quitting) return;
-  event.preventDefault();
-  void lifecycle.requestQuit();
-});
+  void app
+    .whenReady()
+    .then(async () => {
+      Menu.setApplicationMenu(null);
+      services = new AppServices(authority);
+      await services.initialize();
+      uninstallIPC = installIPC(
+        authority,
+        () => window,
+        services,
+        join(
+          resourceRoot,
+          'ptt',
+          `${process.platform}-${process.arch}`,
+          process.platform === 'win32' ? 'gul-ptt.exe' : 'gul-ptt',
+        ),
+        {
+          capabilities: captureCapabilities,
+          start: () => {
+            if (!screenAudio) throw failure('GUL_SCREEN_AUDIO_UNAVAILABLE');
+            return screenAudio.start();
+          },
+          stop: (leaseId) => screenAudio?.stop(leaseId) ?? Promise.resolve(),
+          reset: closeCapture,
+        },
+      );
+      await createWindow();
+      if (!overrides.caFile && !process.argv.includes('--gul-electron-test')) lifecycle.initialize();
+      app.on('activate', () => {
+        if (!window) void createWindow();
+      });
+    })
+    .catch(() => {
+      app.exit(1);
+    });
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+  app.on('before-quit', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    void lifecycle.requestQuit();
+  });
+}

@@ -34,7 +34,13 @@ export function SavedServers({
             <span>{hostname(server.address)}</span>
             <small>
               {server.username}
-              {server.hasPassword ? ' · пароль сохранён' : ''}
+              {server.hasPassword
+                ? ' · пароль сохранён'
+                : server.passwordStatus === 'locked'
+                  ? ' · хранилище заблокировано'
+                  : server.passwordStatus === 'save-failed'
+                    ? ' · пароль не сохранён'
+                    : ''}
             </small>
           </button>
           <button

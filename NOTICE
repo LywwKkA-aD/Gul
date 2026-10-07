@@ -10,6 +10,11 @@ Electron includes Chromium and Node.js. Their notices are distributed with
 the Electron framework. Xray is a separate bundled executable; its license
 and checked binary digest are distributed in the xray resource directory.
 
+The Linux screen-audio helper dynamically links the system libpulse client
+library. Its LGPL-2.1 license is included in audio-capture/LGPL-2.1.txt;
+libpulse itself is supplied by the operating system and is not bundled.
+PulseAudio source and license: https://github.com/pulseaudio/pulseaudio
+
 LiveKit server, TURN and the Gul session broker run separately and are not
 embedded in this desktop application. The original Gul application license
 is included as LICENSE.

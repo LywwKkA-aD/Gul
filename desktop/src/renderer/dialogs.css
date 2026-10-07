@@ -1,13 +1,20 @@
 .app-dialog {
   width: min(460px, 90vw);
   max-height: min(680px, 88vh);
-  padding: 30px;
+  padding: 0;
   color: var(--text-1);
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: var(--sh-lg);
-  overflow: auto;
+  overflow: hidden;
+}
+.dialog-scroll {
+  max-height: calc(min(680px, 88vh) - 2px);
+  padding: 30px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .app-dialog::backdrop {
   background: rgb(20 27 49 / 48%);
@@ -32,6 +39,8 @@
   width: 32px;
   height: 32px;
   border-radius: var(--r-md);
+  z-index: 1;
+  background: var(--bg-1);
 }
 .modal-close:hover {
   color: var(--text-1);

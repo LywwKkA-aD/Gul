@@ -26,7 +26,12 @@ function fixture() {
   const store = {
     remember: async (value: ConnectInput) => {
       saved.push(value);
-      return { passwordSaved: Boolean(value.password), persisted: true, storage: 'protected' as const };
+      return {
+        passwordSaved: Boolean(value.password),
+        persisted: true,
+        storage: 'protected' as const,
+        status: value.password ? ('saved' as const) : ('not-requested' as const),
+      };
     },
     resolve: (_address: string) => ({ kind: 'ready' as const, input }),
   };
@@ -90,4 +95,44 @@ test('storage refusal does not break an already accepted connection', async () =
     throw Error('private failure');
   };
   assert.equal(await f.manager.connect({ input, rememberPassword: true }), session);
+  assert.deepEqual(f.manager.lastSave(), {
+    address: input.address,
+    status: 'write-failed',
+    persisted: false,
+  });
+});
+
+test('saved-password opt-out uses the credential once and removes it only after an accepted login', async () => {
+  const f = fixture();
+  await f.manager.connectSaved({ address: input.address, username: input.username, rememberPassword: false });
+  assert.equal(f.connected[0].password, input.password);
+  assert.equal(f.saved[0].password, '');
+  assert.equal(f.manager.lastSave()?.status, 'not-requested');
+  f.authority.connect = async () => {
+    throw Error('GUL_CONNECT_FAILED');
+  };
+  await assert.rejects(
+    f.manager.connectSaved({ address: input.address, username: input.username, rememberPassword: false }),
+  );
+  assert.equal(f.saved.length, 1);
+  await assert.rejects(
+    f.manager.connectSaved({ address: input.address, username: input.username, rememberPassword: 'false' }),
+    /GUL_INPUT_INVALID/u,
+  );
+});
+
+test('last save notice exposes only fixed status and remains visible after disconnect', async () => {
+  const f = fixture();
+  assert.equal(f.manager.lastSave(), null);
+  f.store.remember = async () =>
+    ({ passwordSaved: false, persisted: true, storage: 'protected', status: 'encrypt-failed' }) as never;
+  await f.manager.connect({ input, rememberPassword: true });
+  assert.deepEqual(f.manager.lastSave(), {
+    address: input.address,
+    status: 'encrypt-failed',
+    persisted: true,
+  });
+  await f.manager.disconnect();
+  assert.equal(f.manager.lastSave()?.status, 'encrypt-failed');
+  assert.equal(JSON.stringify(f.manager.lastSave()).includes(input.password), false);
 });
