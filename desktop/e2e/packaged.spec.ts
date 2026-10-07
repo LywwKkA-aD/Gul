@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { installPackagedStartupDiagnostics, readPackagedStartup } from './packaged-startup.ts';
 
 const executablePath = process.env.GUL_PACKAGED_APP_PATH;
 test.skip(!executablePath, 'Set GUL_PACKAGED_APP_PATH to the packaged executable.');
@@ -12,7 +13,13 @@ test.skip(!executablePath, 'Set GUL_PACKAGED_APP_PATH to the packaged executable
 test('packaged app loads the sandboxed UI and includes the verified native Xray', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'gul-packaged-e2e-'));
   const app = await electron.launch({ executablePath, args: [`--user-data-dir=${profile}`] });
+  let appClosed = false;
+  let startup: ReturnType<typeof readPackagedStartup> = { ready: false, windows: [], events: [] };
+  app.on('close', () => {
+    appClosed = true;
+  });
   try {
+    await app.evaluate(installPackagedStartupDiagnostics);
     const resources = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, path: app.getAppPath() }));
     expect(resources.packaged).toBe(true);
     const folder = join(dirname(resources.path), 'xray', `${process.platform}-${process.arch}`);
@@ -49,6 +56,17 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
         '@fontsource/martian-mono',
       ]),
     );
+    // firstWindow() also returns the hidden startup about:blank Page. Wait in the
+    // main process until the final app frame is loaded before touching its CDP context.
+    await expect
+      .poll(
+        async () => {
+          startup = await app.evaluate(readPackagedStartup);
+          return startup.ready;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
     const page = await app.firstWindow();
     await expect(page.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
     const boundary = await page.evaluate(() => ({
@@ -62,6 +80,14 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
     }
 
     await page.screenshot({ path: 'test-results/desktop-packaged.png' });
+  } catch (error) {
+    try {
+      startup = await app.evaluate(readPackagedStartup);
+    } catch {
+      /* Preserve the last bounded snapshot if the app exited. */
+    }
+    console.info('GUL_PACKAGED_STARTUP', JSON.stringify({ appClosed, ...startup }));
+    throw error;
   } finally {
     await app.close();
     await rm(profile, { recursive: true, force: true });
