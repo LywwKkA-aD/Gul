@@ -1,4 +1,6 @@
 # Keep text checkouts deterministic across Windows, macOS, and Linux.
 * text=auto eol=lf
-# Weight blobs are opaque model data; never normalize their line endings.
-*.bin binary
+# Application artwork must not receive text line-ending normalization.
+*.png binary
+*.ico binary
+*.icns binary

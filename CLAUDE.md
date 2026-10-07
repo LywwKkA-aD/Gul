@@ -1,37 +1,64 @@
-# CLAUDE.md
-Проект: десктопный голосовой клиент. Текущий локальный прототип полностью на LiveKit; Wails v3 + Go core + React/TS.
-Главный документ: PLAN.md (архитектура §1–6, текущий милстоун §7, правила §10).
-Журнал решений: docs/DECISIONS.md. Верификация зависимостей: docs/research/.
-Дизайн-истина: прототип (docs/design/prototype-source.html) — светлая схема
-с тёмным сайдбаром, иконки Phosphor, токены дословно из :root.
+# Работа с Gul
 
-Команды: task dev · task murmur:up · task test · task lint · task package
-Стенд: mumblevoip/mumble-server:v1.5.915 в докере; отладка AEC — VoiceTargetLoopback (ID 31).
+Текущий клиент **0.8.0-alpha.1**: Electron + TypeScript + React + LiveKit JS.
+Официальный Xray v26.3.27 встроен отдельным executable. Go находится только в
+`server/` и обслуживает broker API. Legacy клиент и эксперименты удалены.
 
-Транспорт текущего GUI: LiveKit SFU 1.13.8, Go SDK 2.18.1, JS SDK 2.22.3.
-Голос и чат идут из Go через LiveKit; JS companion отвечает только за экран.
-Нативный аудиодвижок, PTT, DSP и устройства сохранены. Приём screen audio тоже
-идёт через Go и общий deafen/mixer. Legacy Mumble/Hysteria/REALITY пакеты сохранены
-для регрессий, но не входят в runtime граф основного клиента. Удалённые VPS не менялись.
+Главные документы: [PLAN.md](PLAN.md), [решения](docs/DECISIONS.md),
+[сервер](docs/SERVER.md), [deployment](deploy/livekit/README.md).
+Дизайн-референс: `docs/design/prototype-source.html`; исходную палитру Gul
+сохраняем, layout каналов/чата/участников адаптирован под голосовое приложение.
 
-M8.1: полный клиент пока только с loopback broker. `scripts/livekit-local.sh` —
-локальный стенд; `scripts/livekit-client.sh` — отдельный macOS Gul LiveKit bundle.
-Настройки в `gul-livekit`, абсолютный `GUL_CONFIG_DIR` позволяет несколько клиентов.
-`scripts/livekit-native.sh` и `GUL_LIVEKIT_LAB=1` сохраняют отдельную лабораторию экрана.
-Инструкции и ограничения: docs/LIVEKIT-LOCAL.md.
+## Рабочие области
 
-Стек (пины жёсткие, @latest запрещён): Wails v3.0.0-beta.11 · Go ≥1.26 ·
-форк stieneee/gumble (с M2 — свой форк + OpusPassthrough) · вендоренные libopus 1.6.1,
-webrtc-audio-processing v2.1 (AEC3), RNNoise (ветка main), miniaudio 0.11.25 ·
-React 19 + Vite 8 + Tailwind v4 + zustand v5 + TypeScript 6.0.2 (не 7.x).
+- `desktop/src/main`: безопасность, SessionAuthority, сохранение серверов,
+  транспорт, capture dialogs, PTT, диагностика, tray и update notice.
+- `desktop/src/preload`: узкий IPC bridge; renderer не получает Node API.
+- `desktop/src/renderer`: React UI и LiveKit media lifecycle.
+- `desktop/src/transport`: фиксированный REALITY/SOCKS/TLS/WSS/TURN путь.
+- `server`: самостоятельный Go module, broker и JSON wire model.
+- `deploy/livekit`: действующий deployment и отдельный локальный Docker fixture.
 
-Жёсткие правила:
-- Аудио-сетка 48k/10ms/480. ДВА независимых устройства; duplex-режим miniaudio запрещён.
-- Realtime-callback — чистый C: ноль Go, аллокаций, локов; только memcpy в ring.
-- Тракт TX: mic s16 → APM (HPF→AEC3→NS→AGC2) → float в ШКАЛЕ S16 → RNNoise → gate → s16 → opus → LiveKit RTP. В legacy Mumble — Conn.WriteAudio напрямую.
-- Тракт RX: RTP reorder → Opus/PLC decode → repack → адаптивный джиттер → микшер → ProcessReverseStream → playback. OnAudioStream никогда не блокирует read-loop.
-- DSP-состояния — в одной горутине (LockOSThread); явные Close(), без финализаторов.
-- services/ — тонкие; логика в internal/. UI не трогает нативный голос; screen controller владеет JS SDK и браузерным захватом.
-- Сигнатуры внешних API сверять с исходниками (доки Wails отстают от кода); первичная верификация — docs/research/.
-- Работать в рамках текущего милстоуна PLAN.md §7; коммиты — conventional; go test -race в CI.
-- Язык общения — русский; код, идентификаторы, коммиты — на английском. Без эмодзи.
+## Команды
+
+```sh
+cd desktop
+npm ci
+npm run vendor:xray
+npm run dev
+npm run check
+npm run format:check
+npm run test:coverage
+```
+
+Из корня: `go -C server test -race ./...`, `go -C server vet ./...`,
+`python3 -m unittest discover -s deploy/livekit -p 'test_*.py'`.
+E2E и подготовка fixture описаны в deployment README. Node.js 24; Python 3;
+OpenSSL в PATH для transport tests. Go версия закреплена в `server/go.mod`.
+
+## Обязательные ограничения
+
+- TDD для новых поведения/регрессий; unit coverage не менее 80% строк,
+  ветвей и функций. Security/media lifecycle проверять интеграционно.
+- Не публиковать пароли, JWT, broker bearer, профили, IP пользователей,
+  сырые сетевые логи или приватные fixture configs.
+- Renderer sandbox/contextIsolation; проверять IPC отправителя, входы,
+  media grants и эпохи. Не добавлять прямой сетевой fallback.
+- Захват и PCM принадлежат Chromium; не передавать кадры/аудио через JSON IPC.
+  Voice DSP не применяется к stereo screen audio.
+- Password storage только по явному согласию через защищённый safeStorage;
+  Linux basic_text запрещён. Не записывать пароль в localStorage/settings.
+- Смена канала/выход должны остановить capture и закрыть старые потоки;
+  поздние callbacks не меняют новую сессию.
+- Xray скачивать только по закреплённому manifest SHA-256. Пины зависимостей
+  менять с проверкой исходников/API и тестами; `@latest` не использовать.
+- Не считать synthetic E2E доказательством native game capture, Windows 10
+  runtime, hardware encoding или отсутствия audio loopback.
+- Код/идентификаторы/коммиты — английские, общение/пользовательские тексты —
+  русские. Небольшие модули, максимум 800 строк, без эмодзи.
+
+Windows 10/Linux system audio может включать Gul voices; UI сообщает об этом.
+Own-audio exclusion на Windows 11/macOS — запрос к платформе, не гарантия.
+Глобальное hold PTT требует OS adapter и проверки; toggle служит доступным режимом.
+GitHub release публикует CI после проверок. Коммиты — `[feat]`, `[fix]`, `[ref]`,
+`[docs]`, `[test]`, `[updt]`, `[del]`; перед commit выполнить подходящие проверки.
