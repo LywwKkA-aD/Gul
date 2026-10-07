@@ -1,6 +1,6 @@
 # Gul desktop
 
-Единственный клиент Gul **0.8.0-alpha.2**: Electron, TypeScript, React и
+Единственный клиент Gul **0.8.0-alpha.3**: Electron, TypeScript, React и
 LiveKit JS. Chromium владеет голосом, экраном и playback; официальный
 Xray v26.3.27 поставляется отдельным executable. Go клиент отсутствует;
 серверный broker находится в `../server/`.
@@ -41,8 +41,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Набор — 248 unit tests, на macOS 246 passed/2 platform skips; TS line coverage —
-90.50%. Installed packaged smoke
+Набор — 258 unit tests, на macOS 256 passed/2 platform skips; TS line coverage —
+90.80%. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
@@ -58,6 +58,9 @@ screen audio; он прошёл через обновлённый VPS с 20 ци
 Native Linux X11/Xvfb/PulseAudio capture подтвердил movingframes, 720p bounds
 и stereo PCM 440 Гц L / 660 Гц R через TURN/TCP: разделение 49 дБ,
 исключение собственного Gul 880 Гц — 52 дБ при сохранении обычного вывода.
+`e2e/sdp-sdk.spec.ts` использует закреплённый LiveKit PCTransport и настоящий
+Chromium; `e2e/sdp-bundle.live.spec.ts` проверяет одиночные повторные запуски,
+ответы SFU, позднего третьего зрителя и повторный вход без SDK fallback.
 Physical mic, игра Windows 10 ↔ Ubuntu 26,
 физическое удержание клавиши, Wayland на Ubuntu 26 и часовой soak требуют отдельных проверок.
 Для packaged smoke задайте `GUL_PACKAGED_APP_PATH` и запустите

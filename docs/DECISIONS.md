@@ -72,6 +72,25 @@ Wayland portal уже выдаёт выбор источника: второй �
 hook исправляет только bitrate hint пустых publisher transceivers; параметры
 реальных codecs, remote SDP и media transport не меняются.
 
+## 2026-10-07 — Alpha.3: повторный запуск экрана и состояние значков
+
+Одиночный канал воспроизвёл два пропущенных случая LiveKit 2.22.3: первый
+offer содержит SDP mids до их назначения transceivers, а SDK повторно добавляет
+bitrate hint при обработке ответа SFU. Hook теперь нормализует только
+placeholder VP8 в publisher local offers и SDK-munged remote answers.
+Первоначальный ответ сервера, remote offers, реальные codec constraints и
+подсказка bitrate 1800 остаются сохранены. Неназначенные mids определяются
+только по явно несендящему recvonly/inactive разделу, без сопоставления по позиции.
+
+Остановка демонстрации сохраняет pending до завершения unpublish/disconnect.
+Epoch, capture generation и принадлежность Room защищают новую демонстрацию
+от запоздавшей очистки прежней. Regression использует управляемую задержку
+unpublish, а Electron E2E повторяет включения в одиночном канале и с зрителями.
+
+Список участников и нижняя панель используют один SVG с зачёркиванием для
+mute/deafen. Login и sidebar показывают существующий appicon.png; asset также
+проверяется в packaged приложении. Палитра и компоновка сохранены.
+
 Собственная индикация речи использует существующий AudioWorklet, без ожидания
 события активного говорящего с сервера. UI обновляется на границах речи;
 20 Hz meter не перерисовывает всё приложение. Dialog scroll находится во
@@ -94,8 +113,8 @@ password/broker bearer; media JWT привязаны к роли, комнате
 
 ## Проверка решений
 
-Набор — 248 unit tests: macOS 246 passed/2 platform skips. TS line coverage —
-90.50%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
+Набор — 258 unit tests: macOS 256 passed/2 platform skips. TS line coverage —
+90.80%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
 Linux DEB установлен.
 Windows helper прошёл регистрацию/освобождение F8 hook, Linux portal —
 семь DBus сценариев. Это не доказательство физического hold PTT.

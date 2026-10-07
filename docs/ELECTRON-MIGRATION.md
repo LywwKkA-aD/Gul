@@ -1,6 +1,6 @@
 # Миграция Gul на Electron
 
-**0.8.0-alpha.2:** миграция исходников завершена. `desktop/` — единственный
+**0.8.0-alpha.3:** миграция исходников завершена. `desktop/` — единственный
 клиент на Electron/TypeScript/React/LiveKit JS. `server/` — самостоятельный
 Go broker. Legacy client/services/frontend, native Go DSP, старые lab/deploy
 и сборочные файлы удалены. Сохранены иконки, нужные attribution и
@@ -36,8 +36,8 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- 248 unit/security/lifecycle tests: на macOS 246 passed/2 platform skips;
-  TS line coverage — 90.50%.
+- 258 unit/security/lifecycle tests: на macOS 256 passed/2 platform skips;
+  TS line coverage — 90.80%.
 - Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
   всего module — 87.3%.
 - Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,
@@ -66,10 +66,11 @@ Synthetic источники проверяют медиатранспорт. Na
 4. Часовая игровая сессия с измерением CPU/RAM и потерь сети.
 
 Демонстрация автоматически запрашивает изображение и системный звук;
-у зрителя отдельная громкость 0–200%. Windows 10/Linux whole-output loopback
-может включать голоса Gul. Выберите Gul отдельный вывод или отключите incoming
-playback, чтобы не возвращать голоса. Windows 11/macOS own-audio exclusion
-запрашивается и зависит от capability ОС/источника.
+у зрителя отдельная громкость 0–200%. Linux helper исключает Gul из захвата,
+сохраняя обычный вывод. Windows 10
+whole-output loopback может включать голоса Gul: там отдельный вывод или
+отключение incoming playback остаются обходными решениями. Windows 11/macOS
+own-audio exclusion запрашивается и зависит от capability ОС/источника.
 
 Релизный workflow публикует материалы после успешных проверок;
 публикация GitHub релиза отдельно подтверждается его результатом. Команды: [README](../README.md), deployment/E2E:
