@@ -101,8 +101,8 @@ jobs:
       - name: Build native hold shortcut helper
         if: runner.os != 'macOS'
         run: npm run build:ptt
-      - name: Build native Linux screen audio helper
-        if: runner.os == 'Linux'
+      - name: Build native screen audio helper
+        if: runner.os != 'macOS'
         run: npm run build:audio
       - name: Build installers
         run: npm run dist -- ${{ matrix.target }} --publish never
