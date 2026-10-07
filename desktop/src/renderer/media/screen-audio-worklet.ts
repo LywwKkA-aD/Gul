@@ -17,9 +17,14 @@ class ScreenAudioWorklet extends AudioWorkletProcessor {
       try {
         if (!(data instanceof ArrayBuffer)) throw new Error();
         this.pcm.push(data);
-      } catch {
+      } catch (error) {
         this.failed = true;
-        this.port.postMessage('GUL_SCREEN_AUDIO_UNAVAILABLE');
+        const fault = error instanceof Error ? error.message : '';
+        this.port.postMessage(
+          fault === 'GUL_SCREEN_AUDIO_BUFFER' || fault === 'GUL_SCREEN_AUDIO_FRAME'
+            ? fault
+            : 'GUL_SCREEN_AUDIO_UNAVAILABLE',
+        );
       }
     };
   }
