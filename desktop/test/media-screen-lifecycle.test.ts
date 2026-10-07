@@ -160,3 +160,39 @@ test('stopping a watched screen cannot reopen publication while the same-epoch s
   assert.equal(controller.getSnapshot().sharing, true);
   await controller.leave();
 });
+
+test('a viewing request cancelled during cleanup cannot create a new room after the barrier resolves', async () => {
+  const { rooms, controller } = fixture();
+  await controller.join(session);
+  await controller.startScreen(screenGrant, false);
+  const unpublish = deferred();
+  const disconnect = deferred();
+  rooms[1].unpublishGate = unpublish.promise;
+  rooms[1].disconnectGate = disconnect.promise;
+  const stop = controller.stopScreen();
+  const viewing = controller.watchScreen('screen.8');
+  await new Promise((done) => setImmediate(done));
+  const cancelled = controller.watchScreen(null);
+  unpublish.resolve();
+  disconnect.resolve();
+  await Promise.all([stop, viewing, cancelled]);
+  assert.equal(rooms.length, 2, 'a stale request must not connect an unused screen companion');
+  assert.equal(controller.getSnapshot().sharing, false);
+  assert.equal(controller.getSnapshot().pendingShare, false);
+  await controller.leave();
+});
+
+test('a captured screen cancelled at the cleanup boundary cannot create a room or publish stopped tracks', async () => {
+  const { rooms, captures, controller } = fixture();
+  await controller.join(session);
+  const starting = controller.startScreen(screenGrant, false);
+  await Promise.resolve();
+  await Promise.resolve();
+  const stopping = controller.stopScreen();
+  await Promise.all([starting, stopping]);
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].stopped, true);
+  assert.equal(rooms.length, 1, 'cancelled capture must not create an unused screen companion');
+  assert.equal(controller.getSnapshot().sharing, false);
+  await controller.leave();
+});

@@ -322,7 +322,7 @@ export class MediaController {
         return;
       }
       stage = 'connection';
-      const room = await this.ensureScreen(grant, epoch);
+      const room = await this.ensureScreen(grant, epoch, () => generation === this.captureGeneration);
       if (!room || this.epoch !== epoch || generation !== this.captureGeneration) {
         this.discard(captured);
         return;
@@ -450,7 +450,7 @@ export class MediaController {
     try {
       const grant = await this.dependencies.screenGrant();
       if (this.epoch !== epoch || generation !== this.watchGeneration) return;
-      const room = await this.ensureScreen(grant, epoch);
+      const room = await this.ensureScreen(grant, epoch, () => generation === this.watchGeneration);
       if (room && this.epoch === epoch && generation === this.watchGeneration)
         room.remoteParticipants.forEach((p) =>
           p.trackPublications.forEach((pub) => this.subscribeScreen(pub, p)),
@@ -464,8 +464,9 @@ export class MediaController {
       }
     }
   };
-  private async ensureScreen(grant: MediaGrant, epoch: number): Promise<Room | undefined> {
+  private async ensureScreen(grant: MediaGrant, epoch: number, current: () => boolean) {
     await this.screenCleanup.wait(epoch);
+    if (!current()) return;
     if (!this.session || !validGrant(grant, this.session, 'screen') || this.epoch !== epoch)
       throw new Error('Invalid screen grant');
     if (this.openingScreen) return this.openingScreen;
