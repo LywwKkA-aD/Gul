@@ -1,7 +1,8 @@
 import { Room, type LocalAudioTrack, type LocalVideoTrack } from 'livekit-client';
+import { installBundleWorkaround } from './sdp-bundle.ts';
 
 export function createRoom(): Room {
-  return new Room({
+  const room = new Room({
     webAudioMix: true,
     adaptiveStream: true,
     dynacast: true,
@@ -14,6 +15,8 @@ export function createRoom(): Room {
       autoGainControl: true,
     },
   });
+  installBundleWorkaround(room);
+  return room;
 }
 
 export async function disconnect(room?: Room): Promise<void> {

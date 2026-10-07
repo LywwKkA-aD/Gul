@@ -27,6 +27,7 @@ import { Microphone } from './microphone.ts';
 import type { VoiceSettings } from './voice-gate.ts';
 import { screenPublishOptions } from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
+import { speakingIdentities } from './speaking.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
 
 interface Capture extends ScreenCapture {
@@ -64,6 +65,7 @@ export class MediaController {
   private readonly devices = new Devices();
   private timer?: ReturnType<typeof setInterval>;
   private chatSequence = 0;
+  private sdkSpeakers: readonly string[] = [];
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies;
@@ -95,14 +97,17 @@ export class MediaController {
     };
   };
   private update(patch: Partial<Snapshot>) {
-    this.snapshot = Object.freeze({
+    const next = {
       ...this.snapshot,
       ...patch,
       participants: patch.participants ? Object.freeze([...patch.participants]) : this.snapshot.participants,
       screens: patch.screens ? Object.freeze([...patch.screens]) : this.snapshot.screens,
       videos: patch.videos ? Object.freeze([...patch.videos]) : this.snapshot.videos,
       chat: patch.chat ? Object.freeze([...patch.chat]) : this.snapshot.chat,
-      speakers: patch.speakers ? Object.freeze([...patch.speakers]) : this.snapshot.speakers,
+    };
+    this.snapshot = Object.freeze({
+      ...next,
+      speakers: speakingIdentities(next, this.sdkSpeakers, this.session?.identity, this.snapshot.speakers),
     });
     this.listeners.forEach((listener) => listener());
   }
@@ -174,6 +179,7 @@ export class MediaController {
     const voice = this.voice;
     this.voice = undefined;
     this.session = undefined;
+    this.sdkSpeakers = [];
     const closingMicrophone = this.mic.stop();
     this.unbind.get(voice!)?.();
     this.unbind.delete(voice!);
@@ -724,10 +730,10 @@ export class MediaController {
         this.published(room, pub as RemoteTrackPublication, p as RemoteParticipant, kind);
     });
     on(RoomEvent.ActiveSpeakersChanged, (participants) => {
-      if (current() && kind === 'voice')
-        this.update({
-          speakers: participants.filter((p) => participantId(p.identity, 'voice')).map((p) => p.identity),
-        });
+      if (current() && kind === 'voice') {
+        this.sdkSpeakers = participants.map((p) => p.identity);
+        this.update({});
+      }
     });
     on(RoomEvent.DataReceived, (data, p, _packetKind, topic) => {
       if (current() && kind === 'voice' && p && p.identity !== this.session?.identity) {
