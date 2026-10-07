@@ -142,12 +142,14 @@
         "pipewire-pulse | pulseaudio",
         "xdg-desktop-portal",
         "libglib2.0-0 | libglib2.0-0t64"
-      ]
+      ],
+      "artifactName": "Gul-${version}-linux-x64.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
     "publish": null
-  }
+  },
+  "homepage": "https://github.com/LywwKkA-aD/Gul"
 }
