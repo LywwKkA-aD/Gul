@@ -47,6 +47,13 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
       stdin: {
         contents: `
           import {openWindowsAudio} from './media/windows-screen-audio.ts';
+          // CI may have no hardware output. Render the real graph to Chromium's
+          // silent sink rather than depending on a speaker or changing production.
+          // https://developer.chrome.com/blog/audiocontext-setsinkid/
+          const NativeAudioContext=window.AudioContext,contexts=[];
+          window.AudioContext=class extends NativeAudioContext {
+            constructor(options){super({...options,sinkId:{type:'none'}});contexts.push(this)}
+          };
           let source,context,input,splitter,analysers,ended=0;
           window.__gulPCMProof={
             async start(){
@@ -71,7 +78,9 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
                 channels:source.track.mediaStreamTrack.getSettings().channelCount,
                 constraints:source.track.mediaStreamTrack.getConstraints(),
                 separation:Math.min(spectrum[0][0]-spectrum[0][1],spectrum[1][1]-spectrum[1][0]),
-                energy:Math.min(spectrum[0][0],spectrum[1][1])};
+                energy:Math.min(spectrum[0][0],spectrum[1][1]),
+                contexts:contexts.map(value=>({state:value.state,time:value.currentTime,
+                  silent:value.sinkId?.type==='none'}))};
             },
             async stop(){await source.close();input.disconnect();splitter.disconnect();await context.close();},
           };
@@ -147,6 +156,7 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
                 separation: number;
                 energy: number;
                 constraints: MediaTrackConstraints;
+                contexts: { state: string; time: number; silent: boolean }[];
               };
             };
           }
@@ -162,6 +172,14 @@ test('native Windows PCM reaches a real Electron stereo track and closes without
       )
       .toBe(true);
     const measured = await inspect();
+    // LiveKit can briefly create and close a context while detecting capture defaults.
+    const runningContexts = measured.contexts.filter((context) => context.state !== 'closed');
+    expect(runningContexts).toHaveLength(2);
+    for (const context of runningContexts) {
+      expect(context.silent).toBe(true);
+      expect(context.state).toBe('running');
+      expect(context.time).toBeGreaterThan(0);
+    }
     expect(measured.energy).toBeGreaterThan(-35);
     expect(measured.live).toBe(true);
     expect(measured.channels).toBe(2);
