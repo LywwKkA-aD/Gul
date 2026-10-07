@@ -49,7 +49,8 @@ settings; raw network logs и личные адреса не входят в dia
 - Два настоящих Electron клиента через обновлённый удалённый VPS: двусторонний
   synthetic voice, чат, decoded video/stereo audio и 20 циклов демонстрации.
 - Native Linux X11/Xvfb/PulseAudio capture: movingframes, 720p bounds и
-  stereo PCM 440 Гц L / 880 Гц R через TURN/TCP.
+  stereo PCM 440 Гц L / 660 Гц R через TURN/TCP; разделение 49 дБ.
+  Собственный Gul 880 Гц исключён на 52 дБ, обычный вывод сохранён.
 
 Synthetic источники проверяют медиатранспорт. Native hook registration/portal
 сценарии не проверяют физическое удержание клавиши в игре. Windows CI runner

@@ -105,6 +105,9 @@ synthetic voice, чат и 20 циклов screen+audio. Самостоятел�
 race/vet/build и TLS/TURN/ACL smoke; broker coverage — 92.8% при переносе.
 
 Native Linux capture на DISPLAY/PulseAudio стенде подтвердил движущиеся кадры
-в пределах 720p и stereo PCM 440 Гц L / 880 Гц R через TURN/TCP.
+в пределах 720p и stereo PCM 440 Гц L / 660 Гц R через TURN/TCP.
+В alpha.2 native Electron E2E показал разделение 49 дБ и исключение собственного
+Gul 880 Гц на 52 дБ; игра и Gul остаются слышны в обычном выводе.
+Сохранённый вход после полного перезапуска прошёл с настоящим GNOME Keyring.
 Остаются physical mic, игра Windows 10 ↔ Ubuntu 26, физические
 клавиши и часовой soak. Публикация выполняется после успешного релизного workflow.

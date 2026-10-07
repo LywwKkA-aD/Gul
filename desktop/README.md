@@ -56,7 +56,9 @@ GUL_ELECTRON_STAND_DIR=/absolute/path/to/stand \
 Этот сценарий использует два Electron клиента, synthetic голос, видео и stereo
 screen audio; он прошёл через обновлённый VPS с 20 циклами демонстрации.
 Native Linux X11/Xvfb/PulseAudio capture подтвердил movingframes, 720p bounds
-и stereo PCM 440 Гц L / 880 Гц R через TURN/TCP. Physical mic, игра Windows 10 ↔ Ubuntu 26,
+и stereo PCM 440 Гц L / 660 Гц R через TURN/TCP: разделение 49 дБ,
+исключение собственного Gul 880 Гц — 52 дБ при сохранении обычного вывода.
+Physical mic, игра Windows 10 ↔ Ubuntu 26,
 физическое удержание клавиши, Wayland на Ubuntu 26 и часовой soak требуют отдельных проверок.
 Для packaged smoke задайте `GUL_PACKAGED_APP_PATH` и запустите
 `npm run test:integration -- e2e/packaged.spec.ts`.
