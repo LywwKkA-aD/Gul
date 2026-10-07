@@ -313,6 +313,8 @@ test('native Linux game stereo excludes Gul while callers remain audible through
   const dataRoot = await mkdtemp(join(tmpdir(), 'gul-native-capture-'));
   const sink = `gul_native_${process.pid}`;
   const microphoneSink = `${sink}_microphone`;
+  // PulseAudio renames a source which collides with its sink, so give it a distinct name.
+  const microphoneSource = `${sink}_input`;
   const apps: ElectronApplication[] = [];
   let oldSink: string | undefined;
   let oldSource: string | undefined;
@@ -347,12 +349,12 @@ test('native Linux game stereo excludes Gul while callers remain audible through
         'load-module',
         'module-remap-source',
         `master=${microphoneSink}.monitor`,
-        `source_name=${microphoneSink}`,
+        `source_name=${microphoneSource}`,
         'source_properties=device.description=Gul-Test-Native-Microphone',
       ),
     );
     await pulse('set-default-sink', sink);
-    await pulse('set-default-source', microphoneSink);
+    await pulse('set-default-source', microphoneSource);
     const pages: Page[] = [];
     for (let i = 0; i < 2; i++) {
       const app = await electron.launch({

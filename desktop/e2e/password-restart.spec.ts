@@ -47,9 +47,12 @@ test('explicit remember consent and encrypted login survive a full Electron proc
     });
     // A real protected OS provider is required; the test never substitutes a fake keyring.
     await expect(remember).toBeEnabled();
+    await privateLoginForm(first.page, address, password);
+    await first.page.getByLabel('Твой ник', { exact: true }).fill('saved-restart-fixture');
     await remember.check();
     await first.page.getByRole('button', { name: 'Подключиться', exact: true }).click();
     await expect(first.page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
+    await expect(first.page.getByRole('button', { name: 'Отключиться', exact: true })).toBeVisible();
     const stored = await first.page.evaluate(async () => {
       const list = await window.gul.servers();
       return {
@@ -71,13 +74,15 @@ test('explicit remember consent and encrypted login survive a full Electron proc
     current = undefined;
 
     const reopened = await launch();
-    expect(
-      await reopened.page.evaluate(
-        (value) =>
-          document.querySelector<HTMLInputElement>('input[aria-label="Адрес сервера"]')?.value === value,
-        address,
-      ),
-    ).toBe(true);
+    await expect
+      .poll(() =>
+        reopened.page.evaluate(
+          (value) =>
+            document.querySelector<HTMLInputElement>('input[aria-label="Адрес сервера"]')?.value === value,
+          address,
+        ),
+      )
+      .toBe(true);
     await expect(reopened.page.getByLabel('Твой ник', { exact: true })).toHaveValue('saved-restart-fixture');
     const passwordInput = reopened.page.getByLabel('Пароль', { exact: true });
     await expect(passwordInput).toHaveValue('');

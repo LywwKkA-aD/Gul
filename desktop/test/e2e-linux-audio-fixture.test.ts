@@ -2,19 +2,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { daemonEnvironment, stopFixtureProcess } from '../e2e/linux-audio-fixture.ts';
 
 test('private Pulse daemon cannot claim the Electron portal bus or change peer environment', () => {
+  const directory = join(tmpdir(), 'gul-private-audio-unit');
   const peer = Object.freeze({
-    PULSE_SERVER: 'unix:/tmp/private/native',
-    PULSE_RUNTIME_PATH: '/tmp/private/runtime',
+    PULSE_SERVER: `unix:${join(directory, 'native')}`,
+    PULSE_RUNTIME_PATH: join(directory, 'runtime'),
   });
   const browser = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/approved-desktop-bus', ...peer };
-  const daemon = daemonEnvironment(peer, '/tmp/private');
-  assert.equal(daemon.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/tmp/private/disabled-bus');
-  assert.equal(daemon.XDG_RUNTIME_DIR, '/tmp/private/runtime');
-  assert.equal(daemon.XDG_CONFIG_HOME, '/tmp/private/config');
-  assert.equal(daemon.XDG_DATA_HOME, '/tmp/private/data');
+  const daemon = daemonEnvironment(peer, directory);
+  assert.equal(daemon.DBUS_SESSION_BUS_ADDRESS, `unix:path=${join(directory, 'disabled-bus')}`);
+  assert.equal(daemon.XDG_RUNTIME_DIR, join(directory, 'runtime'));
+  assert.equal(daemon.XDG_CONFIG_HOME, join(directory, 'config'));
+  assert.equal(daemon.XDG_DATA_HOME, join(directory, 'data'));
   assert.equal('HOME' in daemon, false);
   assert.equal('DBUS_SESSION_BUS_ADDRESS' in peer, false);
   assert.equal(browser.DBUS_SESSION_BUS_ADDRESS, 'unix:path=/tmp/approved-desktop-bus');

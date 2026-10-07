@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { constants } from 'node:fs';
 import { promisify } from 'node:util';
 import { installPackagedStartupDiagnostics, readPackagedStartup } from './packaged-startup.ts';
 
@@ -44,6 +45,19 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
           process.platform === 'win32' ? 'gul-ptt.exe' : 'gul-ptt',
         ),
       );
+    if (process.platform === 'linux') {
+      const helper = join(resourceRoot, 'audio-capture', 'linux-x64', 'gul-audio');
+      await access(helper, constants.X_OK);
+      // Invalid argc exits before touching PulseAudio, while still proving ELF dependencies load.
+      const code = await promisify(execFile)(helper, [], { timeout: 5000, maxBuffer: 16 * 1024 }).then(
+        () => 0,
+        (error: unknown) => {
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+          return typeof code === 'number' ? code : -1;
+        },
+      );
+      expect(code).toBe(1);
+    }
 
     const licenses = JSON.parse(
       await readFile(join(resourceRoot, 'THIRD_PARTY_LICENSES', 'manifest.json'), 'utf8'),
