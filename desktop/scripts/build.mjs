@@ -4,6 +4,16 @@ import { collectLicenses } from './licenses.mjs';
 await mkdir('dist/renderer', { recursive: true });
 const bundles = await Promise.all([
   build({
+    entryPoints: ['src/renderer/media/voice-worklet.ts'],
+    bundle: true,
+    metafile: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome152',
+    minify: true,
+    outfile: 'dist/renderer/voice-worklet.js',
+  }),
+  build({
     entryPoints: ['src/main/index.ts'],
     bundle: true,
     metafile: true,

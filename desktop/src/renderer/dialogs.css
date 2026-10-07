@@ -118,3 +118,13 @@
 .volume-control input {
   margin: 5px 0;
 }
+.voice-settings {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line-soft);
+}
+.voice-settings meter {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent);
+}

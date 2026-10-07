@@ -2,13 +2,19 @@ import { globalShortcut, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } 
 import type { SessionAuthority } from './session.ts';
 import { appPage } from './security.ts';
 import { audioInput, failure } from './validation.ts';
+import type { AppServices } from './app-services.ts';
+import { NativeHoldHotkey } from './hotkeys.ts';
 
 /** Only this window's top-level app frame may invoke this fixed IPC allowlist. */
 export function installIPC(
   authority: SessionAuthority,
   getWindow: () => BrowserWindow | undefined,
+  services: AppServices,
+  holdExecutable: string,
 ): () => void {
   let shortcut: string | undefined;
+  let shortcutMode: 'toggle' | 'hold' = 'toggle';
+  let registration = 0;
   let pressed = false;
   const current = (event: IpcMainInvokeEvent): BrowserWindow => {
     const window = getWindow();
@@ -27,15 +33,48 @@ export function installIPC(
     const window = getWindow();
     if (shortcut && window && !window.isDestroyed()) window.webContents.send('gul:push-to-talk', value);
   };
+  const hold = new NativeHoldHotkey({
+    executable: holdExecutable,
+    emit: (value) => {
+      if (!value || authority.connected()) emit(value);
+    },
+    onFailure: () => {
+      emit(false);
+      void authority.audio({ muted: true, deafened: false }).catch(() => {});
+      services.journal.record('shortcut-failed', { code: 'GUL_SHORTCUT_UNAVAILABLE' });
+    },
+  });
   const handlers: Record<string, (event: IpcMainInvokeEvent, value?: unknown) => unknown> = {
-    'gul:connect': (_event, value) => authority.connect(value as never),
+    'gul:connect': async (_event, value) => {
+      services.journal.record('connect-start');
+      try {
+        const result = await services.connections.connect(value);
+        services.journal.record('connect-ok', { channelId: result.channelId });
+        return result;
+      } catch (error) {
+        services.journal.record('connect-failed');
+        throw error;
+      }
+    },
+    'gul:connect-saved': (_event, value) => services.connections.connectSaved(value),
+    'gul:servers': () => services.serverList(),
+    'gul:forget-server': async (_event, value) => {
+      if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
+      await services.servers.forget(value);
+    },
+    'gul:capture-capabilities': () => services.capabilities(),
+    'gul:app-info': () => services.info(),
+    'gul:open-update': () => services.openUpdate(),
+    'gul:diagnostics': (event) => services.diagnostics(current(event)),
+    'gul:record-diagnostic': (_event, value) => services.record(value),
     'gul:disconnect': async () => {
       emit(false);
-      await authority.disconnect();
+      await services.connections.disconnect();
     },
     'gul:state': () => authority.state(),
     'gul:channel': (_event, value) => {
       emit(false);
+      services.journal.record('channel-change', { channelId: value });
       return authority.channel(value as number);
     },
     'gul:audio': (_event, value) => {
@@ -44,28 +83,39 @@ export function installIPC(
       return authority.audio(state);
     },
     'gul:screen': (_event, value) => authority.screen(value as never),
-    'gul:set-push-to-talk': (_event, value) => {
+    'gul:set-push-to-talk': async (_event, value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw failure('GUL_INPUT_INVALID');
+      const { shortcut: accelerator, mode } = value as Record<string, unknown>;
       if (
-        value !== null &&
-        (typeof value !== 'string' || !value.trim() || value.length > 96 || /[\u0000-\u001f]/u.test(value))
+        !['toggle', 'hold'].includes(mode as string) ||
+        (accelerator !== null &&
+          (typeof accelerator !== 'string' ||
+            !accelerator.trim() ||
+            accelerator.length > 96 ||
+            /[\u0000-\u001f]/u.test(accelerator)))
       )
         throw failure('GUL_INPUT_INVALID');
-      if (shortcut) globalShortcut.unregister(shortcut);
-      shortcut = undefined;
+      const own = ++registration;
       emit(false);
-      if (value === null) return;
+      if (shortcut && shortcutMode === 'toggle') globalShortcut.unregister(shortcut);
+      shortcut = undefined;
+      await hold.dispose();
+      if (own !== registration) throw failure('GUL_SHORTCUT_UNAVAILABLE');
+      if (accelerator === null) return;
+      shortcut = accelerator as string;
+      shortcutMode = mode as 'toggle' | 'hold';
       try {
-        // Electron supplies no global key-up callback. The global shortcut is
-        // an explicit press-again toggle; focused hold belongs to the page.
-        if (
-          !globalShortcut.register(value as string, () => {
+        if (shortcutMode === 'hold') await hold.register(shortcut);
+        else if (
+          !globalShortcut.register(shortcut, () => {
             if (authority.connected()) emit(!pressed);
           })
         )
           throw failure('GUL_SHORTCUT_UNAVAILABLE');
-        shortcut = value as string;
         emit(false);
       } catch {
+        emit(false);
+        if (own === registration) shortcut = undefined;
         throw failure('GUL_SHORTCUT_UNAVAILABLE');
       }
     },
@@ -87,7 +137,10 @@ export function installIPC(
       return handler(event, value);
     });
   return () => {
-    if (shortcut) globalShortcut.unregister(shortcut);
+    ++registration;
+    emit(false);
+    if (shortcut && shortcutMode === 'toggle') globalShortcut.unregister(shortcut);
+    void hold.dispose();
     for (const name of Object.keys(handlers)) ipcMain.removeHandler(name);
   };
 }

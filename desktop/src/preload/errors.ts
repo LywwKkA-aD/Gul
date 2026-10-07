@@ -11,6 +11,8 @@ const messages: Readonly<Record<string, string>> = Object.freeze({
   GUL_SCREEN_FAILED: 'Не удалось подключить демонстрацию к каналу.',
   GUL_IPC_DENIED: 'Действие недоступно в этом окне.',
   GUL_SHORTCUT_UNAVAILABLE: 'Не удалось зарегистрировать сочетание клавиш. Выберите другое.',
+  GUL_SAVED_PASSWORD_REQUIRED: 'Введите пароль заново: сохранённый пароль недоступен.',
+  GUL_DIAGNOSTICS_FAILED: 'Не удалось сохранить диагностический архив.',
 });
 /** Electron wraps invoke failures; arbitrary exception strings never reach the UI. */
 export function publicError(error: unknown): Error {

@@ -1,8 +1,12 @@
+import { defaultVoiceSettings, voiceSettings, type VoiceSettings } from './media/voice-gate.ts';
 export interface Preferences {
   readonly audioinput: string;
   readonly audiooutput: string;
   readonly shortcut: string;
   readonly toggleEnabled: boolean;
+  readonly voice: VoiceSettings;
+  readonly soundNotifications: boolean;
+  readonly hotkeyMode: 'toggle' | 'hold';
 }
 
 const defaults: Preferences = Object.freeze({
@@ -10,6 +14,9 @@ const defaults: Preferences = Object.freeze({
   audiooutput: 'default',
   shortcut: 'F8',
   toggleEnabled: false,
+  voice: defaultVoiceSettings,
+  soundNotifications: false,
+  hotkeyMode: 'toggle',
 });
 
 export function readSavedString(key: 'gul.address' | 'gul.username'): string {
@@ -50,9 +57,26 @@ export function readPreferences(): Preferences {
       audiooutput: device('audiooutput'),
       shortcut,
       toggleEnabled: value.toggleEnabled === true,
+      voice: readVoice(value.voice),
+      soundNotifications: value.soundNotifications === true,
+      hotkeyMode: value.hotkeyMode === 'hold' ? 'hold' : 'toggle',
     });
   } catch {
     return defaults;
+  }
+}
+function readVoice(value: unknown): VoiceSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return defaultVoiceSettings;
+  const input = value as Record<string, unknown>;
+  const fields = Object.fromEntries(
+    Object.keys(defaultVoiceSettings)
+      .filter((key) => Object.hasOwn(input, key))
+      .map((key) => [key, input[key]]),
+  );
+  try {
+    return voiceSettings(defaultVoiceSettings, fields as Partial<VoiceSettings>);
+  } catch {
+    return defaultVoiceSettings;
   }
 }
 

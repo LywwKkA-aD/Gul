@@ -51,9 +51,20 @@ export function Icon({
   name,
 }: {
   name:
-    'mic' | 'deaf' | 'screen' | 'settings' | 'leave' | 'volumeOff' | 'voice' | 'send' | 'expand' | 'collapse';
+    | 'mic'
+    | 'deaf'
+    | 'screen'
+    | 'settings'
+    | 'leave'
+    | 'volumeOff'
+    | 'voice'
+    | 'send'
+    | 'expand'
+    | 'collapse'
+    | 'close';
 }) {
   const paths = {
+    close: <path d="M6 6l12 12M18 6L6 18" />,
     mic: (
       <>
         <rect x="9" y="2" width="6" height="12" rx="3" />

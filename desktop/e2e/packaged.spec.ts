@@ -28,6 +28,16 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
     const resourceRoot = dirname(resources.path);
     await access(join(resourceRoot, 'LICENSE'));
     await access(join(resourceRoot, 'NOTICE'));
+    if (process.platform === 'win32' || process.platform === 'linux')
+      await access(
+        join(
+          resourceRoot,
+          'ptt',
+          `${process.platform}-${process.arch}`,
+          process.platform === 'win32' ? 'gul-ptt.exe' : 'gul-ptt',
+        ),
+      );
+
     const licenses = JSON.parse(
       await readFile(join(resourceRoot, 'THIRD_PARTY_LICENSES', 'manifest.json'), 'utf8'),
     ) as { name: string }[];
@@ -46,6 +56,11 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
       api: typeof window.gul?.connect,
     }));
     expect(boundary).toEqual({ node: 'undefined', api: 'function' });
+    if (process.platform === 'win32') {
+      await page.evaluate(() => window.gul.setPushToTalk('F8', 'hold'));
+      await page.evaluate(() => window.gul.setPushToTalk(null));
+    }
+
     await page.screenshot({ path: 'test-results/desktop-packaged.png' });
   } finally {
     await app.close();

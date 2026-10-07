@@ -1,11 +1,9 @@
 import {
-  AudioPresets,
   LogLevel,
   type Room,
   RoomEvent,
   Track,
   setLogLevel,
-  type LocalAudioTrack,
   type LocalVideoTrack,
   type RemoteAudioTrack,
   type RemoteParticipant,
@@ -13,7 +11,7 @@ import {
   type RoomEventCallbacks,
 } from 'livekit-client';
 import type { AudioState, MediaGrant, MediaSession } from '../../shared/contracts.ts';
-import { audioElement, captureScreen, microphone } from './capture.ts';
+import { audioElement, captureScreen } from './capture.ts';
 import {
   initialSnapshot,
   type Dependencies,
@@ -25,6 +23,9 @@ import { chatText, latency, participantId, validGrant, validText } from './proto
 import { createRoom, disconnect, unpublish } from './rooms.ts';
 import { Playback } from './playback.ts';
 import { Devices } from './devices.ts';
+import { Microphone } from './microphone.ts';
+import type { VoiceSettings } from './voice-gate.ts';
+import { screenPublishOptions } from './screen-settings.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
 
 interface Capture extends ScreenCapture {
@@ -44,7 +45,7 @@ export class MediaController {
   private voice?: Room;
   private screen?: Room;
   private openingScreen?: Promise<Room | undefined>;
-  private mic?: LocalAudioTrack;
+  private readonly mic: Microphone;
   private capture?: Capture;
   private stagedCapture?: ScreenCapture;
   private readonly discarded = new WeakSet<ScreenCapture>();
@@ -69,6 +70,20 @@ export class MediaController {
     this.playback = new Playback(dependencies.audioElementFactory ?? audioElement, () => {
       this.update({ warning: 'Нажмите в окне приложения, чтобы включить воспроизведение звука.' });
     });
+    this.mic = new Microphone({
+      capture: dependencies.micFactory,
+      processor: dependencies.voiceProcessorFactory,
+      warning: (warning, muted) => this.update({ warning, ...(muted ? { muted: true } : {}) }),
+      reading: ({ level, active, available }) => {
+        const micLevel = Math.round(level * 1000) / 1000;
+        if (
+          this.snapshot.micLevel !== micLevel ||
+          this.snapshot.voiceActive !== active ||
+          this.snapshot.voiceProcessingAvailable !== available
+        )
+          this.update({ micLevel, voiceActive: active, voiceProcessingAvailable: available });
+      },
+    });
     setLogLevel(LogLevel.silent);
   }
   getSnapshot = (): Snapshot => this.snapshot;
@@ -82,11 +97,11 @@ export class MediaController {
     this.snapshot = Object.freeze({
       ...this.snapshot,
       ...patch,
-      participants: Object.freeze([...(patch.participants ?? this.snapshot.participants)]),
-      screens: Object.freeze([...(patch.screens ?? this.snapshot.screens)]),
-      videos: Object.freeze([...(patch.videos ?? this.snapshot.videos)]),
-      chat: Object.freeze([...(patch.chat ?? this.snapshot.chat)]),
-      speakers: Object.freeze([...(patch.speakers ?? this.snapshot.speakers)]),
+      participants: patch.participants ? Object.freeze([...patch.participants]) : this.snapshot.participants,
+      screens: patch.screens ? Object.freeze([...patch.screens]) : this.snapshot.screens,
+      videos: patch.videos ? Object.freeze([...patch.videos]) : this.snapshot.videos,
+      chat: patch.chat ? Object.freeze([...patch.chat]) : this.snapshot.chat,
+      speakers: patch.speakers ? Object.freeze([...patch.speakers]) : this.snapshot.speakers,
     });
     this.listeners.forEach((listener) => listener());
   }
@@ -137,38 +152,12 @@ export class MediaController {
     }
   };
   private async enableMicrophone(room: Room, epoch: number) {
-    let track: LocalAudioTrack | undefined;
-    try {
-      track = await (this.dependencies.micFactory ?? microphone)(this.devices.microphoneDevice);
-      if (this.epoch !== epoch || this.voice !== room) {
-        track.stop();
-        return;
-      }
-      this.mic = track;
-      track.mediaStreamTrack.enabled = !this.snapshot.muted && !this.snapshot.deafened;
-      await room.localParticipant.publishTrack(track, {
-        source: Track.Source.Microphone,
-        audioPreset: AudioPresets.speech,
-        forceStereo: false,
-        dtx: false,
-        red: true,
-      });
-      if (this.epoch !== epoch || this.voice !== room) {
-        track.stop();
-        await unpublish(room, track);
-        return;
-      }
-      if (this.snapshot.muted || this.snapshot.deafened) await track.mute();
-    } catch {
-      track?.stop();
-      if (this.epoch === epoch) {
-        this.mic = undefined;
-        this.update({
-          muted: true,
-          warning: 'Нет доступа к микрофону. Голос и демонстрации других участников доступны.',
-        });
-      }
-    }
+    this.mic.apply({ muted: this.snapshot.muted, deafened: this.snapshot.deafened });
+    await this.mic.start(
+      room,
+      this.devices.microphoneDevice,
+      () => this.epoch === epoch && this.voice === room,
+    );
   }
   leave = (): Promise<void> => {
     ++this.joinRevision;
@@ -184,25 +173,28 @@ export class MediaController {
     const voice = this.voice;
     this.voice = undefined;
     this.session = undefined;
-    this.mic?.stop();
-    this.mic = undefined;
+    const closingMicrophone = this.mic.stop();
     this.unbind.get(voice!)?.();
     this.unbind.delete(voice!);
     const closingScreen = this.closeScreen();
     this.playback.reset();
     this.screens.clear();
-    this.update({ ...initialSnapshot(), ...this.preferences });
-    await Promise.all([closingScreen, disconnect(voice)]);
+    this.update({ ...initialSnapshot(), ...this.preferences, voiceSettings: this.mic.settings });
+    await Promise.all([closingScreen, closingMicrophone, disconnect(voice)]);
   }
   setAudio = (state: AudioState): Promise<void> => {
     const epoch = this.epoch;
     const revision = ++this.audioRevision;
     this.preferences = Object.freeze({ muted: Boolean(state.muted), deafened: Boolean(state.deafened) });
     // PTT affects Chromium immediately; metadata reconciliation must not delay capture.
-    this.update(this.preferences);
+    this.update({
+      ...this.preferences,
+      ...(state.muted || state.deafened ? { micLevel: 0, voiceActive: false } : {}),
+    });
     this.applyAudio();
-    if (this.mic)
-      void (state.muted || state.deafened ? this.mic.mute() : this.mic.unmute())
+    if (this.mic.captured)
+      void this.mic
+        .synchronize(state)
         .then(() => {
           if (this.epoch === epoch) this.applyAudio();
         })
@@ -217,10 +209,9 @@ export class MediaController {
           this.preferences = Object.freeze({ muted: confirmed.muted, deafened: confirmed.deafened });
           this.update({ ...confirmed, error: '' });
           this.applyAudio();
-          if (!this.mic && !confirmed.muted && !confirmed.deafened && this.voice)
+          if (!this.mic.captured && !confirmed.muted && !confirmed.deafened && this.voice)
             await this.enableMicrophone(this.voice, epoch);
-          else if (this.mic)
-            await (confirmed.muted || confirmed.deafened ? this.mic.mute() : this.mic.unmute());
+          else if (this.mic.captured) await this.mic.synchronize(confirmed);
         } catch {
           if (this.epoch === epoch && this.audioRevision === revision) {
             // Broker metadata failure must never undo the user's local mute/deafen.
@@ -245,11 +236,16 @@ export class MediaController {
         () => this.screen,
         () => this.epoch === epoch && this.voice === voice,
       );
+      this.mic.useDevice(this.devices.microphoneDevice);
       if (this.epoch === epoch) this.applyAudio();
     } catch {
       if (this.epoch === epoch) this.update({ error: 'Не удалось выбрать аудиоустройство.' });
       throw new Error('Не удалось выбрать аудиоустройство.');
     }
+  };
+  setVoiceSettings = async (patch: Partial<VoiceSettings>): Promise<void> => {
+    await this.mic.configure(patch);
+    this.update({ voiceSettings: this.mic.settings });
   };
   private async applyOutput(room: Room, epoch: number) {
     try {
@@ -353,21 +349,7 @@ export class MediaController {
         const isVideo = track.kind === Track.Kind.Video;
         const publication = await room.localParticipant.publishTrack(
           track,
-          isVideo
-            ? {
-                source: Track.Source.ScreenShare,
-                videoCodec: h264 ? 'h264' : 'vp8',
-                simulcast: false,
-                screenShareEncoding: { maxBitrate: 2_000_000, maxFramerate: 30 },
-                degradationPreference: 'maintain-framerate',
-              }
-            : {
-                source: Track.Source.ScreenShareAudio,
-                audioPreset: AudioPresets.musicHighQualityStereo,
-                forceStereo: true,
-                dtx: false,
-                red: true,
-              },
+          screenPublishOptions(isVideo, h264),
         );
         if (!this.currentCapture(capture)) {
           await unpublish(room, track);
@@ -385,6 +367,7 @@ export class MediaController {
         this.update({
           sharing: true,
           pendingShare: false,
+          screenAudio: audio.length ? 'capturing' : withAudio ? 'unavailable' : 'off',
           warning:
             withAudio && !audio.length ? 'Источник не передал звук. Выберите доступный источник аудио.' : '',
         });
@@ -399,6 +382,7 @@ export class MediaController {
         this.update({
           pendingShare: false,
           sharing: false,
+          screenAudio: 'off',
           videos: this.snapshot.videos.filter((video) => !video.local),
           error: 'Не удалось начать демонстрацию. Проверьте разрешение на захват экрана.',
         });
@@ -415,6 +399,7 @@ export class MediaController {
     this.update({
       sharing: false,
       pendingShare: false,
+      screenAudio: 'off',
       videos: this.snapshot.videos.filter((video) => !video.local),
     });
     if (capture) await this.release(capture);
@@ -509,7 +494,7 @@ export class MediaController {
     if (this.stagedCapture) this.discard(this.stagedCapture);
     this.stagedCapture = undefined;
     this.clearScreenPlayback();
-    this.update({ sharing: false, pendingShare: false, videos: [] });
+    this.update({ sharing: false, pendingShare: false, screenAudio: 'off', videos: [] });
     this.refreshScreens();
     await Promise.all([capture ? this.release(capture) : undefined, disconnect(room)]);
   }
@@ -656,7 +641,7 @@ export class MediaController {
     }
   }
   private applyAudio() {
-    if (this.mic) this.mic.mediaStreamTrack.enabled = !this.snapshot.muted && !this.snapshot.deafened;
+    this.mic.apply({ muted: this.snapshot.muted, deafened: this.snapshot.deafened });
     this.playback.apply(this.snapshot.deafened);
   }
   private appendChat(identity: string, name: string, text: string, local: boolean) {

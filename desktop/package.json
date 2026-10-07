@@ -1,6 +1,6 @@
 {
-  "name": "gul-desktop",
-  "version": "0.8.0-alpha.0",
+  "name": "gul",
+  "version": "0.8.0-alpha.1",
   "private": true,
   "description": "Gul voice and screen sharing",
   "author": "Gul contributors",
@@ -19,7 +19,8 @@
     "test:integration": "playwright test --config playwright.config.ts",
     "vendor:xray": "node scripts/vendor-xray.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "build:ptt": "node scripts/build-ptt.mjs"
   },
   "dependencies": {
     "@livekit/protocol": "1.50.4",
@@ -49,6 +50,7 @@
   "build": {
     "appId": "io.github.lywwkkaad.gul.electron",
     "productName": "Gul",
+    "artifactName": "Gul-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "artifacts"
     },
@@ -61,6 +63,17 @@
     ],
     "asar": true,
     "extraResources": [
+      {
+        "from": "../build/appicon.png",
+        "to": "appicon.png"
+      },
+      {
+        "from": "resources/ptt",
+        "to": "ptt",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "resources/xray",
         "to": "xray",
@@ -106,11 +119,30 @@
       "icon": "../build/appicon.png",
       "category": "Network",
       "maintainer": "Gul contributors",
+      "executableName": "gul",
       "desktop": {
         "entry": {
           "StartupWMClass": "Gul"
         }
       }
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0 | libatspi2.0-0t64",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2 | libasound2t64",
+        "libpulse0",
+        "pipewire-pulse | pulseaudio",
+        "xdg-desktop-portal",
+        "libglib2.0-0 | libglib2.0-0t64"
+      ]
     },
     "nsis": {
       "oneClick": false,

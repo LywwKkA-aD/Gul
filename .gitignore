@@ -1,4 +1,4 @@
-# Secrets and local artifacts (PLAN.md §10.7)
+# Secrets and private connection/deployment fixtures.
 *.pem
 *.key
 *.crt
@@ -8,43 +8,42 @@
 .env.*
 !.env.example
 config.json
+private/
+bin/
+voice/
 *.wav
 !**/testdata/*.wav
 !**/testdata/**/*.wav
 
-# Go
-bin/
-*.exe
-*.test
-*.out
-
-# Wails build output (build/ configs stay tracked)
+# Dependencies, generated bundles, installers and test reports.
+node_modules/
+desktop/dist/
+desktop/artifacts/
+desktop/test-results/
+desktop/playwright-report/
 build/bin/
 
-# Frontend
-node_modules/
-frontend/dist/
-frontend/bindings/
-frontend/test-results/
-frontend/playwright-report/
+# Downloaded or compiled native helpers; source, licenses and manifests remain tracked.
+desktop/resources/xray/*/xray
+desktop/resources/xray/*/xray.exe
+desktop/resources/ptt/*/gul-ptt
+desktop/resources/ptt/*/gul-ptt.exe
+*.exe
+*.obj
+*.pdb
+*.ilk
 
-# Python configuration/security checks
+# Go/Python test artifacts.
+*.test
+*.out
 __pycache__/
 *.pyc
 
-# Wails / Task generated
-.task/
-build/linux/appimage/build
-build/linux/appimage/gul
-build/linux/appimage/gul.desktop
-build/linux/appimage/gul.png
-build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
-build/ios/xcode/overlay.json
-build/ios/xcode/gen/
-build/android/overlay.json
-build/android/gen/
+# Logs, recordings and profiling output.
+*.log
+*.pprof
 
-# OS / editor
+# OS and editor files.
 .claude/
 .DS_Store
 Thumbs.db
@@ -52,13 +51,5 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# Developer tools built into the repo root by a bare `go build ./cmd/...`.
-/gul-icons
-/gul-relay
-/gul-dsp
-
-# Debug / temp
-*.log
-*.pprof
-# Personal voice recordings and A/B listening material.
-voice/
+# Legacy task-runner cache.
+.task/

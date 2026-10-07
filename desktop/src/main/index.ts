@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol, session } from 'electron';
+import { app, BrowserWindow, Menu, protocol, session, Tray, nativeImage } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRealityGateway } from '../transport/gateway.ts';
@@ -9,6 +9,8 @@ import { installAppProtocol } from './protocol.ts';
 import { installPermissions } from './permissions.ts';
 import { installDisplayCapture } from './capture.ts';
 import { installIPC } from './ipc.ts';
+import { AppServices } from './app-services.ts';
+import { TrayLifecycle } from './tray.ts';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -39,6 +41,39 @@ const authority = new SessionAuthority(async ({ address, password }) =>
 let window: BrowserWindow | undefined;
 let quitting = false;
 let uninstallIPC = () => {};
+let services: AppServices;
+const lifecycle = new TrayLifecycle({
+  platform: process.platform,
+  window: () => window,
+  createTray: ({ show, quit }) => {
+    if (process.platform === 'linux') return undefined;
+    const iconPath = app.isPackaged
+      ? join(process.resourcesPath, 'appicon.png')
+      : join(app.getAppPath(), '..', 'build', 'appicon.png');
+    const icon = nativeImage.createFromPath(iconPath).resize({ width: 22, height: 22 });
+    if (icon.isEmpty()) return undefined;
+    const tray = new Tray(icon);
+    tray.setToolTip('Gul');
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Открыть Gul', click: show },
+        { type: 'separator' },
+        { label: 'Выйти', click: quit },
+      ]),
+    );
+    tray.on('click', show);
+    tray.on('double-click', show);
+    return tray;
+  },
+  cleanup: async () => {
+    await services?.close();
+    uninstallIPC();
+  },
+  quit: () => {
+    quitting = true;
+    app.quit();
+  },
+});
 
 async function createWindow(): Promise<void> {
   const ownSession = session.fromPartition('persist:gul-desktop', { cache: false });
@@ -68,7 +103,20 @@ async function createWindow(): Promise<void> {
   });
   const ownWindow = window;
   installPermissions(ownWindow, authority);
-  installDisplayCapture(ownWindow, authority);
+  const testCapture =
+    !app.isPackaged &&
+    process.env.NODE_ENV === 'test' &&
+    process.argv.includes('--gul-electron-test') &&
+    process.env.GUL_ELECTRON_TEST_CAPTURE_APPROVED === '1';
+  installDisplayCapture(
+    ownWindow,
+    authority,
+    testCapture
+      ? {
+          pick: async () => ({ response: 1, checkboxChecked: true }),
+        }
+      : undefined,
+  );
   ownWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   ownWindow.webContents.on('will-navigate', (event, url) => {
     if (!appPage(url)) event.preventDefault();
@@ -83,6 +131,9 @@ async function createWindow(): Promise<void> {
     if (window === ownWindow) window = undefined;
     void authority.disconnect();
   });
+  ownWindow.on('close', (event) => {
+    lifecycle.handleClose(event);
+  });
   ownWindow.once('ready-to-show', () => {
     ownWindow.show();
   });
@@ -93,8 +144,21 @@ void app
   .whenReady()
   .then(async () => {
     Menu.setApplicationMenu(null);
-    uninstallIPC = installIPC(authority, () => window);
+    services = new AppServices(authority);
+    await services.initialize();
+    uninstallIPC = installIPC(
+      authority,
+      () => window,
+      services,
+      join(
+        resourceRoot,
+        'ptt',
+        `${process.platform}-${process.arch}`,
+        process.platform === 'win32' ? 'gul-ptt.exe' : 'gul-ptt',
+      ),
+    );
     await createWindow();
+    if (!overrides.caFile && !process.argv.includes('--gul-electron-test')) lifecycle.initialize();
     app.on('activate', () => {
       if (!window) void createWindow();
     });
@@ -108,9 +172,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
-  quitting = true;
-  void authority.disconnect().finally(() => {
-    uninstallIPC();
-    app.quit();
-  });
+  void lifecycle.requestQuit();
 });

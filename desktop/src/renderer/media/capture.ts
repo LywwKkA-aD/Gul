@@ -5,20 +5,28 @@ import {
   type LocalVideoTrack,
 } from 'livekit-client';
 import type { ScreenCapture } from './model.ts';
+import { defaultVoiceSettings, type VoiceSettings } from './voice-gate.ts';
+import { screenResolution } from './screen-settings.ts';
 
-export function microphone(deviceId?: string): Promise<LocalAudioTrack> {
-  return createLocalAudioTrack({
+export function voiceCaptureOptions(settings: VoiceSettings, deviceId?: string) {
+  return {
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     channelCount: 1,
     sampleRate: 48000,
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  });
+    echoCancellation: settings.echoCancellation,
+    noiseSuppression: settings.noiseSuppression,
+    autoGainControl: settings.autoGainControl,
+  };
+}
+export function microphone(
+  deviceId?: string,
+  settings: VoiceSettings = defaultVoiceSettings,
+): Promise<LocalAudioTrack> {
+  return createLocalAudioTrack(voiceCaptureOptions(settings, deviceId));
 }
 export async function captureScreen(withAudio: boolean): Promise<ScreenCapture> {
   const tracks = await createLocalScreenTracks({
-    resolution: { width: 1280, height: 720, frameRate: 30 },
+    resolution: screenResolution,
     audio: withAudio
       ? {
           channelCount: 2,

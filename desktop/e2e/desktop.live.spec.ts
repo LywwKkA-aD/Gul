@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -185,6 +185,10 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
   const directory = resolve(fixture!);
   const address = (await readFile(join(directory, 'address'), 'utf8')).trim();
   const password = (await readFile(join(directory, 'join-password'), 'utf8')).trim();
+  const caFile = join(directory, 'ca.pem');
+  const fixtureCA = await access(caFile)
+    .then(() => caFile)
+    .catch(() => undefined);
   const apps: ElectronApplication[] = [];
   const dataRoot = await mkdtemp(join(tmpdir(), 'gul-electron-e2e-'));
   try {
@@ -193,7 +197,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
       const app = await electron.launch({
         executablePath: require('electron'),
         args: ['.', '--gul-electron-test', `--user-data-dir=${join(dataRoot, String(i))}`],
-        env: { ...process.env, NODE_ENV: 'test', GUL_ELECTRON_TEST_CA: join(directory, 'ca.pem') },
+        env: { ...process.env, NODE_ENV: 'test', ...(fixtureCA ? { GUL_ELECTRON_TEST_CA: fixtureCA } : {}) },
       });
       apps.push(app);
       const page = await app.firstWindow();
@@ -211,6 +215,17 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await expect.poll(() => audible(a, 'voice'), { timeout: 15_000 }).toBeGreaterThan(0.005);
     await expect.poll(() => playbackPeak(a)).toBeGreaterThan(0.005);
     await expect.poll(() => playbackPeak(b)).toBeGreaterThan(0.005);
+    await a.getByRole('button', { name: 'Настройки', exact: true }).click();
+    await expect(a.getByRole('meter', { name: 'Уровень микрофона', exact: true })).toBeVisible();
+    await a.getByRole('combobox', { name: 'Режим микрофона', exact: true }).selectOption('vad');
+    const threshold = a.getByRole('slider', { name: 'Порог активации', exact: true });
+    await threshold.focus();
+    await a.keyboard.press('End');
+    await expect(threshold).toHaveValue('-6');
+    await expect.poll(() => audible(b, 'voice')).toBeLessThan(0.005);
+    await a.getByRole('combobox', { name: 'Режим микрофона', exact: true }).selectOption('continuous');
+    await expect.poll(() => audible(b, 'voice')).toBeGreaterThan(0.005);
+    await a.keyboard.press('Escape');
     await b
       .locator('.members')
       .getByRole('button', { name: 'Настройки участника desktop-peer-0', exact: true })
@@ -237,7 +252,6 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await a.getByLabel('Сообщение', { exact: true }).fill('REALITY desktop integration');
     await a.getByRole('button', { name: 'Отправить сообщение' }).click();
     await expect(b.getByText('REALITY desktop integration', { exact: true })).toBeVisible();
-    await a.getByLabel('Со звуком', { exact: true }).check();
     await a.getByRole('button', { name: 'Показать экран', exact: true }).click();
     await expect(b.getByRole('button', { name: /desktop-peer-0.*Смотреть экран/ })).toBeVisible({
       timeout: 20_000,

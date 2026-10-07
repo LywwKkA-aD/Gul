@@ -8,6 +8,9 @@ import type {
   MediaGrant,
   MediaSession,
   ScreenRequest,
+  ServerList,
+  CaptureCapabilities,
+  AppInfo,
 } from '../shared/contracts.ts';
 
 async function invoke<T>(channel: string, value?: unknown): Promise<T> {
@@ -20,7 +23,18 @@ async function invoke<T>(channel: string, value?: unknown): Promise<T> {
 
 /** No generic IPC method, Electron event, broker bearer, or Node object enters the page. */
 const api: DesktopAPI = Object.freeze({
-  connect: (input: ConnectInput) => invoke<MediaSession>('gul:connect', input),
+  connect: (input: ConnectInput, rememberPassword = false) =>
+    invoke<MediaSession>('gul:connect', { input, rememberPassword }),
+  connectSaved: (address: string, username: string) =>
+    invoke<MediaSession>('gul:connect-saved', { address, username }),
+  servers: () => invoke<ServerList>('gul:servers'),
+  forgetServer: (address: string) => invoke<void>('gul:forget-server', address),
+  captureCapabilities: () => invoke<CaptureCapabilities>('gul:capture-capabilities'),
+  appInfo: () => invoke<AppInfo>('gul:app-info'),
+  openUpdate: () => invoke<void>('gul:open-update'),
+  diagnostics: () => invoke<boolean>('gul:diagnostics'),
+  recordDiagnostic: (event: string, metadata: unknown) =>
+    invoke<void>('gul:record-diagnostic', { event, metadata }),
   disconnect: () => invoke<void>('gul:disconnect'),
   state: () => invoke<BrokerState | null>('gul:state'),
   channel: (id: number) => invoke<MediaSession>('gul:channel', id),
@@ -36,7 +50,8 @@ const api: DesktopAPI = Object.freeze({
       ipcRenderer.removeListener('gul:push-to-talk', handler);
     };
   },
-  setPushToTalk: (shortcut: string | null) => invoke<void>('gul:set-push-to-talk', shortcut),
+  setPushToTalk: (shortcut: string | null, mode: 'toggle' | 'hold' = 'toggle') =>
+    invoke<void>('gul:set-push-to-talk', { shortcut, mode }),
   minimize: () => invoke<void>('gul:minimize'),
   maximize: () => invoke<void>('gul:maximize'),
   closeWindow: () => invoke<void>('gul:close-window'),

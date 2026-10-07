@@ -53,15 +53,45 @@ export interface ScreenRequest {
   readonly channelId: number;
   readonly revision: number;
 }
+export interface SavedServerInfo {
+  readonly address: string;
+  readonly username: string;
+  readonly lastUsed: number;
+  readonly hasPassword: boolean;
+}
+export interface ServerList {
+  readonly servers: readonly SavedServerInfo[];
+  readonly storage: 'protected' | 'unavailable';
+}
+export interface CaptureCapabilities {
+  readonly platform: string;
+  readonly backend: 'wasapi' | 'pipewire-pulse' | 'coreaudio' | 'none';
+  readonly systemAudio: boolean;
+  readonly ownAudioExcluded: boolean;
+  readonly audioServer: 'detected' | 'not-detected' | 'not-required';
+  readonly details: string;
+}
+export interface AppInfo {
+  readonly version: string;
+  readonly update: { readonly version: string; readonly url: string } | null;
+}
 export interface DesktopAPI {
-  connect(input: ConnectInput): Promise<MediaSession>;
+  connect(input: ConnectInput, rememberPassword?: boolean): Promise<MediaSession>;
+  connectSaved(address: string, username: string): Promise<MediaSession>;
+  servers(): Promise<ServerList>;
+  forgetServer(address: string): Promise<void>;
+  captureCapabilities(): Promise<CaptureCapabilities>;
+  appInfo(): Promise<AppInfo>;
+  openUpdate(): Promise<void>;
+  diagnostics(): Promise<boolean>;
+  recordDiagnostic(event: string, metadata: unknown): Promise<void>;
   disconnect(): Promise<void>;
   state(): Promise<BrokerState | null>;
   channel(id: number): Promise<MediaSession>;
   audio(state: AudioState): Promise<AudioState>;
   screen(request: ScreenRequest): Promise<MediaGrant>;
   onPushToTalk(listener: (pressed: boolean) => void): () => void;
-  setPushToTalk(shortcut: string | null): Promise<void>;
+  setPushToTalk(shortcut: string | null, mode?: 'toggle' | 'hold'): Promise<void>;
   minimize(): Promise<void>;
   maximize(): Promise<void>;
   closeWindow(): Promise<void>;

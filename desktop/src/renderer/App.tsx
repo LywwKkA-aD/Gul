@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { BrokerState, DesktopAPI, MediaSession, UserInfo } from '../shared/contracts.ts';
+import type {
+  BrokerState,
+  DesktopAPI,
+  MediaSession,
+  UserInfo,
+  ServerList,
+  CaptureCapabilities,
+  AppInfo,
+} from '../shared/contracts.ts';
 import { MediaController } from './media/controller.ts';
 import type { ChatEntry } from './media/model.ts';
 import { Icon } from './MediaElements.tsx';
@@ -7,6 +15,10 @@ import { ChannelList, flattenChannels } from './ChannelList.tsx';
 import { ChatPanel } from './ChatPanel.tsx';
 import { EphemeralChatHistory } from './chat-history.ts';
 import { ScreenPanel } from './ScreenPanel.tsx';
+import { SoundCues } from './sound-cues.ts';
+import { ConnectPanel } from './ConnectPanel.tsx';
+import { ConnectionLifecycle } from './connection-lifecycle.ts';
+import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import {
   ParticipantControls,
@@ -42,30 +54,61 @@ export function App() {
         audioState: (state) => api.audio(state),
       }),
   );
-  const snapshot = useSyncExternalStore(media.subscribe, media.getSnapshot);
+  const [readPresentation] = useState(() => presentationSnapshot(media.getSnapshot));
+  const snapshot = useSyncExternalStore(media.subscribe, readPresentation);
+  const [cues] = useState(() => new SoundCues());
+  const previousMedia = useRef(snapshot);
   const [history] = useState(() => new EphemeralChatHistory());
   const [session, setSession] = useState<MediaSession | null>(null);
   const [broker, setBroker] = useState<BrokerState | null>(null);
   const [address, setAddress] = useState(() => readSavedString('gul.address'));
   const [username, setUsername] = useState(() => readSavedString('gul.username'));
   const [password, setPassword] = useState('');
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [savedServers, setSavedServers] = useState<ServerList>({ servers: [], storage: 'unavailable' });
+  const [capabilities, setCapabilities] = useState<CaptureCapabilities | null>(null);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState(false);
-  const [withAudio, setWithAudio] = useState(false);
   const [preferences, setPreferences] = useState(readPreferences);
   const preferenceRef = useRef(preferences);
+  const hotkeyRevision = useRef(0);
   const [localAudio, setLocalAudio] = useState<Readonly<Record<string, LocalAudioPreference>>>({});
   const localAudioRef = useRef(localAudio);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [chat, setChat] = useState<{ channelId: number; entries: readonly ChatEntry[] } | null>(null);
-  const operation = useRef(0);
+  const [lifecycle] = useState(() => new ConnectionLifecycle());
 
   const persistPreferences = (next: Preferences) => {
     preferenceRef.current = Object.freeze(next);
     setPreferences(preferenceRef.current);
     savePreferences(preferenceRef.current);
   };
+  useEffect(() => {
+    let active = true;
+    void api
+      .servers()
+      .then((value) => {
+        if (active) setSavedServers(value);
+      })
+      .catch(() => {});
+    void api
+      .captureCapabilities()
+      .then((value) => {
+        if (active) setCapabilities(value);
+      })
+      .catch(() => {});
+    void api
+      .appInfo()
+      .then((value) => {
+        if (active) setAppInfo(value);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [api]);
   useEffect(() => {
     if (!session) return;
     let active = true;
@@ -92,7 +135,7 @@ export function App() {
   useEffect(
     () =>
       api.onPushToTalk((pressed) => {
-        if (sessionRef.current)
+        if (sessionRef.current && (!pressed || preferenceRef.current.toggleEnabled))
           void media.setAudio({ muted: !pressed, deafened: media.getSnapshot().deafened });
       }),
     [api, media],
@@ -100,9 +143,11 @@ export function App() {
   useEffect(() => {
     let active = true;
     const saved = preferenceRef.current;
+    const revision = ++hotkeyRevision.current;
     if (saved.toggleEnabled)
-      void api.setPushToTalk(saved.shortcut).catch(() => {
-        if (!active) return;
+      void api.setPushToTalk(saved.shortcut, saved.hotkeyMode).catch(() => {
+        if (!active || revision !== hotkeyRevision.current) return;
+        void media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
         persistPreferences({ ...preferenceRef.current, toggleEnabled: false });
         setError('Сохранённая клавиша микрофона недоступна. Выберите другую в настройках.');
       });
@@ -116,6 +161,67 @@ export function App() {
     setChat({ channelId: session.channelId, entries: history.read(session.channelId) });
   }, [history, session, snapshot.chat]);
 
+  useEffect(() => {
+    const before = previousMedia.current;
+    previousMedia.current = snapshot;
+    const cue =
+      before.state !== snapshot.state
+        ? snapshot.state === 'connected'
+          ? 'connect'
+          : snapshot.state === 'reconnecting'
+            ? 'reconnect'
+            : snapshot.state === 'disconnected'
+              ? 'disconnect'
+              : undefined
+        : before.sharing !== snapshot.sharing
+          ? snapshot.sharing
+            ? 'screen-start'
+            : 'screen-stop'
+          : before.deafened !== snapshot.deafened
+            ? 'deafen'
+            : before.muted !== snapshot.muted
+              ? snapshot.muted
+                ? 'mute'
+                : 'unmute'
+              : undefined;
+    if (cue) {
+      void cues.play(cue, preferences.soundNotifications, snapshot.deafened);
+      const event =
+        cue === 'reconnect'
+          ? 'media-reconnect'
+          : cue === 'disconnect'
+            ? 'media-disconnected'
+            : cue === 'screen-start'
+              ? 'capture-start'
+              : cue === 'screen-stop'
+                ? 'capture-stop'
+                : '';
+      if (event)
+        void api
+          .recordDiagnostic(event, {
+            state: snapshot.state,
+            muted: snapshot.muted,
+            deafened: snapshot.deafened,
+          })
+          .catch(() => {});
+    } else if (!preferences.soundNotifications || snapshot.deafened) void cues.play('mute', false, true);
+  }, [
+    api,
+    cues,
+    preferences.soundNotifications,
+    snapshot.state,
+    snapshot.sharing,
+    snapshot.muted,
+    snapshot.deafened,
+  ]);
+  useEffect(
+    () => () => {
+      void cues.close();
+      void media.leave();
+    },
+    [cues, media],
+  );
+
   const run = async (action: () => Promise<void>) => {
     setError('');
     try {
@@ -125,45 +231,59 @@ export function App() {
     }
   };
   const leave = async () => {
-    operation.current++;
+    const current = lifecycle.invalidate();
     sessionRef.current = null;
     setSession(null);
     setBroker(null);
-    setBusy(false);
+    setBusy(true);
     setSelectedUser(null);
     setPassword('');
     history.reset();
     setChat(null);
     localAudioRef.current = {};
     setLocalAudio({});
-    await media.leave();
-    await api.disconnect();
+    const result = await lifecycle.cleanup(current, media.leave, () => api.disconnect());
+    if (!lifecycle.current(current)) return;
+    lifecycle.finish(current);
+    setBusy(false);
+    if (result.failure)
+      setError(result.failure instanceof Error ? result.failure.message : 'Не удалось отключиться');
   };
   const enter = async (channel?: number) => {
     if (busy || (channel !== undefined && channel === sessionRef.current?.channelId)) return;
-    const current = ++operation.current;
+    const current = lifecycle.begin();
+    if (current === null) return;
     const previous = sessionRef.current;
     if (previous) history.write(previous.channelId, media.getSnapshot().chat);
     setBusy(true);
     setError('');
     setSelectedUser(null);
     try {
-      await media.leave();
-      const next =
+      if (!(await lifecycle.step(current, media.leave)).accepted) return;
+      const joined = await lifecycle.step(current, () =>
         channel === undefined
-          ? await api.connect({ address, username, password })
-          : await api.channel(channel);
-      if (current !== operation.current) return;
+          ? savedServers.servers.some((server) => server.address === address.trim() && server.hasPassword) &&
+            !password
+            ? api.connectSaved(address, username)
+            : api.connect({ address, username, password }, rememberPassword)
+          : api.channel(channel),
+      );
+      if (!joined.accepted) return;
+      const next = joined.value;
       if (channel === undefined) history.bind({ server: address.trim(), sessionId: next.sessionId });
       sessionRef.current = next;
       setSession(next);
       const saved = preferenceRef.current;
-      await media.setDevice('audioinput', saved.audioinput);
-      await media.setDevice('audiooutput', saved.audiooutput);
-      if (saved.toggleEnabled) await media.setAudio({ muted: true, deafened: false });
-      if (current !== operation.current) return;
-      await media.join(next);
-      if (current !== operation.current) return;
+      const setup = [
+        () => media.setVoiceSettings(saved.voice),
+        () => media.setDevice('audioinput', saved.audioinput),
+        () => media.setDevice('audiooutput', saved.audiooutput),
+        ...(saved.toggleEnabled
+          ? [() => media.setAudio({ muted: true, deafened: media.getSnapshot().deafened })]
+          : []),
+        () => media.join(next),
+      ];
+      for (const step of setup) if (!(await lifecycle.step(current, step)).accepted) return;
       if (media.getSnapshot().state !== 'connected')
         throw new Error(media.getSnapshot().error || 'Не удалось подключить голосовой канал');
       Object.entries(localAudioRef.current).forEach(([identity, preference]) => {
@@ -172,10 +292,14 @@ export function App() {
       });
       saveConnection(address, username);
       setPassword('');
+      void api
+        .servers()
+        .then(setSavedServers)
+        .catch(() => {});
     } catch (failure) {
-      if (current !== operation.current) return;
-      await media.leave();
-      await api.disconnect().catch(() => {});
+      if (!lifecycle.current(current)) return;
+      await lifecycle.cleanup(current, media.leave, () => api.disconnect());
+      if (!lifecycle.current(current)) return;
       sessionRef.current = null;
       setSession(null);
       setBroker(null);
@@ -185,21 +309,30 @@ export function App() {
       setLocalAudio({});
       setError(failure instanceof Error ? failure.message : 'Не удалось подключиться');
     } finally {
-      if (current === operation.current) setBusy(false);
+      if (lifecycle.finish(current)) setBusy(false);
     }
   };
   const changePreferences = async (patch: Partial<Preferences>) => {
     const next = { ...preferenceRef.current, ...patch };
     if (patch.audioinput !== undefined) await media.setDevice('audioinput', next.audioinput);
     if (patch.audiooutput !== undefined) await media.setDevice('audiooutput', next.audiooutput);
-    if (patch.toggleEnabled !== undefined || (patch.shortcut !== undefined && next.toggleEnabled)) {
+    if (patch.voice !== undefined) await media.setVoiceSettings(next.voice);
+    if (
+      patch.toggleEnabled !== undefined ||
+      ((patch.shortcut !== undefined || patch.hotkeyMode !== undefined) && next.toggleEnabled)
+    ) {
+      const revision = ++hotkeyRevision.current;
       try {
-        await api.setPushToTalk(next.toggleEnabled ? next.shortcut : null);
+        await api.setPushToTalk(next.toggleEnabled ? next.shortcut : null, next.hotkeyMode);
+        if (revision !== hotkeyRevision.current) return;
+        if (next.toggleEnabled) await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
       } catch {
+        if (revision !== hotkeyRevision.current) return;
         persistPreferences({ ...next, toggleEnabled: false });
         await media.setAudio({ muted: true, deafened: media.getSnapshot().deafened });
         throw new Error('Не удалось зарегистрировать эту клавишу. Выберите другое сочетание.');
       }
+      if (revision !== hotkeyRevision.current) return;
     }
     persistPreferences(next);
   };
@@ -232,7 +365,7 @@ export function App() {
     <div className="app">
       <header className="titlebar">
         <span className="wordmark">
-          GUL<span className="version">preview</span>
+          GUL<span className="version">{appInfo?.version ?? 'Electron'}</span>
         </span>
         <div className="window-buttons">
           <button aria-label="Свернуть" onClick={() => void api.minimize()}>
@@ -247,75 +380,33 @@ export function App() {
         </div>
       </header>
       {!session ? (
-        <main className="connect-page">
-          <section className="connect-card">
-            <div className="brand-symbol">g</div>
-            <h1>Заходи. Общайся.</h1>
-            <p className="subtle">Голос, игры и экран — вместе.</p>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void enter();
-              }}
-            >
-              <label>
-                Адрес сервера
-                <input
-                  aria-label="Адрес сервера"
-                  value={address}
-                  onChange={(event) => setAddress(event.target.value)}
-                  placeholder="livekit+vless://…"
-                  required
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-              </label>
-              <label>
-                Твой ник
-                <input
-                  aria-label="Твой ник"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  maxLength={64}
-                  required
-                  autoComplete="username"
-                  disabled={busy}
-                />
-              </label>
-              <label>
-                Пароль
-                <input
-                  aria-label="Пароль"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  autoComplete="current-password"
-                  disabled={busy}
-                />
-              </label>
-              <button className="primary" type="submit" disabled={busy}>
-                {busy ? 'Подключаемся…' : 'Подключиться'}
-              </button>
-              {busy && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  aria-label="Отменить подключение"
-                  onClick={() => void run(leave)}
-                >
-                  Отменить подключение
-                </button>
-              )}
-            </form>
-            {error && (
-              <p role="alert" className="error">
-                {error}
-              </p>
-            )}
-          </section>
-        </main>
+        <ConnectPanel
+          address={address}
+          username={username}
+          password={password}
+          remember={rememberPassword}
+          saved={savedServers}
+          busy={busy}
+          error={error}
+          onAddress={setAddress}
+          onUsername={setUsername}
+          onPassword={setPassword}
+          onRemember={setRememberPassword}
+          onChoose={(server) => {
+            setAddress(server.address);
+            setUsername(server.username);
+            setPassword('');
+            setRememberPassword(false);
+          }}
+          onForget={(value) =>
+            void run(async () => {
+              await api.forgetServer(value);
+              setSavedServers(await api.servers());
+            })
+          }
+          onConnect={() => void enter()}
+          onCancel={() => void run(leave)}
+        />
       ) : (
         <div className="workspace">
           <aside className="sidebar">
@@ -404,7 +495,7 @@ export function App() {
                         ? media.stopScreen()
                         : media.startScreen(
                             api.screen({ channelId: session.channelId, revision: session.revision }),
-                            withAudio,
+                            true,
                           ),
                     )
                   }
@@ -420,15 +511,16 @@ export function App() {
                   <Icon name="settings" />
                 </button>
               </div>
-              <label className="audio-checkbox">
-                <input
-                  type="checkbox"
-                  checked={withAudio}
-                  disabled={snapshot.sharing || snapshot.pendingShare}
-                  onChange={(event) => setWithAudio(event.target.checked)}
-                />
-                Со звуком
-              </label>
+
+              {snapshot.sharing && (
+                <small className="capture-status">
+                  {snapshot.screenAudio === 'capturing'
+                    ? 'Экран и звук компьютера'
+                    : snapshot.screenAudio === 'unavailable'
+                      ? 'Экран · звук недоступен'
+                      : 'Экран без звука'}
+                </small>
+              )}
             </div>
           </aside>
           <main className="conversation">
@@ -479,6 +571,9 @@ export function App() {
       {settings && (
         <SettingsDialog
           preferences={preferences}
+          media={media}
+          capabilities={capabilities}
+          appInfo={appInfo}
           onChange={changePreferences}
           onClose={() => setSettings(false)}
         />

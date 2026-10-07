@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { defaultVoiceSettings } from '../src/renderer/media/voice-gate.ts';
 import {
   readPreferences,
   savePreferences,
@@ -43,6 +44,9 @@ test('saved device and key preferences never persist a password or media token',
     audiooutput: 'chosen-output',
     shortcut: 'Control+F9',
     toggleEnabled: true,
+    voice: defaultVoiceSettings,
+    soundNotifications: false,
+    hotkeyMode: 'toggle',
   });
   assert.equal(Object.isFrozen(preferences), true);
   savePreferences(preferences);
@@ -75,6 +79,9 @@ test('corrupt and unavailable storage defaults to an unregistered global key', (
       audiooutput: 'default',
       shortcut: 'F8',
       toggleEnabled: false,
+      voice: defaultVoiceSettings,
+      soundNotifications: false,
+      hotkeyMode: 'toggle',
     });
   }
   storage(null, true);
@@ -82,6 +89,24 @@ test('corrupt and unavailable storage defaults to an unregistered global key', (
   assert.equal(readSavedString('gul.username'), '');
   assert.doesNotThrow(() => savePreferences(readPreferences()));
   assert.doesNotThrow(() => saveConnection('public-profile', 'local-name'));
+});
+test('voice preferences validate settings and drop unknown secret fields', () => {
+  const written = storage(
+    JSON.stringify({
+      voice: { mode: 'vad', thresholdDb: -50, inputGain: 1.5, password: 'fixture-secret' },
+      soundNotifications: true,
+      hotkeyMode: 'hold',
+    }),
+  );
+  const preferences = readPreferences();
+  assert.equal(preferences.voice.mode, 'vad');
+  assert.equal(preferences.voice.inputGain, 1.5);
+  assert.equal(preferences.soundNotifications, true);
+  assert.equal(preferences.hotkeyMode, 'hold');
+  savePreferences(preferences);
+  assert.equal(written.get('gul.preferences')?.includes('fixture-secret'), false);
+  storage(JSON.stringify({ voice: { inputGain: 100 } }));
+  assert.equal(readPreferences().voice.inputGain, 1);
 });
 
 test('key capture maps physical keys independently of keyboard language and rejects modifier-only presses', () => {

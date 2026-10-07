@@ -1,5 +1,7 @@
 import type { LocalAudioTrack, LocalVideoTrack, Room, Track } from 'livekit-client';
 import type { AudioState, MediaGrant } from '../../shared/contracts.ts';
+import { defaultVoiceSettings, type VoiceSettings, type VoiceReading } from './voice-gate.ts';
+import type { VoiceProcessorHandle } from './voice-processor.ts';
 
 export interface ParticipantInfo {
   readonly identity: string;
@@ -41,6 +43,11 @@ export interface Snapshot extends AudioState {
   readonly pingMs: number | null;
   readonly sharing: boolean;
   readonly pendingShare: boolean;
+  readonly screenAudio: 'off' | 'capturing' | 'unavailable';
+  readonly micLevel: number;
+  readonly voiceActive: boolean;
+  readonly voiceSettings: VoiceSettings;
+  readonly voiceProcessingAvailable: boolean;
 }
 export interface ScreenCapture {
   readonly tracks: readonly (LocalVideoTrack | LocalAudioTrack)[];
@@ -50,7 +57,12 @@ export interface Dependencies {
   readonly screenGrant: () => Promise<MediaGrant>;
   readonly audioState: (state: AudioState) => Promise<AudioState>;
   readonly roomFactory?: (kind: 'voice' | 'screen') => Room;
-  readonly micFactory?: (deviceId?: string) => Promise<LocalAudioTrack>;
+  readonly micFactory?: (deviceId?: string, settings?: VoiceSettings) => Promise<LocalAudioTrack>;
+  readonly voiceProcessorFactory?: (
+    track: LocalAudioTrack,
+    settings: VoiceSettings,
+    reading: (reading: Pick<VoiceReading, 'level' | 'active'>) => void,
+  ) => Promise<VoiceProcessorHandle | undefined>;
   readonly captureFactory?: (withAudio: boolean) => Promise<ScreenCapture>;
   readonly audioElementFactory?: () => HTMLAudioElement;
   /** Use only after this machine's actual WebRTC H.264 encoder was measured. */
@@ -70,6 +82,11 @@ export function initialSnapshot(): Snapshot {
     pingMs: null,
     sharing: false,
     pendingShare: false,
+    screenAudio: 'off',
+    micLevel: 0,
+    voiceActive: false,
+    voiceSettings: defaultVoiceSettings,
+    voiceProcessingAvailable: false,
     muted: false,
     deafened: false,
   });

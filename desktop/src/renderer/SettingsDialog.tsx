@@ -1,20 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
+import type { AppInfo, CaptureCapabilities } from '../shared/contracts.ts';
+import type { MediaController } from './media/controller.ts';
+import { VoiceSettingsPanel } from './VoiceSettingsPanel.tsx';
 import { Dialog } from './Dialog.tsx';
 import { shortcutFromKey, type Preferences } from './preferences.ts';
 
 export function SettingsDialog({
   preferences,
+  media,
+  capabilities,
+  appInfo,
   onChange,
   onClose,
 }: {
   preferences: Preferences;
+  media: MediaController;
+  capabilities: CaptureCapabilities | null;
+  appInfo: AppInfo | null;
   onChange: (patch: Partial<Preferences>) => Promise<void>;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<'sound' | 'keys'>('sound');
+  const [tab, setTab] = useState<'sound' | 'keys' | 'about'>('sound');
   const [devices, setDevices] = useState<readonly MediaDeviceInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [diagnosticSaved, setDiagnosticSaved] = useState(false);
   const [error, setError] = useState('');
   const shortcutInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
@@ -77,6 +87,18 @@ export function SettingsDialog({
         >
           Клавиши
         </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'about'}
+          aria-controls="about-settings"
+          id="about-tab"
+          onClick={() => {
+            setTab('about');
+            setRecording(false);
+          }}
+        >
+          О приложении
+        </button>
       </div>
       {tab === 'sound' ? (
         <section role="tabpanel" id="sound-settings" aria-labelledby="sound-tab">
@@ -112,12 +134,27 @@ export function SettingsDialog({
           <button className="secondary-button" onClick={() => void refreshDevices()} disabled={busy}>
             Обновить устройства
           </button>
+          <VoiceSettingsPanel
+            media={media}
+            busy={busy}
+            onChange={(patch) => change({ voice: { ...preferences.voice, ...patch } })}
+          />
+          <label className="checkbox-control">
+            <input
+              type="checkbox"
+              checked={preferences.soundNotifications}
+              disabled={busy}
+              onChange={(event) => void change({ soundNotifications: event.target.checked })}
+            />
+            Звуки действий
+          </label>
+          <p className="subtle settings-help">{capabilities?.details}</p>
           <p className="subtle settings-help">
             Звук демонстрации передаётся отдельно от микрофона. Захват системного звука зависит от источника и
             операционной системы.
           </p>
         </section>
-      ) : (
+      ) : tab === 'keys' ? (
         <section role="tabpanel" id="keys-settings" aria-labelledby="keys-tab">
           <label className="checkbox-control">
             <input
@@ -128,6 +165,20 @@ export function SettingsDialog({
               onChange={(event) => void change({ toggleEnabled: event.target.checked })}
             />
             Глобальная клавиша микрофона
+          </label>
+          <label>
+            Режим клавиши
+            <select
+              aria-label="Режим клавиши микрофона"
+              value={preferences.hotkeyMode}
+              disabled={busy || recording}
+              onChange={(event) =>
+                void change({ hotkeyMode: event.target.value as Preferences['hotkeyMode'] })
+              }
+            >
+              <option value="toggle">Нажать — включить / выключить</option>
+              <option value="hold">Удерживать — говорить</option>
+            </select>
           </label>
           <label>
             Сочетание клавиш
@@ -164,9 +215,51 @@ export function SettingsDialog({
             </div>
           </label>
           <p className="subtle settings-help">
-            Одно нажатие включает передачу голоса, следующее выключает. Работает и во время игры. После смены
-            канала микрофон выключен; включите его этой клавишей или кнопкой.
+            {preferences.hotkeyMode === 'hold'
+              ? 'Говорите, удерживая клавишу. На Linux система может попросить разрешить глобальное сочетание. Этот режим доступен на Windows и в окружениях Linux с поддержкой глобальных клавиш.'
+              : 'Одно нажатие включает передачу голоса, следующее выключает. Работает и во время игры.'}{' '}
+            После смены канала микрофон выключен.
           </p>
+        </section>
+      ) : (
+        <section role="tabpanel" id="about-settings" aria-labelledby="about-tab">
+          <p>Gul {appInfo?.version ?? ''}</p>
+          {appInfo?.update && (
+            <button
+              className="secondary-button"
+              onClick={() =>
+                void window.gul.openUpdate().catch(() => setError('Не удалось открыть страницу обновления.'))
+              }
+            >
+              Скачать {appInfo.update.version}
+            </button>
+          )}
+          <p className="subtle settings-help">
+            Для диагностики можно сохранить архив со сведениями о версии и событиях подключения. Пароли,
+            адреса серверов, переписка и звук в него не попадают.
+          </p>
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError('');
+              try {
+                setDiagnosticSaved(await window.gul.diagnostics());
+              } catch {
+                setError('Не удалось сохранить диагностику.');
+              } finally {
+                if (mounted.current) setBusy(false);
+              }
+            }}
+          >
+            Сохранить диагностику
+          </button>
+          {diagnosticSaved && (
+            <p role="status" className="subtle">
+              Архив сохранён.
+            </p>
+          )}
         </section>
       )}
       {error && (
