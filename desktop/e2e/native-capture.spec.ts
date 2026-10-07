@@ -138,6 +138,8 @@ async function deviceCaptureProbe(page: Page, constraints: unknown, freshRealm =
     async ({ constraints, freshRealm }) => {
       let frame: HTMLIFrameElement | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let exceptionType = DOMException;
+      let guard: { native: boolean; locked: boolean } | undefined;
       try {
         let capture = navigator.mediaDevices.getUserMedia;
         if (freshRealm) {
@@ -148,19 +150,34 @@ async function deviceCaptureProbe(page: Page, constraints: unknown, freshRealm =
             ?.navigator;
           if (!freshNavigator?.mediaDevices?.getUserMedia) return { outcome: 'unavailable' };
           capture = freshNavigator.mediaDevices.getUserMedia;
+          exceptionType = (frame.contentWindow as Window & { DOMException: typeof DOMException })
+            .DOMException;
+          const descriptor = Object.getOwnPropertyDescriptor(
+            Object.getPrototypeOf(freshNavigator.mediaDevices),
+            'getUserMedia',
+          );
+          guard = {
+            native: Function.prototype.toString.call(capture).includes('[native code]'),
+            locked:
+              descriptor?.configurable === false &&
+              descriptor?.writable === false &&
+              descriptor?.value === capture,
+          };
         }
         // Any unexpectedly opened tracks, including late results, are stopped immediately.
         const operation = capture.call(navigator.mediaDevices, constraints as MediaStreamConstraints).then(
           (stream) => {
             stream.getTracks().forEach((track) => track.stop());
-            return { outcome: 'captured' };
+            return { outcome: 'captured', guard };
           },
           (error: unknown) => ({
             outcome: 'denied',
             name:
-              error instanceof DOMException && error.name === 'NotAllowedError'
+              (error instanceof DOMException || error instanceof exceptionType) &&
+              error.name === 'NotAllowedError'
                 ? 'NotAllowedError'
                 : 'OtherError',
+            guard,
           }),
         );
         return await Promise.race([
@@ -235,7 +252,12 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
   let module: string | undefined;
   let player: ChildProcess | undefined;
   const diagnostics: (() => Promise<unknown>)[] = [];
-  const deviceProbes: { kind: string; outcome: string; name?: string }[] = [];
+  const deviceProbes: {
+    kind: string;
+    outcome: string;
+    name?: string;
+    guard?: { native: boolean; locked: boolean };
+  }[] = [];
   try {
     oldSink = await pulse('get-default-sink');
     module = await pulse('load-module', 'module-null-sink', `sink_name=${sink}`, 'channels=2', 'rate=48000');
@@ -371,11 +393,14 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     await publisher.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
     await expect(viewer.locator('video')).toHaveCount(0);
     await expect(viewer.locator('audio[data-source="screen"]')).toHaveCount(0);
-    for (const probe of deviceProbes)
+    for (const probe of deviceProbes) {
       expect(
         probe.outcome === 'unavailable' || (probe.outcome === 'denied' && probe.name === 'NotAllowedError'),
         probe.kind,
       ).toBe(true);
+      if (probe.kind.endsWith('-fresh-realm') && probe.outcome !== 'unavailable')
+        expect(probe.guard, probe.kind).toEqual({ native: false, locked: true });
+    }
   } catch (error) {
     const facts = await Promise.all(diagnostics.map((read) => read().catch(() => ({ closed: true }))));
     console.info('GUL_NATIVE_CAPTURE_DIAGNOSTICS', JSON.stringify({ facts, deviceProbes }));
