@@ -3,9 +3,12 @@ import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { APP_ORIGIN } from '../shared/contracts.ts';
 
+export type WindowsAudioBridgeFailure =
+  'backlog' | 'invalid-consent' | 'client-message' | 'client-close' | 'socket-error';
+
 export class WindowsAudioBridge {
   private readonly valid: () => boolean;
-  private readonly onFailure: () => void;
+  private readonly onFailure: (reason: WindowsAudioBridgeFailure) => void;
   private readonly path: string;
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
@@ -15,7 +18,7 @@ export class WindowsAudioBridge {
   private closed = false;
   private failed = false;
   private port = 0;
-  constructor(nonce: string, valid: () => boolean, onFailure: () => void) {
+  constructor(nonce: string, valid: () => boolean, onFailure: (reason: WindowsAudioBridgeFailure) => void) {
     if (!/^[a-f0-9]{48}$/u.test(nonce)) throw new Error('GUL_AUDIO_BRIDGE');
     this.path = '/' + nonce;
     this.valid = valid;
@@ -61,15 +64,15 @@ export class WindowsAudioBridge {
           return;
         }
         this.client = client;
-        client.on('message', () => this.fail());
-        client.on('ping', () => this.fail());
-        client.on('pong', () => this.fail());
-        client.once('error', () => this.fail());
-        client.once('close', () => this.fail());
+        client.on('message', () => this.fail('client-message'));
+        client.on('ping', () => this.fail('client-message'));
+        client.on('pong', () => this.fail('client-message'));
+        client.once('error', () => this.fail('socket-error'));
+        client.once('close', () => this.fail('client-close'));
       });
     });
-    this.server.on('error', () => this.fail());
-    this.ws.on('error', () => this.fail());
+    this.server.on('error', () => this.fail('socket-error'));
+    this.ws.on('error', () => this.fail('socket-error'));
   }
   async listen(): Promise<string> {
     await new Promise<void>((resolve, reject) => {
@@ -90,16 +93,16 @@ export class WindowsAudioBridge {
   }
   send(frame: Buffer): void {
     if (this.closed || this.failed || !this.isValid()) {
-      this.fail();
+      this.fail('invalid-consent');
       return;
     }
     if (!this.client || this.client.readyState !== WebSocket.OPEN) return;
     if (this.client.bufferedAmount + frame.length > 46080) {
-      this.fail();
+      this.fail('backlog');
       return;
     }
     this.client.send(frame, { binary: true, compress: false }, (error) => {
-      if (error) this.fail();
+      if (error) this.fail('socket-error');
     });
   }
   async close(): Promise<void> {
@@ -119,10 +122,10 @@ export class WindowsAudioBridge {
       return false;
     }
   }
-  private fail(): void {
+  private fail(reason: WindowsAudioBridgeFailure): void {
     if (this.closed || this.failed) return;
     this.failed = true;
     this.client?.terminate();
-    this.onFailure();
+    this.onFailure(reason);
   }
 }
