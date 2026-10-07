@@ -15,6 +15,14 @@ spec.loader.exec_module(stand)
 
 
 class FixtureTests(unittest.TestCase):
+    def test_certificate_is_generated_as_the_host_user(self):
+        with patch.object(stand.os, 'getuid', return_value=1001), patch.object(stand.os, 'getgid', return_value=1002), patch.object(stand, 'command') as command:
+            stand.create_certificate('gul-reality-test-synthetic')
+            args = command.call_args.args
+            self.assertEqual(args[:6], ('docker', 'exec', '--user', '1001:1002', 'gul-reality-test-synthetic', 'openssl'))
+            self.assertIn('/work/tls.key', args)
+            self.assertIn('/work/ca.pem', args)
+
     def test_failed_command_redacts_all_diagnostics(self):
         result = subprocess.CompletedProcess(['docker'], 1, 'synthetic-private-token', 'synthetic-private-password')
         with patch.object(stand.subprocess, 'run', return_value=result):

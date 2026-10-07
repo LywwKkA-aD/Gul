@@ -35,6 +35,15 @@ def write(path, value):
     reality.base.write_private(path, value)
 
 
+def create_certificate(container):
+    # Bind-mounted private files must remain owned by the calling Linux user.
+    command('docker', 'exec', '--user', f'{os.getuid()}:{os.getgid()}', container,
+            'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
+            '-nodes', '-days', '2', '-subj', '/CN=Gul local fixture',
+            '-addext', 'subjectAltName=IP:127.0.0.1,DNS:camouflage.example.org',
+            '-keyout', '/work/tls.key', '-out', '/work/ca.pem')
+
+
 def fixture_sfu_config(node_ip, key, secret):
     config = reality.base.sfu_config(node_ip, key, secret)
     config['turn']['domain'] = '127.0.0.1'
@@ -100,10 +109,7 @@ def start(output, xray, broker, gateway_image):
             'joinPasswordSHA256': reality.hashlib.sha256(password.encode()).hexdigest(),
         }
         write(output / 'broker.json', json.dumps(broker_config))
-        command('docker', 'exec', names[1], 'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
-                '-nodes', '-days', '2', '-subj', '/CN=Gul local fixture',
-                '-addext', 'subjectAltName=IP:127.0.0.1,DNS:camouflage.example.org',
-                '-keyout', '/work/tls.key', '-out', '/work/ca.pem')
+        create_certificate(names[1])
         os.chmod(output / 'tls.key', 0o600)
         os.chmod(output / 'ca.pem', 0o600)
         command('docker', 'exec', names[1], 'sh', '-c',
