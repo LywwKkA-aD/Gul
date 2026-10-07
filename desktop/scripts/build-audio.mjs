@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { buildWindowsAudio } from './build-windows-audio.mjs';
 
 export function audioCompileArguments(source, output, pulseFlags) {
   return [
@@ -55,11 +56,11 @@ export async function buildLinuxAudio() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const output = await buildLinuxAudio();
+    const output = process.platform === 'win32' ? await buildWindowsAudio() : await buildLinuxAudio();
     process.stdout.write(
       output
         ? 'Native audio helper built and policy tests passed.\n'
-        : 'Native audio helper is built on Linux only.\n',
+        : 'Native audio helpers are built on Windows or Linux only.\n',
     );
   } catch {
     process.stderr.write('Unable to build the native audio helper.\n');
