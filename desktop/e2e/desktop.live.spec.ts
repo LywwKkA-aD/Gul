@@ -226,6 +226,14 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
       await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
       await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
       await selectFixtureMicrophone(page, i);
+      // Transport/VAD calibration uses a non-speech sine; neural speech quality
+      // with the default noise settings is verified in voice-noise.live.spec.ts.
+      await page.getByRole('button', { name: 'Настройки', exact: true }).click();
+      const suppression = page.getByRole('checkbox', { name: 'Шумоподавление', exact: true });
+      await suppression.uncheck();
+      await expect(suppression).not.toBeChecked();
+      await expect(suppression).toBeEnabled();
+      await page.keyboard.press('Escape');
     }
     const [a, b] = pages;
     await expect.poll(() => audible(b, 'voice'), { timeout: 15_000 }).toBeGreaterThan(0.005);

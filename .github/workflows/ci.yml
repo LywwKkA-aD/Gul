@@ -122,9 +122,12 @@ jobs:
         env:
           GUL_PACKAGED_APP_PATH: ${{ github.workspace }}/desktop/artifacts/${{ matrix.executable }}
         run: npm run test:integration -- e2e/packaged.spec.ts
-      - name: Test native audio transport and capture picker components
+      - name: Test capture picker component
         if: runner.os != 'Linux'
-        run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts
+        run: npm run test:integration -- e2e/capture-picker-ui.spec.ts
+      - name: Test Windows screen audio transport
+        if: runner.os == 'Windows'
+        run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts
       - name: Collect installers and hashes
         run: node scripts/release-assets.mjs --collect
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
