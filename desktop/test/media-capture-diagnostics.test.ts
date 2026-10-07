@@ -20,6 +20,10 @@ test('capture diagnostics identify the failed consent boundary without recording
     audioRequested: true,
     userGesture: true,
   });
+  assert.deepEqual(
+    captureRequestFacts({ ...request, securityOrigin: 'gul://app/' }, 'gul://app/index.html', true, true),
+    accepted,
+  );
   const denied = captureRequestFacts(
     { ...request, securityOrigin: 'https://private.example/?password=secret', userGesture: false },
     'https://private.example/?token=secret',

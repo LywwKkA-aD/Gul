@@ -4,7 +4,8 @@ import {
   appAsset,
   appPage,
   captureAllowed,
-  captureAudio,
+  displayMediaPreflight,
+  appOrigin,
   mediaPermission,
   allowedNetwork,
   contentSecurityPolicy,
@@ -35,6 +36,68 @@ test('only the registered app document is trusted; subframes and lookalike URLs 
     assert.equal(captureAllowed({ ...request, ...change }, 'gul://app/index.html', true), false);
   assert.equal(captureAllowed(request, 'gul://app/index.html', false), false);
   assert.equal(captureAllowed(request, 'https://evil.example', true), false);
+});
+
+test('serialized app origins accept the bare origin and its canonical root URL only', () => {
+  for (const origin of ['gul://app', 'gul://app/']) {
+    assert.equal(appOrigin(origin), true);
+    assert.equal(
+      captureAllowed(
+        { securityOrigin: origin, videoRequested: true, userGesture: true },
+        'gul://app/index.html',
+        true,
+      ),
+      true,
+    );
+  }
+  for (const origin of [
+    'gul://app/index.html',
+    'gul://app?token=secret',
+    'gul://app/#fragment',
+    'gul://app:443/',
+    'gul://user@app/',
+    'gul://app.evil/',
+    'https://app/',
+    undefined,
+  ])
+    assert.equal(appOrigin(origin), false);
+});
+
+test('Electron display preflight requires explicit empty device types, the owned app frame and an active session', () => {
+  const details = {
+    securityOrigin: 'gul://app/',
+    requestingUrl: 'gul://app/index.html',
+    isMainFrame: true,
+    mediaTypes: [] as readonly string[],
+  };
+  assert.equal(displayMediaPreflight('media', details, true, true, true), true);
+  assert.equal(
+    displayMediaPreflight('media', { ...details, securityOrigin: 'gul://app' }, true, true, true),
+    true,
+  );
+  for (const change of [
+    { mediaTypes: undefined },
+    { mediaTypes: ['audio'] },
+    { mediaTypes: ['video'] },
+    { mediaTypes: ['audio', 'video'] },
+    { mediaType: 'video' },
+    { mediaType: 'audio' },
+    { securityOrigin: undefined },
+    { securityOrigin: 'gul://app/index.html' },
+    { securityOrigin: 'https://evil.example/' },
+    { requestingUrl: 'https://evil.example/' },
+    { requestingUrl: undefined },
+    { isMainFrame: false },
+  ])
+    assert.equal(displayMediaPreflight('media', { ...details, ...change }, true, true, true), false);
+  assert.equal(displayMediaPreflight('media', details, false, true, true), false);
+  assert.equal(displayMediaPreflight('media', details, true, false, true), false);
+  assert.equal(displayMediaPreflight('media', details, true, true, false), false);
+  assert.equal(displayMediaPreflight('display-capture', details, true, true, true), false);
+  assert.equal(
+    displayMediaPreflight('media', { ...details, mediaTypes: 'empty' } as never, true, true, true),
+    false,
+  );
 });
 
 test('asset serving never resolves traversal, foreign origins, or unbundled resources', () => {
@@ -96,14 +159,6 @@ test('microphone permissions are restricted to app main frame and audio only', (
     mediaPermission('geolocation', { requestingUrl: 'gul://app/index.html', isMainFrame: true }, true),
     false,
   );
-});
-
-test('screen audio needs Windows support, an audio request, and explicit source-picker consent', () => {
-  assert.equal(captureAudio('win32', true, true), 'loopback');
-  assert.equal(captureAudio('win32', true, false), undefined);
-  assert.equal(captureAudio('win32', false, true), undefined);
-  assert.equal(captureAudio('linux', true, true), undefined);
-  assert.equal(captureAudio('darwin', true, true), undefined);
 });
 
 test('renderer networking is limited to session capability paths on the owned gateway', () => {

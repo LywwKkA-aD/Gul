@@ -38,6 +38,10 @@ export function appPage(value: unknown): boolean {
   const url = appURL(value);
   return Boolean(url && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === ''));
 }
+/** Electron uses both Origin.serialize() and GURL.spec() for the same registered origin. */
+export function appOrigin(value: unknown): boolean {
+  return value === APP_ORIGIN || value === `${APP_ORIGIN}/`;
+}
 export function appAsset(value: unknown): string | null {
   const url = appURL(value);
   if (!url) return null;
@@ -62,6 +66,7 @@ export interface PermissionDetails {
   readonly isMainFrame: boolean;
   readonly mediaType?: string;
   readonly mediaTypes?: readonly string[];
+  readonly securityOrigin?: string;
 }
 export function mediaPermission(
   permission: string,
@@ -72,6 +77,31 @@ export function mediaPermission(
     return false;
   return (
     details.mediaType === 'audio' || (details.mediaTypes?.length === 1 && details.mediaTypes[0] === 'audio')
+  );
+}
+/**
+ * Electron44 dispatches getDisplayMedia as `media` with no DEVICE_* types.
+ * This is preflight only: the display handler still requires gesture, epoch and source consent.
+ * The all-frame device-only getUserMedia guard blocks the legacy desktop capture path.
+ */
+export function displayMediaPreflight(
+  permission: string,
+  details: PermissionDetails,
+  ownedContents: boolean,
+  activeSession: boolean,
+  guardReady: boolean,
+): boolean {
+  return (
+    ownedContents &&
+    activeSession &&
+    guardReady &&
+    permission === 'media' &&
+    details.isMainFrame &&
+    appPage(details.requestingUrl) &&
+    appOrigin(details.securityOrigin) &&
+    details.mediaType === undefined &&
+    Array.isArray(details.mediaTypes) &&
+    details.mediaTypes.length === 0
   );
 }
 interface CaptureRequest {
@@ -87,13 +117,10 @@ export function captureAllowed(
   return (
     sameMainFrame &&
     appPage(frameURL) &&
-    request.securityOrigin === APP_ORIGIN &&
+    appOrigin(request.securityOrigin) &&
     request.videoRequested &&
     request.userGesture
   );
-}
-export function captureAudio(platform: string, requested: boolean, consent: boolean): 'loopback' | undefined {
-  return platform === 'win32' && requested && consent ? 'loopback' : undefined;
 }
 const paths = new Set(['/rtc', '/rtc/v1', '/rtc/validate', '/rtc/v1/validate']);
 export function allowedNetwork(value: string, endpoints: readonly string[]): boolean {

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { publicError } from './errors.ts';
+import { installDeviceAudioGuard } from './media-guard.ts';
 import type {
   AudioState,
   BrokerState,
@@ -12,6 +13,9 @@ import type {
   CaptureCapabilities,
   AppInfo,
 } from '../shared/contracts.ts';
+
+if (contextBridge.executeInMainWorld({ func: installDeviceAudioGuard }) !== true)
+  throw new Error('GUL_MEDIA_GUARD_UNAVAILABLE');
 
 async function invoke<T>(channel: string, value?: unknown): Promise<T> {
   try {

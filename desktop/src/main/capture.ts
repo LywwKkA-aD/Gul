@@ -40,6 +40,7 @@ export function installDisplayCapture(
                 request.frame === window.webContents.mainFrame,
                 epoch !== null && authority.mediaEpoch() === epoch,
               ),
+              guardReady: window.webContents.debugger.isAttached(),
               ...extra,
             }),
           );
@@ -51,6 +52,7 @@ export function installDisplayCapture(
         epoch !== null &&
         authority.mediaEpoch() === epoch &&
         !window.isDestroyed() &&
+        window.webContents.debugger.isAttached() &&
         captureAllowed(request, request.frame?.url, request.frame === window.webContents.mainFrame);
       report('request');
       if (!valid()) {

@@ -1,5 +1,4 @@
-import { APP_ORIGIN } from '../shared/contracts.ts';
-import { appPage } from './security.ts';
+import { appOrigin as isAppOrigin, appPage } from './security.ts';
 
 interface CaptureRequest {
   readonly securityOrigin: string;
@@ -19,7 +18,7 @@ export function captureRequestFacts(
     activeSession,
     mainFrame,
     appFrame: appPage(frameURL),
-    appOrigin: request.securityOrigin === APP_ORIGIN,
+    appOrigin: isAppOrigin(request.securityOrigin),
     videoRequested: request.videoRequested,
     audioRequested: request.audioRequested,
     userGesture: request.userGesture,

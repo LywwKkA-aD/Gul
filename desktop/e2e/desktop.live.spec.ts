@@ -24,6 +24,30 @@ async function synthetic(page: Page) {
       }
       return result;
     } as AudioNode['connect'];
+    // Keep native getUserMedia permissions; inject a calibration tone at the captured device's audio graph.
+    const sourceFor = AudioContext.prototype.createMediaStreamSource;
+    AudioContext.prototype.createMediaStreamSource = function (stream: MediaStream) {
+      const input = stream.getAudioTracks()[0];
+      if (!input || !input.label.includes('Fake') || !input.getSettings().deviceId)
+        return Reflect.apply(sourceFor, this, [stream]) as MediaStreamAudioSourceNode;
+      const destination = this.createMediaStreamDestination();
+      const oscillator = this.createOscillator();
+      const gain = this.createGain();
+      oscillator.frequency.value = 330;
+      gain.gain.value = 0.1;
+      oscillator.connect(gain).connect(destination);
+      oscillator.start();
+      const source = Reflect.apply(sourceFor, this, [destination.stream]) as MediaStreamAudioSourceNode;
+      const disconnect = source.disconnect.bind(source);
+      source.disconnect = () => {
+        disconnect();
+        oscillator.stop();
+        oscillator.disconnect();
+        gain.disconnect();
+        destination.stream.getTracks().forEach((track) => track.stop());
+      };
+      return source;
+    };
     const Original = window.RTCPeerConnection;
     Object.defineProperty(window, '__gulTestPeers', { value: peers });
     Object.defineProperty(window, '__gulTestCaptures', { value: captures });
@@ -34,28 +58,19 @@ async function synthetic(page: Page) {
         peers.push(this);
       }
     };
-    const audio = (stereo: boolean) => {
+    const audio = () => {
       const context = new AudioContext({ sampleRate: 48000 });
       const destination = context.createMediaStreamDestination();
-      if (stereo) {
-        const merger = context.createChannelMerger(2);
-        [440, 880].forEach((frequency, channel) => {
-          const oscillator = context.createOscillator();
-          const gain = context.createGain();
-          oscillator.frequency.value = frequency;
-          gain.gain.value = 0.1;
-          oscillator.connect(gain).connect(merger, 0, channel);
-          oscillator.start();
-        });
-        merger.connect(destination);
-      } else {
+      const merger = context.createChannelMerger(2);
+      [440, 880].forEach((frequency, channel) => {
         const oscillator = context.createOscillator();
         const gain = context.createGain();
-        oscillator.frequency.value = 330;
+        oscillator.frequency.value = frequency;
         gain.gain.value = 0.1;
-        oscillator.connect(gain).connect(destination);
+        oscillator.connect(gain).connect(merger, 0, channel);
         oscillator.start();
-      }
+      });
+      merger.connect(destination);
       void context.resume();
       const track = destination.stream.getAudioTracks()[0];
       const stop = track.stop.bind(track);
@@ -65,7 +80,6 @@ async function synthetic(page: Page) {
       };
       return destination.stream;
     };
-    navigator.mediaDevices.getUserMedia = async () => audio(false);
     navigator.mediaDevices.getDisplayMedia = async () => {
       const canvas = document.createElement('canvas');
       canvas.width = 1280;
@@ -79,7 +93,7 @@ async function synthetic(page: Page) {
         context.fillRect((frame * 10) % 1200, 200, 80, 80);
       }, 33);
       const stream = canvas.captureStream(30);
-      stream.addTrack(audio(true).getAudioTracks()[0]);
+      stream.addTrack(audio().getAudioTracks()[0]);
       const track = stream.getVideoTracks()[0];
       const stop = track.stop.bind(track);
       track.stop = () => {
@@ -196,7 +210,12 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     for (let i = 0; i < 2; i++) {
       const app = await electron.launch({
         executablePath: require('electron'),
-        args: ['.', '--gul-electron-test', `--user-data-dir=${join(dataRoot, String(i))}`],
+        args: [
+          '.',
+          '--gul-electron-test',
+          '--use-fake-device-for-media-stream',
+          `--user-data-dir=${join(dataRoot, String(i))}`,
+        ],
         env: { ...process.env, NODE_ENV: 'test', ...(fixtureCA ? { GUL_ELECTRON_TEST_CA: fixtureCA } : {}) },
       });
       apps.push(app);
@@ -385,7 +404,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     const restored = await electron.launch({
       executablePath: require('electron'),
       args: ['.', '--gul-electron-test', `--user-data-dir=${join(dataRoot, '0')}`],
-      env: { ...process.env, NODE_ENV: 'test', GUL_ELECTRON_TEST_CA: join(directory, 'ca.pem') },
+      env: { ...process.env, NODE_ENV: 'test', ...(fixtureCA ? { GUL_ELECTRON_TEST_CA: fixtureCA } : {}) },
     });
     apps.push(restored);
     const restoredPage = await restored.firstWindow();

@@ -11,6 +11,7 @@ import { installDisplayCapture } from './capture.ts';
 import { installIPC } from './ipc.ts';
 import { AppServices } from './app-services.ts';
 import { TrayLifecycle } from './tray.ts';
+import { installMediaGuard } from './media-guard.ts';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -137,10 +138,18 @@ async function createWindow(): Promise<void> {
   ownWindow.on('close', (event) => {
     lifecycle.handleClose(event);
   });
-  ownWindow.once('ready-to-show', () => {
-    ownWindow.show();
+  // Initialize the renderer target before attaching the private debugger. This blank
+  // page cannot use Gul IPC or acquire media; the app is loaded only after registration.
+  await ownWindow.loadURL('about:blank');
+  await installMediaGuard(ownWindow.webContents.debugger, () => {
+    void authority.disconnect();
+    // A detached guard must also release any capture that was already running.
+    setImmediate(() => {
+      if (!ownWindow.isDestroyed()) ownWindow.destroy();
+    });
   });
   await ownWindow.loadURL(`${APP_ORIGIN}/index.html`);
+  if (!ownWindow.isDestroyed()) ownWindow.show();
 }
 
 void app

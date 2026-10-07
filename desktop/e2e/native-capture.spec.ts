@@ -107,11 +107,16 @@ async function captureDiagnostics(app: ElectronApplication, page: Page) {
   });
   await app.evaluate(({ BrowserWindow }) => {
     const stages: unknown[] = [];
+    const permissions: unknown[] = [];
     Object.defineProperty(globalThis, '__gulCaptureDiagnostics', { value: stages });
+    Object.defineProperty(globalThis, '__gulPermissionDiagnostics', { value: permissions });
     const contents = BrowserWindow.getAllWindows()[0]
       .webContents as unknown as import('node:events').EventEmitter;
     contents.on('gul-capture-diagnostic', (facts: unknown) => {
       stages.splice(0, Math.max(0, stages.length - 31), facts);
+    });
+    contents.on('gul-permission-diagnostic', (facts: unknown) => {
+      permissions.splice(0, Math.max(0, permissions.length - 31), facts);
     });
   });
   return async () => ({
@@ -119,10 +124,58 @@ async function captureDiagnostics(app: ElectronApplication, page: Page) {
       () => (globalThis as unknown as { __gulCaptureDiagnostics: unknown[] }).__gulCaptureDiagnostics,
     ),
     renderer,
+    permissions: await app.evaluate(
+      () => (globalThis as unknown as { __gulPermissionDiagnostics: unknown[] }).__gulPermissionDiagnostics,
+    ),
     permissionAlert: await page
       .getByText('Не удалось начать демонстрацию. Проверьте разрешение на захват экрана.', { exact: true })
       .isVisible(),
   });
+}
+
+async function deviceCaptureProbe(page: Page, constraints: unknown, freshRealm = false) {
+  return page.evaluate(
+    async ({ constraints, freshRealm }) => {
+      let frame: HTMLIFrameElement | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        let capture = navigator.mediaDevices.getUserMedia;
+        if (freshRealm) {
+          frame = document.createElement('iframe');
+          frame.hidden = true;
+          document.body.append(frame);
+          const freshNavigator = (frame.contentWindow as (Window & { navigator: Navigator }) | null)
+            ?.navigator;
+          if (!freshNavigator?.mediaDevices?.getUserMedia) return { outcome: 'unavailable' };
+          capture = freshNavigator.mediaDevices.getUserMedia;
+        }
+        // Any unexpectedly opened tracks, including late results, are stopped immediately.
+        const operation = capture.call(navigator.mediaDevices, constraints as MediaStreamConstraints).then(
+          (stream) => {
+            stream.getTracks().forEach((track) => track.stop());
+            return { outcome: 'captured' };
+          },
+          (error: unknown) => ({
+            outcome: 'denied',
+            name:
+              error instanceof DOMException && error.name === 'NotAllowedError'
+                ? 'NotAllowedError'
+                : 'OtherError',
+          }),
+        );
+        return await Promise.race([
+          operation,
+          new Promise<{ outcome: string }>((resolve) => {
+            timer = setTimeout(() => resolve({ outcome: 'pending' }), 5000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        frame?.remove();
+      }
+    },
+    { constraints, freshRealm },
+  );
 }
 
 async function selectedRelay(page: Page): Promise<boolean> {
@@ -182,6 +235,7 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
   let module: string | undefined;
   let player: ChildProcess | undefined;
   const diagnostics: (() => Promise<unknown>)[] = [];
+  const deviceProbes: { kind: string; outcome: string; name?: string }[] = [];
   try {
     oldSink = await pulse('get-default-sink');
     module = await pulse('load-module', 'module-null-sink', `sink_name=${sink}`, 'channels=2', 'rate=48000');
@@ -213,6 +267,30 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
       await page.getByRole('button', { name: 'Выключить звук', exact: true }).click();
     }
     const [publisher, viewer] = pages;
+    const desktopId = await apps[0].evaluate(
+      async ({ desktopCapturer }) =>
+        (await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } }))[0]
+          ?.id,
+    );
+    expect(desktopId).toBeTruthy();
+    for (const [kind, constraints] of [
+      ['camera', { audio: false, video: true }],
+      [
+        'legacy-desktop-video',
+        {
+          audio: false,
+          video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: desktopId } },
+        },
+      ],
+      ['legacy-desktop-audio', { audio: { mandatory: { chromeMediaSource: 'desktop' } }, video: false }],
+    ] as const) {
+      deviceProbes.push({ kind, ...(await deviceCaptureProbe(publisher, constraints)) });
+      if (kind !== 'camera')
+        deviceProbes.push({
+          kind: `${kind}-fresh-realm`,
+          ...(await deviceCaptureProbe(publisher, constraints, true)),
+        });
+    }
     const capabilities = await publisher.evaluate(() => window.gul.captureCapabilities());
     expect(capabilities).toMatchObject({
       platform: 'linux',
@@ -225,6 +303,17 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     await apps[0].evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await publisher.bringToFront();
     await publisher.getByRole('button', { name: 'Показать экран', exact: true }).click();
+    await expect
+      .poll(
+        () =>
+          apps[0].evaluate(() =>
+            (
+              globalThis as unknown as { __gulCaptureDiagnostics: { stage: string }[] }
+            ).__gulCaptureDiagnostics.some((facts) => facts.stage === 'granted'),
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
     const watch = viewer.getByRole('button', { name: /native-publisher.*Смотреть экран/ });
     await expect(watch).toBeVisible({ timeout: 20_000 });
     await watch.click();
@@ -282,9 +371,14 @@ test('native Linux desktop and PulseAudio stereo loopback reach another Electron
     await publisher.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
     await expect(viewer.locator('video')).toHaveCount(0);
     await expect(viewer.locator('audio[data-source="screen"]')).toHaveCount(0);
+    for (const probe of deviceProbes)
+      expect(
+        probe.outcome === 'unavailable' || (probe.outcome === 'denied' && probe.name === 'NotAllowedError'),
+        probe.kind,
+      ).toBe(true);
   } catch (error) {
     const facts = await Promise.all(diagnostics.map((read) => read().catch(() => ({ closed: true }))));
-    console.info('GUL_NATIVE_CAPTURE_DIAGNOSTICS', JSON.stringify(facts));
+    console.info('GUL_NATIVE_CAPTURE_DIAGNOSTICS', JSON.stringify({ facts, deviceProbes }));
     throw error;
   } finally {
     player?.kill();
