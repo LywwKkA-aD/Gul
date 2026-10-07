@@ -134,8 +134,8 @@ go -C server vet ./...
 python3 -m unittest discover -s deploy/livekit -p 'test_*.py'
 ```
 
-Локально: 339 unit tests, на macOS 337 passed/2 platform skips; покрытие
-TS строк/ветвей/функций — 89.57%/90.18%/88.67%. Unit runner требует минимум
+Локально: 345 unit tests, на macOS 343 passed/2 platform skips; покрытие
+TS строк/ветвей/функций — 89.62%/90.41%/88.70%. Unit runner требует минимум
 80% по каждой метрике; дополнительно
 проверяются реальный Electron, REALITY/TURN и native capture. Windows PTT helper прошёл
 регистрацию/освобождение F8 hook, Linux portal — семь DBus сценариев. Физические

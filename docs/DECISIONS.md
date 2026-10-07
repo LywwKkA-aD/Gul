@@ -148,8 +148,8 @@ password/broker bearer; media JWT привязаны к роли, комнате
 
 ## Проверка решений
 
-Локально 339 unit tests: macOS 337 passed/2 platform skips; TS coverage
-89.57% строк, 90.18% ветвей, 88.67% функций. Gate — минимум 80% каждой метрики. Все четыре packaged CI цели прошли smoke с sandbox,
+Локально 345 unit tests: macOS 343 passed/2 platform skips; TS coverage
+89.62% строк, 90.41% ветвей, 88.70% функций. Gate — минимум 80% каждой метрики. Все четыре packaged CI цели прошли smoke с sandbox,
 Linux DEB установлен.
 Windows helper прошёл регистрацию/освобождение F8 hook, Linux portal —
 семь DBus сценариев. Это не доказательство физического hold PTT.
