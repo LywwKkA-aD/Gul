@@ -108,12 +108,35 @@ export async function buildWindowsAudio() {
       options,
     );
     execFileSync(policy, [], options);
+    const quality = join(temporary, 'quality-test.exe');
+    execFileSync(
+      compiler,
+      windowsAudioCompileArguments(join(source, 'quality.test.cpp'), quality, join(temporary, 'quality.obj')),
+      options,
+    );
+    execFileSync(quality, [], options);
     await mkdir(dirname(output), { recursive: true });
     execFileSync(
       compiler,
       windowsAudioCompileArguments(join(source, 'windows.cpp'), output, join(temporary, 'audio.obj')),
       options,
     );
+    const integration = join(temporary, 'audio-integration.exe');
+    execFileSync(
+      compiler,
+      windowsAudioCompileArguments(
+        join(source, 'integration.cpp'),
+        integration,
+        join(temporary, 'integration.obj'),
+      ),
+      options,
+    );
+    try {
+      execFileSync(integration, [output], { ...options, timeout: 20000 });
+    } catch (error) {
+      if (error.status !== 77) throw error;
+      process.stdout.write('Native Windows PCM proof skipped: runner has no render endpoint.\n');
+    }
     return output;
   } finally {
     await rm(temporary, { recursive: true, force: true });
