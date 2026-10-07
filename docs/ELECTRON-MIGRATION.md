@@ -1,6 +1,6 @@
 # Миграция Gul на Electron
 
-**0.8.0-alpha.1:** миграция исходников завершена. `desktop/` — единственный
+**0.8.0-alpha.2:** миграция исходников завершена. `desktop/` — единственный
 клиент на Electron/TypeScript/React/LiveKit JS. `server/` — самостоятельный
 Go broker. Legacy client/services/frontend, native Go DSP, старые lab/deploy
 и сборочные файлы удалены. Сохранены иконки, нужные attribution и
@@ -36,8 +36,8 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- 186 unit/security/lifecycle tests: на macOS 184 passed/2 platform skips;
-  TS line coverage — 93.10%.
+- 248 unit/security/lifecycle tests: на macOS 246 passed/2 platform skips;
+  TS line coverage — 90.50%.
 - Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
   всего module — 87.3%.
 - Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,

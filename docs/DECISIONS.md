@@ -55,11 +55,36 @@ backend или пользовательского разрешения. Толь
 либо incoming audio отключают во время демонстрации. Наушники loopback
 не устраняют. Windows 11/macOS own-audio exclusion остаётся capability request.
 
+## 2026-10-07 — Alpha.2: Linux audio без Gul и исправления демонстрации
+
+Предыдущее ограничение Linux заменено отдельным libpulse helper: он копирует
+playback потоки других приложений в приватный stereo source. Gul и его дочерние
+процессы исключаются по UID/PID/start time и дереву процессов; неизвестные
+идентичности исключены. Default sink/source и маршруты потоков не меняются.
+Helper запускается main только после разрешённого display capture текущей эпохи,
+а renderer открывает ровно сгенерированный audio device. PCM не проходит IPC.
+Общий output mix не используется как fallback; остановка убирает приватные устройства.
+Windows 10 остаётся с ограничением общего output mix.
+
+Wayland portal уже выдаёт выбор источника: второй диалог не показывается.
+В прочих picker пустые названия получают понятные подписи. LiveKit JS 2.22.3
+пропускает отсутствующий VP8 fmtp при нормализации BUNDLE. Узкий instance-local
+hook исправляет только bitrate hint пустых publisher transceivers; параметры
+реальных codecs, remote SDP и media transport не меняются.
+
+Собственная индикация речи использует существующий AudioWorklet, без ожидания
+события активного говорящего с сервера. UI обновляется на границах речи;
+20 Hz meter не перерисовывает всё приложение. Dialog scroll находится во
+внутреннем контейнере; кнопка закрытия остаётся вне скролла.
+
 ## 2026-10-07 — Локальные настройки и безопасность
 
 Адрес/ник сохраняются после успешного входа. Password encryption через
 safeStorage разрешена только по явному согласию и защищённому OS backend;
-при недоступном keyring пароль не сохраняется. Renderer не получает saved
+при недоступном keyring пароль не сохраняется. Alpha.2 сохраняет consent
+отдельно от cipher, восстанавливает его и показывает статус после запуска;
+ошибки encrypt/write/decrypt не скрываются и не заменяют защищённый cipher
+открытым паролем. Renderer не получает saved
 password/broker bearer; media JWT привязаны к роли, комнате и эпохе.
 
 Диагностический ZIP содержит только разрешённые события/метрики и версии;
@@ -69,8 +94,8 @@ password/broker bearer; media JWT привязаны к роли, комнате
 
 ## Проверка решений
 
-Набор — 186 unit tests: macOS 184 passed/2 platform skips. TS line coverage —
-93.10%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
+Набор — 248 unit tests: macOS 246 passed/2 platform skips. TS line coverage —
+90.50%, server module — 87.3%. Все четыре packaged CI цели прошли smoke с sandbox,
 Linux DEB установлен.
 Windows helper прошёл регистрацию/освобождение F8 hook, Linux portal —
 семь DBus сценариев. Это не доказательство физического hold PTT.

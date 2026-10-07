@@ -1,6 +1,6 @@
 # Gul desktop
 
-Единственный клиент Gul **0.8.0-alpha.1**: Electron, TypeScript, React и
+Единственный клиент Gul **0.8.0-alpha.2**: Electron, TypeScript, React и
 LiveKit JS. Chromium владеет голосом, экраном и playback; официальный
 Xray v26.3.27 поставляется отдельным executable. Go клиент отсутствует;
 серверный broker находится в `../server/`.
@@ -23,7 +23,13 @@ npm run dev
 Xray скачивается по закреплённому archive SHA-256; executable не хранится
 в Git. `npm run pack` создаёт распакованное приложение; `npm run dist -- --publish never`
 собирает установщик текущей платформы. Native Windows hold helper собирается
-`node scripts/build-ptt.mjs` на Windows x64 с MSVC.
+`node scripts/build-ptt.mjs` на Windows x64 с MSVC. На Linux установите
+`g++ pkg-config libglib2.0-dev libpulse-dev` и перед запуском/упаковкой выполните
+`npm run build:ptt` и `npm run build:audio`. Последний помощник захватывает звуки
+приложений отдельно от Gul через локальный PulseAudio/PipeWire socket.
+Проверка исключения/сохранения устройств/динамических потоков/очистки:
+`python3 native/audio-capture/integration.py --helper resources/audio-capture/linux-x64/gul-audio`
+в отдельном аудиостенде.
 
 ## Проверки
 
@@ -35,8 +41,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Набор — 186 unit tests, на macOS 184 passed/2 platform skips; TS line coverage —
-93.10%. Installed packaged smoke
+Набор — 248 unit tests, на macOS 246 passed/2 platform skips; TS line coverage —
+90.50%. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
