@@ -130,7 +130,17 @@ time.sleep(.5)
   ]);
 }
 
-test('managed REALITY authority revokes actual SFU signaling and refreshed tokens and persists channel permissions', async () => {
+async function pauseSFU(container: string, paused: boolean): Promise<void> {
+  if (!/^gul-reality-test-[a-f0-9]{8}-sfu$/u.test(container))
+    throw new Error('Only the isolated fixture SFU may be paused.');
+  await new Promise<void>((finish, fail) => {
+    execFile('docker', [paused ? 'pause' : 'unpause', container], { timeout: 10_000 }, (error) =>
+      error ? fail(new Error('Isolated SFU pause failed.')) : finish(),
+    );
+  });
+}
+
+async function managedRevocation(pendingCleanup: boolean): Promise<void> {
   const directory = resolve(fixture!);
   const address = (await readFile(join(directory, 'address'), 'utf8')).trim();
   const password = (await readFile(join(directory, 'join-password'), 'utf8')).trim();
@@ -161,6 +171,7 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
   const privateName = 'Managed private test ' + suffix;
   const renamedName = 'Managed renamed test ' + suffix;
   const replacementName = 'Managed replacement test ' + suffix;
+  let phase = 'setup';
   const heartbeat = setInterval(() => {
     void owner.state().catch(() => null);
     void member.state().catch(() => null);
@@ -223,6 +234,7 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
     );
     expect(memberSession.member?.role).toBe('member');
     const baseline = await owner.state();
+    phase = 'create-channel';
     const created = await owner.createChannel({
       ...ctx,
       name: privateName,
@@ -248,9 +260,11 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
     const screenFlow = await signal(screenGrant);
     sockets.push(screenFlow.socket);
     await expect.poll(() => participants(names[1], privateChannel.id)).toBe(2);
+    phase = 'delete-occupied-channel';
     await expect(
       owner.deleteChannel({ ...ctx, channelId: privateChannel.id, version: privateChannel.version! }),
     ).rejects.toThrow('GUL_CHANNEL_BUSY');
+    phase = 'rename-channel';
     const renamed = await owner.updateChannel({
       ...ctx,
       channelId: privateChannel.id,
@@ -273,23 +287,51 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
         allowedMemberIds: [],
       }),
     ).rejects.toThrow('GUL_CATALOG_CONFLICT');
-    const revoked = await owner.updateChannel({
-      ...ctx,
-      channelId: next.id,
-      version: next.version!,
-      name: next.name,
-      access: 'restricted',
-      allowedMemberIds: [],
-    });
-    await expect.poll(() => voiceFlow.socket.readyState).toBe(WebSocket.CLOSED);
-    await expect.poll(() => screenFlow.socket.readyState).toBe(WebSocket.CLOSED);
-    await expect.poll(() => participants(names[1], next.id)).toBe(0);
+    phase = 'revoke-access';
+    let revoked: BrokerState | undefined;
+    let pending = false;
+    if (pendingCleanup) await pauseSFU(names[0], true);
+    try {
+      revoked = await owner.updateChannel({
+        ...ctx,
+        channelId: next.id,
+        version: next.version!,
+        name: next.name,
+        access: 'restricted',
+        allowedMemberIds: [],
+      });
+    } catch (error) {
+      // This response commits the ACL and denies admission, but does not
+      // acknowledge completed SFU cleanup. Never repeat the versioned update.
+      if (!(error instanceof Error) || error.message !== 'GUL_CLEANUP_PENDING') throw error;
+      pending = true;
+    } finally {
+      if (pendingCleanup) await pauseSFU(names[0], false);
+    }
+    if (pendingCleanup) expect(pending).toBe(true);
+    phase = 'verify-revocation';
+    const policy = await owner.channelPermissions({ ...ctx, channelId: next.id });
+    expect(policy.version).toBe(next.version! + 1);
+    expect(policy.allowedMemberIds.length).toBe(0);
+    expect(await validation(replay, privateSession.grant.token)).toBe(403);
+    expect(await validation(replay, screenGrant.token)).toBe(403);
     expect(await validation(replay, voiceFlow.refreshed)).toBe(403);
     expect(await validation(replay, screenFlow.refreshed)).toBe(403);
-    const policy = await owner.channelPermissions({ ...ctx, channelId: next.id });
-    expect(policy.allowedMemberIds.length).toBe(0);
-    const finalVersion = channel(revoked, next.name).version!;
+    await expect
+      .poll(
+        async () =>
+          (await participants(names[1], next.id)) === 0 &&
+          voiceFlow.socket.readyState === WebSocket.CLOSED &&
+          screenFlow.socket.readyState === WebSocket.CLOSED,
+        { timeout: 15_000, intervals: [100, 250, 500] },
+      )
+      .toBe(true);
+    const confirmed = revoked ?? (await owner.state());
+    expect(confirmed).not.toBeNull();
+    const finalVersion = channel(confirmed!, next.name).version!;
+    expect(finalVersion).toBe(policy.version);
 
+    phase = 'restart-broker';
     await member.disconnect();
     await owner.disconnect();
     await guest.request('POST', '/api/gul/logout', guestLogin.sessionToken, {});
@@ -308,12 +350,14 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
     );
     expect(restoredMember.member?.id === memberKey.memberId).toBe(true);
     expect(channel((await member.state())!, next.name).canJoin).toBe(false);
+    phase = 'delete-empty-channel';
     const deleted = await owner.deleteChannel({
       ...context(restored),
       channelId: next.id,
       version: finalVersion,
     });
     expect(deleted.tree.children?.some((value) => value.id === next.id)).toBe(false);
+    phase = 'check-id-not-reused';
     const replaced = await owner.createChannel({
       ...context(restored),
       name: replacementName,
@@ -323,16 +367,24 @@ test('managed REALITY authority revokes actual SFU signaling and refreshed token
     });
     const replacement = channel(replaced, replacementName);
     expect(replacement.id).toBeGreaterThan(next.id);
+    phase = 'delete-replacement-channel';
     await owner.deleteChannel({
       ...context(restored),
       channelId: replacement.id,
       version: replacement.version!,
     });
     expect(await validation(replay, voiceFlow.refreshed)).toBe(403);
+  } catch (error) {
+    console.error('Managed admission failure phase:', phase);
+    throw error;
   } finally {
     clearInterval(heartbeat);
     sockets.forEach((socket) => socket.terminate());
     await Promise.allSettled(authorities.map((authority) => authority.disconnect()));
     await Promise.allSettled(gateways.map((gateway) => gateway.close()));
   }
-});
+}
+
+for (const pendingCleanup of [false, true])
+  test(`managed REALITY revokes signaling and tokens, persists permissions${pendingCleanup ? ' with pending SFU cleanup' : ''}`, () =>
+    managedRevocation(pendingCleanup));
