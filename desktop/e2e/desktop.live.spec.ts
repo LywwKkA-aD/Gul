@@ -245,6 +245,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await expect(a.getByRole('meter', { name: 'Уровень микрофона', exact: true })).toBeVisible();
     await a.getByRole('combobox', { name: 'Режим микрофона', exact: true }).selectOption('vad');
     const threshold = a.getByRole('slider', { name: 'Порог активации', exact: true });
+    await expect(threshold).toBeEnabled();
     await threshold.focus();
     await a.keyboard.press('End');
     await expect(threshold).toHaveValue('-6');

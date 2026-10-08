@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import { RoomEvent, Track, type Room } from 'livekit-client';
+import { RoomEvent, Track, type AudioCaptureOptions, type Room } from 'livekit-client';
 import { MediaController } from '../src/renderer/media/controller.ts';
 import type { MediaGrant, MediaSession } from '../src/shared/contracts.ts';
 
@@ -37,6 +37,7 @@ const deferred = <T>() => {
 class FakeTrack extends EventEmitter {
   stopped = false;
   muted = false;
+  restarts: readonly AudioCaptureOptions[] = [];
   readonly mediaStreamTrack = {
     enabled: true,
     readyState: 'live',
@@ -58,6 +59,11 @@ class FakeTrack extends EventEmitter {
   async unmute() {
     this.muted = false;
     this.mediaStreamTrack.enabled = true;
+  }
+  async restartTrack(options: AudioCaptureOptions) {
+    assert.equal(this.mediaStreamTrack.enabled, false, 'raw capture restarts must remain muted');
+    this.restarts = [...this.restarts, structuredClone(options)];
+    this.mediaStreamTrack.enabled = !this.muted;
   }
   attach(element: unknown) {
     this.attached.push(element);
@@ -292,6 +298,10 @@ test('chat validates source, limits, room topic and displays literal text', asyn
 test('deafen silences received audio without subscribing own audio twice', async () => {
   const { controller, rooms, mic } = harness();
   await controller.join(session);
+  assert.equal(mic.restarts.length, 1, 'raw fallback restores capture processing before opening voice');
+  assert.equal(mic.restarts[0].noiseSuppression, true);
+  assert.equal(mic.restarts[0].echoCancellation, true);
+  assert.equal(mic.stopped, false);
   const track = new FakeTrack(Track.Kind.Audio);
   const pub = publication(rooms[0], Track.Source.Microphone, 'voice-8');
   rooms[0].emit(RoomEvent.TrackSubscribed, track, pub, { identity: 'voice.8', name: 'Bob' });

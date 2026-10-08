@@ -12,13 +12,20 @@ import { captureFailureName } from './capture-diagnostics.ts';
 import { attachLinuxScreenAudio, findPrivateAudioDevice } from './linux-screen-audio.ts';
 import { attachWindowsScreenAudio } from './windows-screen-audio.ts';
 
-export function voiceCaptureOptions(settings: VoiceSettings, deviceId?: string) {
+export type VoiceCapturePolicy = 'neural' | 'browser';
+export function voiceCaptureOptions(
+  settings: VoiceSettings,
+  deviceId?: string,
+  policy: VoiceCapturePolicy = 'neural',
+) {
   return {
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     channelCount: 1,
     sampleRate: 48000,
     echoCancellation: settings.echoCancellation,
-    noiseSuppression: settings.noiseSuppression,
+    // RNNoise receives AEC/AGC output without a second spectral denoiser.
+    // The microphone owner restores browser NS before unmuting a raw fallback.
+    noiseSuppression: policy === 'browser' && settings.noiseSuppression,
     autoGainControl: settings.autoGainControl,
   };
 }

@@ -1,5 +1,7 @@
 /** Hermetic speech-plus-noise benchmark. No user recordings or pure-tone NS assertions. */
-export function noiseSpeechFixture(input: Buffer, noisy = true) {
+export function noiseSpeechFixture(input: Buffer, noisy = true, speechScale = 1) {
+  if (!Number.isFinite(speechScale) || speechScale <= 0 || speechScale > 1)
+    throw new Error('Invalid speech scale.');
   if (
     input.length < 44 ||
     input.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -70,7 +72,7 @@ export function noiseSpeechFixture(input: Buffer, noisy = true) {
   for (let offset = 0; offset < frames; offset += 1024) {
     let energy = 0;
     for (let index = 0; index < 1024; index++) energy += (speech[offset + index - padding] ?? 0) ** 2;
-    envelope.push(Math.sqrt(energy / 1024) * speechGain);
+    envelope.push(Math.sqrt(energy / 1024) * speechGain * speechScale);
   }
   const wav = Buffer.alloc(44 + frames * 2);
   wav.write('RIFF', 0);
@@ -87,7 +89,8 @@ export function noiseSpeechFixture(input: Buffer, noisy = true) {
   wav.writeUInt32LE(frames * 2, 40);
   for (let index = 0; index < frames; index++) {
     const sample =
-      (speech[index - padding] ?? 0) * speechGain + (noisy ? noise[index] * noiseGain + clicks[index] : 0);
+      (speech[index - padding] ?? 0) * speechGain * speechScale +
+      (noisy ? noise[index] * noiseGain + clicks[index] : 0);
     if (Math.abs(sample) >= 0.95) throw new Error('Clipping speech fixture.');
     wav.writeInt16LE(Math.round(sample * 32767), 44 + index * 2);
   }
@@ -95,7 +98,7 @@ export function noiseSpeechFixture(input: Buffer, noisy = true) {
     wav,
     seconds: frames / 48000,
     noiseRms: 0.025,
-    speechRms: 0.07,
+    speechRms: 0.07 * speechScale,
     reference: { envelope, frames, keys, speechKeys },
   };
 }

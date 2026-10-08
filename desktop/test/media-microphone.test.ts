@@ -249,7 +249,7 @@ test('device changes during initial capture reconcile before publication and whi
   await fixture.microphone.stop();
 });
 test('newer gain patch cannot skip restoring a failed raw processing change', async () => {
-  const { microphone, track, room } = harness();
+  const { microphone, track, processor, room } = harness();
   await microphone.start(room as any, undefined, () => true);
   let reject!: (error: Error) => void;
   let first = true;
@@ -271,7 +271,8 @@ test('newer gain patch cannot skip restoring a failed raw processing change', as
   await gain;
   assert.equal(microphone.settings.noiseSuppression, true);
   assert.equal(microphone.settings.inputGain, 1.5);
-  assert.equal((track.constraints.at(-1) as any).noiseSuppression, true);
+  assert.equal((track.constraints.at(-1) as any).noiseSuppression, false);
+  assert.equal((processor.settings.at(-1) as any).noiseSuppression, true);
   assert.deepEqual((track.constraints.at(-1) as any).deviceId, { exact: 'default' });
   await microphone.stop();
 });

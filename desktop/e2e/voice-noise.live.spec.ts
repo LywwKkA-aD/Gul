@@ -161,7 +161,7 @@ test('two desktop peers preserve speech, measure fan/key suppression and maintai
     console.info('GUL_VOICE_NOISE_RESTORED', JSON.stringify(restored));
     for (let index = 0; index < 2; index++) {
       expect(untreated[index].flags.noiseSuppression).toBe(false);
-      expect(suppressed[index].flags.noiseSuppression).toBe(true);
+      expect(suppressed[index].flags.noiseSuppression).toBe(false);
       expect(suppressed[index].flags.autoGainControl).toBe(false);
       expect(untreated[index].flags.neuralNoise).toBe(false);
       expect(suppressed[index].flags.neuralNoise).toBe(true);

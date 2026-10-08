@@ -106,8 +106,10 @@ export class VoiceProcessor
           value.type === 'ready' &&
           typeof value.neuralNoise === 'boolean' &&
           (value.sampleRate === context.sampleRate || (!context.sampleRate && value.sampleRate === 48000))
-        )
-          acknowledge();
+        ) {
+          if (this.settings.noiseSuppression && !value.neuralNoise) this.cancelReady?.();
+          else acknowledge();
+        }
         if (
           value.type === 'level' &&
           typeof value.level === 'number' &&

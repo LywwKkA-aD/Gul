@@ -112,6 +112,24 @@ test('processed microphone remains mono through the WebAudio destination and out
   assert.equal(output.getSettings().channelCount, 1);
   await processor.destroy();
 });
+test('requested neural suppression requires a real model-ready acknowledgement before exposing microphone output', async () => {
+  const requested = harness(undefined, false);
+  const opening = requested.processor.init(requested.options);
+  await new Promise((resolve) => setImmediate(resolve));
+  requested.port.onmessage?.({ data: { type: 'ready', neuralNoise: false, sampleRate: 48000 } });
+  await assert.rejects(opening, /обработк/iu);
+  assert.equal(requested.processor.processedTrack, undefined);
+  assert.equal(requested.source.connects, 0);
+  assert.equal(requested.port.closed, true);
+  const disabled = harness(undefined, false);
+  disabled.processor.update({ ...defaultVoiceSettings, noiseSuppression: false });
+  const plain = disabled.processor.init(disabled.options);
+  await new Promise((resolve) => setImmediate(resolve));
+  disabled.port.onmessage?.({ data: { type: 'ready', neuralNoise: false, sampleRate: 48000 } });
+  await plain;
+  assert.equal(disabled.processor.processedTrack, disabled.output);
+  await disabled.processor.destroy();
+});
 test('a late worklet error is sticky, reports once and cannot be unmuted by later audio preferences', async () => {
   const { processor, options, node, output, failures } = harness();
   await processor.init(options);

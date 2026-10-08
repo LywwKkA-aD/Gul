@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import { RoomEvent, type Room, type LocalAudioTrack } from 'livekit-client';
+import { RoomEvent, type AudioCaptureOptions, type Room, type LocalAudioTrack } from 'livekit-client';
 import { MediaController } from '../src/renderer/media/controller.ts';
 import { presentationSnapshot } from '../src/renderer/presentation-snapshot.ts';
 import type { MediaSession } from '../src/shared/contracts.ts';
@@ -39,11 +39,17 @@ class FakeRoom extends EventEmitter {
 function harness(processorAvailable = true) {
   const rooms: FakeRoom[] = [];
   const readings: ((value: Pick<VoiceReading, 'level' | 'active'>) => void)[] = [];
+  const recaptures: AudioCaptureOptions[] = [];
+  const mediaStreamTrack = { enabled: true };
   const track = {
-    mediaStreamTrack: { enabled: true },
+    mediaStreamTrack,
     stop() {},
     async mute() {},
     async unmute() {},
+    async restartTrack(options: AudioCaptureOptions) {
+      assert.equal(mediaStreamTrack.enabled, false, 'browser fallback cannot reopen raw capture');
+      recaptures.push(structuredClone(options));
+    },
   } as unknown as LocalAudioTrack;
   const controller = new MediaController({
     screenGrant: async () => ({ ...session.grant, identity: 'screen.7' }),
@@ -59,7 +65,7 @@ function harness(processorAvailable = true) {
       return room as unknown as Room;
     },
   });
-  return { controller, rooms, readings };
+  return { controller, rooms, readings, recaptures };
 }
 
 test('local worklet lights the avatar before a server event and only speech edges update the main view', async () => {
@@ -111,8 +117,11 @@ test('local activity obeys immediate mute, deafen, reconnection and session canc
 });
 
 test('processor unavailable retains the SDK local indicator and remote identities are deduplicated', async () => {
-  const { controller, rooms } = harness(false);
+  const { controller, rooms, recaptures } = harness(false);
   await controller.join(session);
+  assert.equal(recaptures.length, 1);
+  assert.equal(recaptures[0].noiseSuppression, true);
+  assert.equal(recaptures[0].echoCancellation, true);
   rooms[0].emit(RoomEvent.ActiveSpeakersChanged, [
     { identity: 'voice.7' },
     { identity: 'voice.8' },

@@ -1,6 +1,6 @@
 import { AudioPresets, Track, type LocalAudioTrack, type Room } from 'livekit-client';
 import type { AudioState } from '../../shared/contracts.ts';
-import { microphone, voiceCaptureOptions } from './capture.ts';
+import { microphone, voiceCaptureOptions, type VoiceCapturePolicy } from './capture.ts';
 import { unpublish } from './rooms.ts';
 import { defaultVoiceSettings, voiceSettings, type VoiceSettings, type VoiceReading } from './voice-gate.ts';
 import { attachVoiceProcessor, type VoiceProcessorHandle } from './voice-processor.ts';
@@ -34,6 +34,7 @@ function stopCapture(track: LocalAudioTrack): void {
 interface CapturedInput {
   readonly settings: VoiceSettings;
   readonly device: string;
+  readonly policy: VoiceCapturePolicy;
 }
 
 /** Local audio stays fail-closed through capture, processor setup, device restart and room changes. */
@@ -50,6 +51,7 @@ export class Microphone {
   private readonly configuring = new WeakMap<LocalAudioTrack, number>();
   private state: AudioState = { muted: false, deafened: false };
   private preferences = defaultVoiceSettings;
+  private capturePolicy: VoiceCapturePolicy = 'neural';
   constructor(dependencies: MicrophoneDependencies) {
     this.dependencies = dependencies;
   }
@@ -74,11 +76,16 @@ export class Microphone {
     const generation = ++this.generation;
     this.opening = true;
     this.device = device;
+    this.capturePolicy = 'neural';
     const valid = () => this.generation === generation && current();
     let track: LocalAudioTrack | undefined;
     let processor: VoiceProcessorHandle | undefined;
     let published = false;
-    let capturedInput: CapturedInput = { settings: this.preferences, device: device ?? 'default' };
+    let capturedInput: CapturedInput = {
+      settings: this.preferences,
+      device: device ?? 'default',
+      policy: this.capturePolicy,
+    };
     try {
       track = await (this.dependencies.capture ?? microphone)(device, capturedInput.settings);
       if (!valid()) {
@@ -146,6 +153,7 @@ export class Microphone {
       if (!processor && (this.preferences.mode !== 'continuous' || this.preferences.inputGain !== 1))
         throw new Error();
       if (processor?.failed) throw new Error();
+      this.capturePolicy = processor ? 'neural' : 'browser';
       await this.reconcile(track, capturedInput, valid, processor);
       if (!valid()) {
         stopCapture(track);
@@ -224,7 +232,7 @@ export class Microphone {
         await track.mute();
         if (this.track !== track || !this.ready) return;
         this.processor?.update(next);
-        await track.restartTrack(voiceCaptureOptions(next, this.device ?? 'default'));
+        await track.restartTrack(voiceCaptureOptions(next, this.device ?? 'default', this.capturePolicy));
         if (this.track !== track || !this.ready) {
           stopCapture(track);
           return;
@@ -243,7 +251,9 @@ export class Microphone {
         this.processor?.update(previous);
         if (restart && track && this.track === track && this.ready) {
           try {
-            await track.restartTrack(voiceCaptureOptions(previous, this.device ?? 'default'));
+            await track.restartTrack(
+              voiceCaptureOptions(previous, this.device ?? 'default', this.capturePolicy),
+            );
             if (this.track !== track) stopCapture(track);
           } catch {
             if (this.track === track) {
@@ -277,11 +287,16 @@ export class Microphone {
       (captured.settings.echoCancellation !== this.preferences.echoCancellation ||
         captured.settings.noiseSuppression !== this.preferences.noiseSuppression ||
         captured.settings.autoGainControl !== this.preferences.autoGainControl ||
+        (captured.policy !== this.capturePolicy && this.preferences.noiseSuppression) ||
         captured.device !== (this.device ?? 'default'))
     ) {
-      const next: CapturedInput = { settings: this.preferences, device: this.device ?? 'default' };
+      const next: CapturedInput = {
+        settings: this.preferences,
+        device: this.device ?? 'default',
+        policy: this.capturePolicy,
+      };
       processor?.update(next.settings);
-      await track.restartTrack(voiceCaptureOptions(next.settings, next.device));
+      await track.restartTrack(voiceCaptureOptions(next.settings, next.device, next.policy));
       if (!current()) {
         stopCapture(track);
         return next;
