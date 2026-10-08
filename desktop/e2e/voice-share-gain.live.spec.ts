@@ -8,7 +8,7 @@ import {
 } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { privateLoginForm } from './login-form.ts';
@@ -33,10 +33,14 @@ const sampleDuration = 6400;
 const warmupDuration = 12_000;
 const name = (peer: number) => `share-gain-peer-${peer}`;
 
-async function privatePulseCommand(environment: Readonly<Record<string, string>>, args: readonly string[]) {
+async function privatePulseCommand(
+  environment: Readonly<Record<string, string>>,
+  stage: 'playback-sink' | 'microphone-source' | 'default-output' | 'default-input' | 'input-volume',
+  args: readonly string[],
+) {
   await new Promise<void>((done, fail) => {
     execFile('pactl', [...args], { env: { ...process.env, ...environment }, timeout: 3000 }, (error) =>
-      error ? fail(new Error('Private gain microphone unavailable.')) : done(),
+      error ? fail(new Error(`Private gain microphone unavailable (${stage}).`)) : done(),
     );
   });
 }
@@ -54,12 +58,7 @@ async function pulseMicrophone(
   if (!endpoint?.startsWith('unix:')) throw new Error('Private gain audio server unavailable.');
   const playback = `gul_gain_output_${peer}`;
   const pipe = join(directory, `microphone-${peer}.pipe`);
-  await new Promise<void>((done, fail) => {
-    execFile('mkfifo', ['-m', '600', pipe], (error) =>
-      error ? fail(new Error('Private gain pipe unavailable.')) : done(),
-    );
-  });
-  await privatePulseCommand(environment, [
+  await privatePulseCommand(environment, 'playback-sink', [
     '--server',
     endpoint,
     'load-module',
@@ -68,7 +67,9 @@ async function pulseMicrophone(
     'rate=48000',
     'channels=2',
   ]);
-  await privatePulseCommand(environment, [
+  // PulseAudio 16.1 creates the FIFO itself and rejects a pre-existing mkfifo.
+  // The parent directory is private; restrict its new FIFO before opening the writer.
+  await privatePulseCommand(environment, 'microphone-source', [
     '--server',
     endpoint,
     'load-module',
@@ -81,22 +82,30 @@ async function pulseMicrophone(
     'channel_map=mono',
     `source_properties=device.description=Gul-Gain-Microphone-${peer}`,
   ]);
-  await privatePulseCommand(environment, ['--server', endpoint, 'set-default-sink', playback]);
-  await privatePulseCommand(environment, [
+  if (!(await lstat(pipe)).isFIFO()) throw new Error('Private gain pipe unavailable (FIFO type).');
+  await chmod(pipe, 0o600);
+  await privatePulseCommand(environment, 'default-output', [
+    '--server',
+    endpoint,
+    'set-default-sink',
+    playback,
+  ]);
+  await privatePulseCommand(environment, 'default-input', [
     '--server',
     endpoint,
     'set-default-source',
     `gul_gain_mic_${peer}`,
   ]);
-  await privatePulseCommand(environment, [
+  await privatePulseCommand(environment, 'input-volume', [
     '--server',
     endpoint,
     'set-source-volume',
     `gul_gain_mic_${peer}`,
     '20%',
   ]);
-  // Pulse clocks the FIFO reader. Blocking writes continuously repeat public PCM;
-  // this process never creates a sink input or replaces a browser MediaStreamTrack.
+  // A pipe source consumes PCM as fast as supplied. Pace 480 mono frames per 10ms,
+  // reusing one chunk without a catch-up queue. This never creates a sink input
+  // or replaces a browser MediaStreamTrack.
   const writer = `
     const fs = require('node:fs');
     const wav = fs.readFileSync(process.argv[1]);
@@ -109,10 +118,19 @@ async function pulseMicrophone(
     }
     if (!pcm || !pcm.length) process.exit(2);
     const file = fs.openSync(process.argv[2], 'w');
-    for (;;) {
-      let offset = 0;
-      while (offset < pcm.length) offset += fs.writeSync(file, pcm, offset, pcm.length - offset);
-    }
+    const chunk = Buffer.alloc(480 * 2);
+    let cursor = 0;
+    setInterval(() => {
+      let filled = 0;
+      while (filled < chunk.length) {
+        const count = Math.min(pcm.length - cursor, chunk.length - filled);
+        pcm.copy(chunk, filled, cursor, cursor + count);
+        filled += count;
+        cursor = (cursor + count) % pcm.length;
+      }
+      let written = 0;
+      while (written < chunk.length) written += fs.writeSync(file, chunk, written, chunk.length - written);
+    }, 10);
   `;
   const child = spawn(process.execPath, ['-e', writer, speech, pipe], {
     stdio: 'ignore',
