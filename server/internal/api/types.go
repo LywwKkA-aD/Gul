@@ -2,8 +2,10 @@
 package api
 
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username         string `json:"username"`
+	Password         string `json:"password"`
+	ProtocolVersion  int    `json:"protocolVersion,omitempty"`
+	MemberCredential string `json:"memberCredential,omitempty"`
 }
 
 type ChannelRequest struct {
@@ -34,13 +36,16 @@ type Grant struct {
 
 // SessionToken is an opaque broker bearer, separate from LiveKit's media JWT.
 type LoginResponse struct {
-	SessionToken string `json:"sessionToken"`
-	SessionID    uint32 `json:"sessionId"`
-	Identity     string `json:"identity"`
-	Name         string `json:"name"`
-	ChannelID    uint32 `json:"channelId"`
-	Revision     uint64 `json:"revision"`
-	Grant        Grant  `json:"grant"`
+	SessionToken   string      `json:"sessionToken"`
+	SessionID      uint32      `json:"sessionId"`
+	Identity       string      `json:"identity"`
+	Name           string      `json:"name"`
+	ChannelID      uint32      `json:"channelId"`
+	Revision       uint64      `json:"revision"`
+	Grant          Grant       `json:"grant"`
+	ServerID       string      `json:"serverId,omitempty"`
+	Member         *MemberInfo `json:"member,omitempty"`
+	CatalogVersion uint64      `json:"catalogVersion,omitempty"`
 }
 
 type State struct {
@@ -48,7 +53,10 @@ type State struct {
 	SelfSession uint32      `json:"selfSession"`
 	SelfChannel uint32      `json:"selfChannel"`
 	// Roster changes do not invalidate this caller's screen grant.
-	Revision uint64 `json:"revision"`
+	Revision       uint64      `json:"revision"`
+	ServerID       string      `json:"serverId,omitempty"`
+	Member         *MemberInfo `json:"member,omitempty"`
+	CatalogVersion uint64      `json:"catalogVersion,omitempty"`
 }
 
 type ChannelNode struct {
@@ -57,6 +65,9 @@ type ChannelNode struct {
 	Position int32         `json:"position"`
 	Users    []UserInfo    `json:"users"`
 	Children []ChannelNode `json:"children"`
+	Version  *uint64       `json:"version,omitempty"`
+	Access   string        `json:"access,omitempty"`
+	CanJoin  *bool         `json:"canJoin,omitempty"`
 }
 
 type UserInfo struct {
@@ -68,4 +79,9 @@ type UserInfo struct {
 	SelfMute  bool   `json:"selfMute"`
 	SelfDeaf  bool   `json:"selfDeaf"`
 	IsSelf    bool   `json:"isSelf"`
+}
+
+type MemberInfo struct {
+	ID   *string `json:"id"`
+	Role string  `json:"role"`
 }

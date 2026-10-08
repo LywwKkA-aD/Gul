@@ -44,6 +44,19 @@ def create_certificate(container):
             '-keyout', '/work/tls.key', '-out', '/work/ca.pem')
 
 
+def managed_config(output, broker_config):
+    state = output / 'state'
+    state.mkdir(mode=0o700)
+    os.chmod(state, 0o700)
+    return {**broker_config, 'statePath': '/work/state/catalog.json'}
+
+
+def bootstrap_owner(container):
+    command('docker', 'exec', '--user', f'{os.getuid()}:{os.getgid()}', container,
+            '/work/broker', '-bootstrap-owner', '-config', '/work/broker.json',
+            '-owner-output', '/work/owner-key.json')
+
+
 def fixture_sfu_config(node_ip, key, secret):
     config = reality.base.sfu_config(node_ip, key, secret)
     config['turn']['domain'] = '127.0.0.1'
@@ -65,7 +78,7 @@ def remove(output):
     print('Removed local fixture containers; private files remain in the requested output directory.')
 
 
-def start(output, xray, broker, gateway_image):
+def start(output, xray, broker, gateway_image, managed=False):
     if output.exists():
         raise FileExistsError('fixture output already exists')
     output.mkdir(parents=True, mode=0o700)
@@ -88,7 +101,8 @@ def start(output, xray, broker, gateway_image):
         password = secrets.token_urlsafe(32)
         short_id = secrets.token_hex(8)
         sni = 'camouflage.example.org'
-        reality.generate('203.0.113.9', password, sni, private, public, short_id, output / 'reality')
+        reality.generate('203.0.113.9', password, sni, private, public, short_id, output / 'reality',
+                         managed_channels=managed)
         profile = (output / 'reality/address').read_text().replace('203.0.113.9', '127.0.0.1:' + port)
         write(output / 'address', profile)
         write(output / 'join-password', password + '\n')
@@ -108,7 +122,11 @@ def start(output, xray, broker, gateway_image):
             'apiKey': key, 'apiSecret': secret,
             'joinPasswordSHA256': reality.hashlib.sha256(password.encode()).hexdigest(),
         }
+        if managed:
+            broker_config = managed_config(output, broker_config)
         write(output / 'broker.json', json.dumps(broker_config))
+        if managed:
+            bootstrap_owner(names[1])
         create_certificate(names[1])
         os.chmod(output / 'tls.key', 0o600)
         os.chmod(output / 'ca.pem', 0o600)
@@ -148,11 +166,12 @@ def main():
     parser.add_argument('--xray', type=Path)
     parser.add_argument('--broker', type=Path)
     parser.add_argument('--gateway-image', default='gul-livekit-reality-smoke:local')
+    parser.add_argument('--managed', action='store_true')
     args = parser.parse_args()
     if args.remove:
         remove(args.remove)
     elif args.output and args.xray and args.broker:
-        start(args.output, args.xray, args.broker, args.gateway_image)
+        start(args.output, args.xray, args.broker, args.gateway_image, managed=args.managed)
     else:
         parser.error('--output, --xray and --broker are required to start a fixture')
 

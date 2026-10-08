@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -23,6 +24,7 @@ type PublicConfig struct {
 	APIKey             string `json:"apiKey"`
 	APISecret          string `json:"apiSecret"`
 	JoinPasswordSHA256 string `json:"joinPasswordSHA256"`
+	StatePath          string `json:"statePath,omitempty"`
 }
 
 func (c PublicConfig) Validate() error {
@@ -52,6 +54,9 @@ func (c PublicConfig) Validate() error {
 	}
 	hash, err := hex.DecodeString(c.JoinPasswordSHA256)
 	if err != nil || len(hash) != 32 {
+		return invalid
+	}
+	if c.StatePath != "" && (!filepath.IsAbs(c.StatePath) || filepath.Clean(c.StatePath) != c.StatePath) {
 		return invalid
 	}
 	return nil

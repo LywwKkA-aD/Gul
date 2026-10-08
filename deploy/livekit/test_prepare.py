@@ -67,6 +67,27 @@ class PrepareTests(unittest.TestCase):
                     prepare.generate(address, password, out)
                 self.assertFalse(out.exists())
 
+    def test_managed_signaling_has_no_direct_sfu_route(self):
+        proxy = prepare.proxy_config('203.0.113.10', managed_channels=True)
+        self.assertIn('use_backend gul_broker if gul_api or rtc or health', proxy)
+        self.assertIn('default_backend gul_broker', proxy)
+        self.assertIn('timeout tunnel 1h', proxy)
+        self.assertNotIn('backend gul_signal', proxy)
+        self.assertNotIn('127.0.0.1:7880', proxy)
+        self.assertNotIn('option httplog', proxy)
+        self.assertIn('acl rtc path /rtc /rtc/validate /rtc/v1 /rtc/v1/validate', proxy)
+
+    def test_managed_generation_is_explicit_and_preserves_transport_password(self):
+        password = 'synthetic-test-password-with-entropy'
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'private'
+            prepare.generate('203.0.113.10', password, out, managed_channels=True)
+            config = json.loads((out / 'broker.json').read_text())
+            self.assertEqual(config['statePath'], '/var/lib/private/gul-livekit/catalog.json')
+            self.assertEqual(config['joinPasswordSHA256'], hashlib.sha256(password.encode()).hexdigest())
+            self.assertNotIn('credential', json.dumps(config))
+            self.assertNotIn('backend gul_signal', (out / 'haproxy.cfg').read_text())
+
 
 if __name__ == '__main__':
     unittest.main()

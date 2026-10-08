@@ -24,6 +24,10 @@ func (b *gulBroker) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gul/audio", b.audio)
 	mux.HandleFunc("/api/gul/screen", b.screen)
 	mux.HandleFunc("/api/gul/logout", b.logout)
+	mux.HandleFunc("/api/gul/info", b.info)
+	if b.store != nil {
+		b.registerManagement(mux)
+	}
 }
 
 func (b *gulBroker) login(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +57,21 @@ func (b *gulBroker) login(w http.ResponseWriter, r *http.Request) {
 	now := b.now()
 	b.mu.Lock()
 	b.expireLocked(now)
+	if b.closed {
+		b.mu.Unlock()
+		gulCode(w, 503, "storage_unavailable")
+		return
+	}
+	memberID, authVersion, status := b.loginMemberLocked(input, name)
+	if status != 0 {
+		b.mu.Unlock()
+		if status == 426 {
+			gulCode(w, status, "upgrade_required")
+		} else {
+			gulCode(w, status, "authentication_failed")
+		}
+		return
+	}
 	if len(b.sessions) >= b.maxSessions {
 		b.mu.Unlock()
 		http.Error(w, "local session limit reached", http.StatusTooManyRequests)
@@ -67,7 +86,7 @@ func (b *gulBroker) login(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	session := &gulSession{ID: b.nextIDLocked(), Name: name, ChannelID: 1, Revision: 1, ExpiresAt: now.Add(gulSessionLease)}
+	session := &gulSession{ID: b.nextIDLocked(), Name: name, ChannelID: 1, Revision: 1, ExpiresAt: now.Add(gulSessionLease), MemberID: memberID, AuthVersion: authVersion, Nonce: sessionToken()}
 	b.sessions[key] = session
 	response := b.responseLocked(session, token, now)
 	b.mu.Unlock()
@@ -94,7 +113,7 @@ func (b *gulBroker) channel(w http.ResponseWriter, r *http.Request) {
 	if !gulJSON(w, r, &input) {
 		return
 	}
-	if input.ChannelID == nil || *input.ChannelID > 3 {
+	if input.ChannelID == nil || (b.store == nil && *input.ChannelID > 3) {
 		http.Error(w, "unknown channel", http.StatusBadRequest)
 		return
 	}
@@ -190,14 +209,14 @@ func (b *gulBroker) withSession(w http.ResponseWriter, r *http.Request, fn func(
 	b.mu.Lock()
 	b.expireLocked(now)
 	session := b.sessions[key]
-	if session == nil || session.Revoked {
+	if session == nil || session.Revoked || !b.sessionAccessLocked(session) {
 		b.mu.Unlock()
 		http.Error(w, "local session expired or unavailable", http.StatusUnauthorized)
 		return
 	}
 	status, response := fn(session, token, now)
 	b.mu.Unlock()
-	if status == http.StatusConflict {
+	if status == http.StatusConflict && response == nil {
 		http.Error(w, "channel generation changed", status)
 		return
 	}

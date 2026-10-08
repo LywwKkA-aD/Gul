@@ -7,6 +7,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes
+StateDirectory=gul-livekit
+StateDirectoryMode=0700
 LoadCredential=config.json:/opt/gul-livekit/private/broker.json
 ExecStart=/usr/local/libexec/gul-livekit-server -config ${CREDENTIALS_DIRECTORY}/config.json
 Restart=on-failure

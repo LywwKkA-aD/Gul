@@ -15,6 +15,20 @@ spec.loader.exec_module(stand)
 
 
 class FixtureTests(unittest.TestCase):
+    def test_managed_bootstrap_uses_private_state_and_host_owned_owner_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            original = {'listenAddress': '127.0.0.1:8787'}
+            configured = stand.managed_config(output, original)
+            self.assertEqual(original, {'listenAddress': '127.0.0.1:8787'})
+            self.assertEqual(configured['statePath'], '/work/state/catalog.json')
+            self.assertEqual((output / 'state').stat().st_mode & 0o777, 0o700)
+            with patch.object(stand.os, 'getuid', return_value=1001), patch.object(stand.os, 'getgid', return_value=1002), patch.object(stand, 'command') as command:
+                stand.bootstrap_owner('gul-reality-test-synthetic')
+                self.assertEqual(command.call_args.args, ('docker', 'exec', '--user', '1001:1002',
+                                 'gul-reality-test-synthetic', '/work/broker', '-bootstrap-owner',
+                                 '-config', '/work/broker.json', '-owner-output', '/work/owner-key.json'))
+
     def test_certificate_is_generated_as_the_host_user(self):
         with patch.object(stand.os, 'getuid', return_value=1001), patch.object(stand.os, 'getgid', return_value=1002), patch.object(stand, 'command') as command:
             stand.create_certificate('gul-reality-test-synthetic')

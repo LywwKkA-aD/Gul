@@ -13,10 +13,8 @@ import (
 	"github.com/twitchtv/twirp"
 )
 
-// ParticipantRemover removes active media connections, not issued JWTs.
-// Self-hosted LiveKit may refresh JWTs while connected; an already issued
-// token can be replayed until it expires. These friend rooms are not a tenant
-// isolation boundary. The broker bearer is revoked immediately on logout.
+// ParticipantRemover removes active media connections. Managed deployments
+// additionally authorize every signaling/reconnect request against the broker.
 type ParticipantRemover interface {
 	RemoveParticipant(context.Context, string, string) error
 }
@@ -34,6 +32,22 @@ func (r *liveKitRemover) RemoveParticipant(ctx context.Context, room, identity s
 		return nil
 	}
 	return err
+}
+
+func (r *liveKitRemover) ListParticipants(ctx context.Context, room string) ([]string, error) {
+	response, err := r.client.ListParticipants(ctx, &livekit.ListParticipantsRequest{Room: room})
+	var rpcErr twirp.Error
+	if errors.As(err, &rpcErr) && rpcErr.Code() == twirp.NotFound {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	identities := make([]string, 0, len(response.Participants))
+	for _, participant := range response.Participants {
+		identities = append(identities, participant.Identity)
+	}
+	return identities, nil
 }
 
 func (b *gulBroker) removeMedia(ctx context.Context, id, channelID uint32) error {
@@ -74,22 +88,34 @@ func (b *gulBroker) publicTransition(w http.ResponseWriter, r *http.Request, cha
 		http.Error(w, "session unavailable", http.StatusUnauthorized)
 		return
 	}
+	if channelID != nil && !b.destinationLocked(session, *channelID) {
+		b.mu.Unlock()
+		gulCode(w, 403, "access_denied")
+		return
+	}
 	if channelID != nil && session.ChannelID == *channelID {
 		response := b.responseLocked(session, token, b.now())
 		b.mu.Unlock()
 		gulWrite(w, http.StatusOK, response)
 		return
 	}
-	id, oldChannel := session.ID, session.ChannelID
 	if channelID == nil {
 		session.Revoked = true
+	} else if b.store != nil {
+		session.Moving = true
 	}
+	b.cancelFlowsLocked(session)
 	b.mu.Unlock()
-	err := b.removeMedia(r.Context(), id, oldChannel)
+	err := b.cleanSessionMedia(r.Context(), session)
 	b.mu.Lock()
 	if err != nil {
+		session.Moving = false
 		b.mu.Unlock()
-		http.Error(w, "media cleanup unavailable; retry", http.StatusServiceUnavailable)
+		if b.store != nil {
+			gulCode(w, 503, "media_cleanup_pending")
+		} else {
+			http.Error(w, "media cleanup unavailable; retry", 503)
+		}
 		return
 	}
 	if channelID == nil {
@@ -102,6 +128,12 @@ func (b *gulBroker) publicTransition(w http.ResponseWriter, r *http.Request, cha
 	if b.sessions[key] != session || session.Revoked {
 		b.mu.Unlock()
 		http.Error(w, "session unavailable", http.StatusUnauthorized)
+		return
+	}
+	session.Moving = false
+	if !b.destinationLocked(session, *channelID) {
+		b.mu.Unlock()
+		gulCode(w, 403, "access_denied")
 		return
 	}
 	session.ChannelID, session.Revision = *channelID, session.Revision+1
@@ -144,9 +176,8 @@ func (h *PublicHandler) cleanupExpired(ctx context.Context) {
 		session.opMu.Lock()
 		b.mu.Lock()
 		current := b.sessions[key] == session && session.Revoked
-		id, channel := session.ID, session.ChannelID
 		b.mu.Unlock()
-		if current && b.removeMedia(ctx, id, channel) == nil {
+		if current && b.cleanSessionMedia(ctx, session) == nil {
 			b.mu.Lock()
 			if b.sessions[key] == session && session.Revoked {
 				delete(b.sessions, key)

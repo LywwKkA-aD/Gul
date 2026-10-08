@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/hex"
+	"github.com/LywwKkA-aD/Gul/server/internal/catalog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,9 +31,21 @@ func NewPublicHandler(cfg PublicConfig, remover ParticipantRemover) (*PublicHand
 	decoded, _ := hex.DecodeString(cfg.JoinPasswordSHA256)
 	copy(hash[:], decoded)
 	b.passwordHash, b.remover = &hash, remover
+	if cfg.StatePath != "" {
+		store, err := catalog.Open(cfg.StatePath)
+		if err != nil {
+			return nil, err
+		}
+		b.store = store
+		b.closing = make(map[uint32]bool)
+		b.flows = make(map[*signalFlow]struct{})
+	}
 	h := &PublicHandler{broker: b, limits: newPublicLoginLimits()}
 	mux := http.NewServeMux()
 	b.register(mux)
+	if b.store != nil {
+		b.registerAdmission(mux, cfg)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if !gulMethod(w, r, http.MethodGet) {
 			return
@@ -54,7 +67,7 @@ func NewPublicHandler(cfg PublicConfig, remover ParticipantRemover) (*PublicHand
 			w.Header().Set("Access-Control-Allow-Origin", cfg.PublicOrigin)
 			w.Header().Set("Vary", "Origin")
 		}
-		if r.URL.Path == "/api/gul/login" && r.Method == http.MethodPost && !h.limits.allow(clientIP) {
+		if (r.URL.Path == "/api/gul/login" || r.URL.Path == "/api/gul/invites/redeem") && r.Method == http.MethodPost && !h.limits.allow(clientIP) {
 			w.Header().Set("Retry-After", "60")
 			http.Error(w, "login rate limit reached", http.StatusTooManyRequests)
 			return
@@ -86,4 +99,18 @@ func trustedProxyRequest(r *http.Request, host, origin string) (netip.Addr, bool
 		return netip.Addr{}, false
 	}
 	return client.Unmap(), true
+}
+
+func (h *PublicHandler) Close() error {
+	b := h.broker
+	b.mu.Lock()
+	b.closed = true
+	for flow := range b.flows {
+		flow.cancel()
+	}
+	b.mu.Unlock()
+	if b.store != nil {
+		return b.store.Close()
+	}
+	return nil
 }

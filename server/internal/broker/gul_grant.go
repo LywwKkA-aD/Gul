@@ -23,15 +23,19 @@ func (b *gulBroker) grantLocked(session *gulSession, role string, now time.Time)
 	if role == "screen" {
 		sources = []string{"screen_share", "screen_share_audio"}
 	}
+	attributes := map[string]string{"ownerIdentity": grant.OwnerIdentity, "role": role, "sessionId": id, "channelId": channel, "revision": strconv.FormatUint(session.Revision, 10)}
+	if b.store != nil {
+		attributes["serverId"] = b.store.Snapshot().ServerID
+		attributes["memberId"] = session.MemberID
+		attributes["authVersion"] = strconv.FormatUint(session.AuthVersion, 10)
+		attributes["sessionNonce"] = session.Nonce
+	}
 	// Only server-authored attributes bind a screen companion to its voice
 	// owner. Tokens cannot change metadata or obtain room administration.
 	claims, _ := json.Marshal(map[string]any{
 		"iss": b.cfg.APIKey, "sub": grant.Identity, "name": session.Name,
 		"iat": now.Unix(), "nbf": now.Add(-10 * time.Second).Unix(), "exp": now.Add(b.grantLifetime).Unix(),
-		"attributes": map[string]string{
-			"ownerIdentity": grant.OwnerIdentity, "role": role, "sessionId": id,
-			"channelId": channel, "revision": strconv.FormatUint(session.Revision, 10),
-		},
+		"attributes": attributes,
 		"video": map[string]any{
 			"roomJoin": true, "room": grant.Room,
 			"canPublish": true, "canSubscribe": true, "canPublishData": role == "voice",

@@ -60,7 +60,7 @@ def dns_name(value):
     return value
 
 
-def proxy_config(address, reality_sni=None):
+def proxy_config(address, reality_sni=None, managed_channels=False):
     ingress = ''
     tls_bind = '0.0.0.0:443'
     if reality_sni is not None:
@@ -130,19 +130,24 @@ frontend gul_http
     acl root path /
     http-request deny deny_status 404 unless gul_api or rtc or health or root
     http-request return status 200 content-type text/plain string "Gul LiveKit is online." if root
-    use_backend gul_broker if gul_api or health
-    default_backend gul_signal
+    @BROKER_ROUTE@
+    default_backend @DEFAULT_BACKEND@
 
 backend gul_broker
     mode http
     timeout server 15s
+    timeout tunnel 1h
     server broker 127.0.0.1:8787
 
-backend gul_signal
+@SIGNAL_BACKEND@
+'''.replace('@IP@', server_ip(address)).replace('@INGRESS@', ingress).replace('@TLS_BIND@', tls_bind).replace(
+        '@BROKER_ROUTE@', 'use_backend gul_broker if gul_api or rtc or health' if managed_channels else
+        'use_backend gul_broker if gul_api or health').replace(
+        '@DEFAULT_BACKEND@', 'gul_broker' if managed_channels else 'gul_signal').replace(
+        '@SIGNAL_BACKEND@', '' if managed_channels else '''backend gul_signal
     mode http
     timeout tunnel 1h
-    server signal 127.0.0.1:7880
-'''.replace('@IP@', server_ip(address)).replace('@INGRESS@', ingress).replace('@TLS_BIND@', tls_bind)
+    server signal 127.0.0.1:7880''')
 
 
 def write_private(path, content):
@@ -151,7 +156,7 @@ def write_private(path, content):
         file.write(content)
 
 
-def generate(address, password, output):
+def generate(address, password, output, managed_channels=False):
     address = server_ip(address)
     if len(password) < 16 or len(password) > 256 or any(ch.isspace() for ch in password):
         raise ValueError('use a generated single-line join password of 16 to 256 characters')
@@ -165,11 +170,15 @@ def generate(address, password, output):
         'apiKey': key, 'apiSecret': secret,
         'joinPasswordSHA256': hashlib.sha256(password.encode('utf-8')).hexdigest(),
     }
+    if managed_channels:
+        # DynamicUser exposes /var/lib/gul-livekit as a symlink. Use its
+        # canonical private directory so the catalogue's no-symlink guard holds.
+        broker['statePath'] = '/var/lib/private/gul-livekit/catalog.json'
     output.mkdir(parents=True, mode=0o700)
     os.chmod(output, 0o700)
     write_private(output / 'broker.json', json.dumps(broker, indent=2) + '\n')
     write_private(output / 'livekit.yaml', json.dumps(sfu_config(address, key, secret), indent=2) + '\n')
-    write_private(output / 'haproxy.cfg', proxy_config(address))
+    write_private(output / 'haproxy.cfg', proxy_config(address, managed_channels=managed_channels))
     write_private(output / 'address', 'https://' + address + '\n')
     write_private(output / 'Gul-LiveKit-server.txt',
                   'Gul LiveKit\n\nАдрес: https://' + address +
@@ -181,9 +190,10 @@ def main():
     parser.add_argument('server_ip')
     parser.add_argument('--password-file', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--managed-channels', action='store_true')
     args = parser.parse_args()
     password = args.password_file.read_text(encoding='utf-8').removesuffix('\n').removesuffix('\r')
-    generate(args.server_ip, password, args.output)
+    generate(args.server_ip, password, args.output, managed_channels=args.managed_channels)
     print('Prepared private LiveKit configuration; no credentials printed.')
 
 

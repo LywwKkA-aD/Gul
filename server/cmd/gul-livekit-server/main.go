@@ -14,19 +14,33 @@ import (
 	"time"
 
 	"github.com/LywwKkA-aD/Gul/server/internal/broker"
+	"github.com/LywwKkA-aD/Gul/server/internal/catalog"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/gul-livekit/server.json", "private server configuration file")
+	bootstrap := flag.Bool("bootstrap-owner", false, "initialize managed server and export private owner key")
+	ownerOutput := flag.String("owner-output", "", "private owner key output file")
 	flag.Parse()
 	cfg, err := broker.LoadPublicConfig(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+	if *bootstrap {
+		if cfg.StatePath == "" || *ownerOutput == "" || catalog.BootstrapOwnerFile(cfg.StatePath, *ownerOutput) != nil {
+			log.Fatal("cannot initialize managed owner; private state and output must not exist")
+		}
+		log.Print("Managed owner initialized; private key exported")
+		return
+	}
+	if *ownerOutput != "" {
+		log.Fatal("owner output requires explicit bootstrap")
+	}
 	handler, err := broker.NewPublicHandler(cfg, nil)
 	if err != nil {
 		log.Fatal("invalid public broker configuration")
 	}
+	defer handler.Close()
 	listener, err := net.Listen("tcp", cfg.ListenAddress)
 	if err != nil {
 		log.Fatal("cannot bind public broker loopback listener")

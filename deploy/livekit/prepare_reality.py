@@ -83,12 +83,12 @@ def parse_keys(output):
     return key32(private), key32(public)
 
 
-def generate(host, password, sni, private_key, public_key, short_id, output):
+def generate(host, password, sni, private_key, public_key, short_id, output, managed_channels=False):
     if len(password) < 16 or len(password) > 256 or any(ch.isspace() for ch in password):
         raise ValueError('use a generated single-line join password of 16 to 256 characters')
     profile = address(host, sni, public_key, short_id)
     config = server_config(password, sni, private_key, short_id)
-    proxy = proxy_config(host, sni)
+    proxy = proxy_config(host, sni, managed_channels=managed_channels)
     if output.exists():
         raise FileExistsError('output already exists; REALITY credentials will not be replaced')
     output.mkdir(parents=True, mode=0o700)
@@ -108,6 +108,7 @@ def main():
     parser.add_argument('--password-file', type=Path, required=True)
     parser.add_argument('--xray', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--managed-channels', action='store_true')
     args = parser.parse_args()
     base.server_ip(args.server_ip)
     base.dns_name(args.server_name)
@@ -116,7 +117,8 @@ def main():
     password = args.password_file.read_text(encoding='utf-8').removesuffix('\n').removesuffix('\r')
     keys = subprocess.run([str(args.xray.resolve()), 'x25519'], check=True, capture_output=True, text=True)
     private, public = parse_keys(keys.stdout)
-    generate(args.server_ip, password, args.server_name, private, public, secrets.token_hex(8), args.output)
+    generate(args.server_ip, password, args.server_name, private, public, secrets.token_hex(8), args.output,
+             managed_channels=args.managed_channels)
     print('Prepared private LiveKit REALITY files; no credentials printed.')
 
 

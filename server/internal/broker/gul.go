@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/LywwKkA-aD/Gul/server/internal/api"
+	"github.com/LywwKkA-aD/Gul/server/internal/catalog"
 )
 
 const (
@@ -19,29 +21,38 @@ const (
 )
 
 type gulSession struct {
-	opMu      sync.Mutex
-	ID        uint32
-	Name      string
-	ChannelID uint32
-	Revision  uint64
-	Audio     api.AudioState
-	ExpiresAt time.Time
-	Revoked   bool
+	opMu        sync.Mutex
+	ID          uint32
+	Name        string
+	ChannelID   uint32
+	Revision    uint64
+	Audio       api.AudioState
+	ExpiresAt   time.Time
+	Revoked     bool
+	Moving      bool
+	MemberID    string
+	AuthVersion uint64
+	Nonce       string
 }
 
 // gulBroker manages authenticated logical sessions and their media grants.
 // Only the trusted HTTPS proxy exposes these state operations to clients.
 type gulBroker struct {
-	mu            sync.Mutex
-	cfg           credentials
-	now           func() time.Time
-	newID         func() uint32
-	sessions      map[[32]byte]*gulSession
-	serverURL     string
-	grantLifetime time.Duration
-	maxSessions   int
-	passwordHash  *[32]byte
-	remover       ParticipantRemover
+	mu              sync.Mutex
+	cfg             credentials
+	now             func() time.Time
+	newID           func() uint32
+	sessions        map[[32]byte]*gulSession
+	serverURL       string
+	grantLifetime   time.Duration
+	maxSessions     int
+	passwordHash    *[32]byte
+	remover         ParticipantRemover
+	store           *catalog.Store
+	closing         map[uint32]bool
+	flows           map[*signalFlow]struct{}
+	closed          bool
+	signalTransport http.RoundTripper
 }
 
 func newGulBroker(cfg credentials, now func() time.Time) *gulBroker {
@@ -86,6 +97,7 @@ func (b *gulBroker) expireLocked(now time.Time) {
 				delete(b.sessions, key)
 			} else {
 				session.Revoked = true
+				b.cancelFlowsLocked(session)
 			}
 		}
 	}
@@ -100,14 +112,24 @@ func sessionToken() string {
 func voiceIdentity(id uint32) string { return "voice." + strconv.FormatUint(uint64(id), 10) }
 
 func (b *gulBroker) responseLocked(session *gulSession, token string, now time.Time) api.LoginResponse {
-	return api.LoginResponse{
+	response := api.LoginResponse{
 		SessionToken: token, SessionID: session.ID, Identity: voiceIdentity(session.ID),
 		Name: session.Name, ChannelID: session.ChannelID, Revision: session.Revision,
 		Grant: b.grantLocked(session, "voice", now),
 	}
+	if b.store != nil {
+		state := b.store.Snapshot()
+		response.ServerID = state.ServerID
+		response.CatalogVersion = state.CatalogVersion
+		response.Member = b.memberInfoLocked(state, session)
+	}
+	return response
 }
 
 func (b *gulBroker) stateLocked(self *gulSession) api.State {
+	if b.store != nil {
+		return b.managedStateLocked(self)
+	}
 	root := api.ChannelNode{
 		ID: 0, Name: "Gul LiveKit", Users: []api.UserInfo{}, Children: []api.ChannelNode{
 			{ID: 1, Name: "Общая", Position: 0, Users: []api.UserInfo{}, Children: []api.ChannelNode{}},
