@@ -189,7 +189,7 @@ jobs:
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=gul_ci_output channels=2 rate=48000
           pactl set-default-sink gul_ci_output
-          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts e2e/screen-presets.live.spec.ts
+          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts e2e/voice-share-gain.live.spec.ts e2e/screen-presets.live.spec.ts
       - name: Test native Linux desktop and system audio
         working-directory: desktop
         env:

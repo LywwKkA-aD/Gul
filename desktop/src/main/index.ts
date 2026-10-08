@@ -18,7 +18,9 @@ import type { DisplayCaptureConsent } from './capture-consent.ts';
 import { failure } from './validation.ts';
 import { claimApplicationInstance } from './application-instance.ts';
 import { CapturePicker } from './capture-picker.ts';
+import { installAudioCapturePolicy } from './audio-capture-policy.ts';
 
+installAudioCapturePolicy(app.commandLine, process.platform);
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'gul',
