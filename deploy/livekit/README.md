@@ -114,8 +114,20 @@ Unit задаёт `StateDirectory=gul-livekit` и режим 0700. Исполь�
 в приватном каталоге с `-bootstrap-owner -config FILE -owner-output FILE`.
 При использовании systemd можно выполнить bootstrap отдельным transient
 unit с такими же DynamicUser/StateDirectory ограничениями и записать экспорт
-внутри этого каталога. После запуска основного unit его владелец каталога
-будет выставлен systemd. Импортируйте экспорт в Gul; не публикуйте его в Git.
+внутри этого каталога. Если bootstrap выполнялся от root после создания
+StateDirectory, назначьте state-файлам владельца родительского каталога:
+
+```sh
+chown --reference=/var/lib/private/gul-livekit \
+  /var/lib/private/gul-livekit/catalog.json \
+  /var/lib/private/gul-livekit/catalog.json.lock
+```
+
+Не задавайте DynamicUser UID вручную. Systemd может повторно выбрать тот же
+UID и тогда не менять владельца дочерних файлов, созданных root позднее.
+Режимы 0700/0600 сохраняются. Этот сценарий и изолированный запуск managed
+broker под настоящим systemd sandbox проверены на Debian 12.
+Импортируйте экспорт в Gul; не публикуйте его в Git.
 Полная модель прав и ограничения — [CHANNELS.md](../../docs/CHANNELS.md).
 Managed server требует новый клиент с протоколом 2; переключение broker
 требует повторного входа. Проверяйте отсутствие участников перед обновлением.
