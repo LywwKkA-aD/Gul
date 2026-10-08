@@ -43,8 +43,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Локально 367 tests: 365 passed/2 platform skips на macOS. TS coverage:
-89.68% строк, 90.39% ветвей, 88.46% функций. Installed packaged smoke
+Локально 377 tests: 375 passed/2 platform skips на macOS. TS coverage:
+89.92% строк, 90.52% ветвей, 88.55% функций. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:
@@ -54,6 +54,11 @@ npm run build
 GUL_ELECTRON_STAND_DIR=/absolute/path/to/stand \
   npm run test:integration -- e2e/desktop.live.spec.ts
 ```
+
+`e2e/screen-presets.live.spec.ts` проверяет четыре режима 720p30/60 и 1080p30/60:
+параметры захвата и настоящего RTP sender, декодируемое видео через REALITY
+и непрерывность голосового подключения. `e2e/screen-quality.spec.ts` проверяет
+выбор, отмену, сохранение и привязку диалога к текущей сессии без захвата личного экрана.
 
 Этот сценарий использует два Electron клиента, synthetic голос, видео и stereo
 screen audio; он прошёл через обновлённый VPS с 20 циклами демонстрации.

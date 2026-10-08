@@ -26,7 +26,7 @@ ICE. Путь фиксирован, redirect и прямой fallback запре
 | Голос | Mono48k, WebRTC AEC/AGC, RNNoise, input gain/уровень, AudioWorklet VAD |
 | Управление | Mute/deafen, устройства, gain 0–200% и local mute отдельно |
 | Общение | Каналы/roster, чат с историей в памяти по каналам, RTT |
-| Экран | Выбор источника, automatic system audio, 720p30, viewer gain 0–200%, fullscreen/stop |
+| Экран | Выбор источника, automatic system audio, 720p30/60 и 1080p30/60, viewer gain 0–200%, fullscreen/stop |
 | Сохранение | Адрес/ник и password только с согласием через protected safeStorage |
 | Приложение | Диагностика ZIP, GitHub update notice, tray/корректное закрытие |
 | Клавиши | Toggle; hold через платформенный backend с отказом при недоступности |
@@ -36,8 +36,8 @@ settings; raw network logs и личные адреса не входят в dia
 
 ## Что проверено
 
-- 367 unit/security/lifecycle tests: локально macOS 365 passed/2 platform skips;
-  покрытие TS строк/ветвей/функций — 89.68%/90.39%/88.46%, порог 80%.
+- 377 unit/security/lifecycle tests: локально macOS 375 passed/2 platform skips;
+  покрытие TS строк/ветвей/функций — 89.92%/90.52%/88.55%, порог 80%.
 - Самостоятельный Go broker: race/vet/build; broker coverage — 92.8%,
   всего module — 87.3%.
 - Installed packaged smoke с sandbox на четырёх CI целях: Windows x64,
@@ -48,6 +48,8 @@ settings; raw network logs и личные адреса не входят в dia
   неверный пароль и запрещённые адреса/порты.
 - Два настоящих Electron клиента через обновлённый удалённый VPS: двусторонний
   synthetic voice, чат, decoded video/stereo audio и 20 циклов демонстрации.
+- Четыре режима экрана проверяются двумя Chromium-клиентами через REALITY/TURN TCP:
+  выбранные capture constraints, sender encoding и декодируемые кадры.
 - Native Linux X11/Xvfb/PulseAudio capture: movingframes, 720p bounds и
   stereo PCM 440 Гц L / 660 Гц R через TURN/TCP; разделение 49 дБ.
   Собственный Gul 880 Гц исключён на 52 дБ, обычный вывод сохранён.
