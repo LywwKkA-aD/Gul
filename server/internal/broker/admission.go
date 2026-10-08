@@ -1,10 +1,12 @@
 package broker
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -21,6 +23,25 @@ type signalFlow struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 }
+
+// ReverseProxy cancellation closes its backend, but an upstream EOF can leave
+// the frontend read half open while the proxy waits for the other copy loop.
+// Closing the owned hijacked frontend makes cancellation terminate both loops.
+type signalResponseWriter struct {
+	http.ResponseWriter
+	ctx context.Context
+}
+
+func (w signalResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w signalResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, buffered, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil {
+		context.AfterFunc(w.ctx, func() { _ = conn.Close() })
+	}
+	return conn, buffered, err
+}
+
 type admissionClaims struct {
 	jwt.RegisteredClaims
 	Attributes map[string]string `json:"attributes"`
@@ -135,7 +156,7 @@ func (b *gulBroker) registerAdmission(mux *http.ServeMux, cfg PublicConfig) {
 		defer func() { cancel(); b.mu.Lock(); delete(b.flows, flow); close(flow.done); b.mu.Unlock() }()
 		// Track before the upstream request, including its pre-upgrade join.
 		// Cancelling closes the backend WS; completion precedes SFU removal.
-		proxy.ServeHTTP(w, r.WithContext(ctx))
+		proxy.ServeHTTP(signalResponseWriter{ResponseWriter: w, ctx: ctx}, r.WithContext(ctx))
 	}
 	for _, path := range []string{"/rtc", "/rtc/validate", "/rtc/v1", "/rtc/v1/validate"} {
 		mux.HandleFunc(path, handler)
