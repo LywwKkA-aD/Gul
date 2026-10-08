@@ -1,6 +1,6 @@
 # Миграция Gul на Electron
 
-**0.8.0-alpha.8:** миграция исходников завершена. `desktop/` — единственный
+**0.8.0-alpha.9:** миграция исходников завершена. `desktop/` — единственный
 клиент на Electron/TypeScript/React/LiveKit JS. `server/` — самостоятельный
 Go broker. Legacy client/services/frontend, native Go DSP, старые lab/deploy
 и сборочные файлы удалены. Сохранены иконки, нужные attribution и

@@ -1,6 +1,6 @@
 # Работа с Gul
 
-Текущий клиент **0.8.0-alpha.8**: Electron + TypeScript + React + LiveKit JS.
+Текущий клиент **0.8.0-alpha.9**: Electron + TypeScript + React + LiveKit JS.
 Официальный Xray v26.3.27 встроен отдельным executable. Go находится только в
 `server/` и обслуживает broker API. Legacy клиент и эксперименты удалены.
 
