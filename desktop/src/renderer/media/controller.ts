@@ -38,6 +38,8 @@ import {
 import { captureFailureName } from './capture-diagnostics.ts';
 import { speakingIdentities } from './speaking.ts';
 import { ScreenCleanup } from './screen-cleanup.ts';
+import { screenEventCurrent } from './screen-events.ts';
+import { reconcileAudioIntent } from './audio-intent.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
 
 /** Chromium owns microphone, screen, A/V playback and WebRTC. Main owns credentials and REALITY. */
@@ -219,12 +221,12 @@ export class MediaController {
         try {
           const confirmed = await this.dependencies.audioState(state);
           if (this.epoch !== epoch || this.audioRevision !== revision) return;
-          this.preferences = Object.freeze({ muted: confirmed.muted, deafened: confirmed.deafened });
-          this.update({ ...confirmed, error: '' });
+          this.preferences = reconcileAudioIntent(this.preferences, confirmed);
+          this.update({ ...this.preferences, error: '' });
           this.applyAudio();
-          if (!this.mic.captured && !confirmed.muted && !confirmed.deafened && this.voice)
+          if (!this.mic.captured && !this.preferences.muted && !this.preferences.deafened && this.voice)
             await this.enableMicrophone(this.voice, epoch);
-          else if (this.mic.captured) await this.mic.synchronize(confirmed);
+          else if (this.mic.captured) await this.mic.synchronize(this.preferences);
         } catch {
           if (this.epoch === epoch && this.audioRevision === revision) {
             // Broker metadata failure must never undo the user's local mute/deafen.
@@ -692,9 +694,7 @@ export class MediaController {
         room.off(event, handler);
       });
     };
-    this.unbind.set(room, () => {
-      cleanups.forEach((cleanup) => cleanup());
-    });
+    this.unbind.set(room, () => cleanups.forEach((cleanup) => cleanup()));
     on(RoomEvent.ParticipantConnected, (p) => {
       if (current()) {
         if (kind === 'voice') this.participants(room);
@@ -702,13 +702,13 @@ export class MediaController {
       }
     });
     on(RoomEvent.ParticipantDisconnected, (p) => {
-      if (current()) {
-        this.screens.delete(p.identity);
-        this.refreshScreens();
-        this.playback.removeParticipant(p.identity);
-        this.update({ videos: this.snapshot.videos.filter((v) => v.identity !== p.identity) });
-        if (kind === 'voice') this.participants(room);
-      }
+      if (!current()) return;
+      if (kind === 'voice') this.screens.delete(p.identity);
+      this.refreshScreens();
+      if (!participantId(p.identity, kind)) return;
+      this.playback.removeParticipant(p.identity);
+      this.update({ videos: this.snapshot.videos.filter((v) => v.identity !== p.identity) });
+      if (kind === 'voice') this.participants(room);
     });
     on(RoomEvent.TrackPublished, (pub, p) => {
       if (current()) this.published(room, pub, p, kind);
@@ -723,7 +723,7 @@ export class MediaController {
       }
     });
     on(RoomEvent.TrackUnpublished, (pub, p) => {
-      if (!current()) return;
+      if (!current() || !screenEventCurrent(this.screens.get(p.identity), pub)) return;
       if (pub.source === Track.Source.ScreenShare) {
         this.screens.delete(p.identity);
         this.refreshScreens();
@@ -734,12 +734,14 @@ export class MediaController {
       }
     });
     on(RoomEvent.TrackMuted, (pub, p) => {
+      if (!screenEventCurrent(this.screens.get(p.identity), pub)) return;
       if (current() && this.screens.has(p.identity) && pub.source === Track.Source.ScreenShare) {
         this.screens.set(p.identity, { ...this.screens.get(p.identity)!, state: 'paused' });
         this.refreshScreens();
       }
     });
     on(RoomEvent.TrackUnmuted, (pub, p) => {
+      if (!screenEventCurrent(this.screens.get(p.identity), pub)) return;
       if (current() && pub.source === Track.Source.ScreenShare)
         this.published(room, pub as RemoteTrackPublication, p as RemoteParticipant, kind);
     });

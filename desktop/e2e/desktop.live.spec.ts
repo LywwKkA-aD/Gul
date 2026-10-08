@@ -166,8 +166,8 @@ async function stereoSeparation(page: Page) {
   });
 }
 
-async function movingImage(page: Page) {
-  return page.locator('video').evaluate(async (element) => {
+async function movingImage(page: Page, selector = 'video') {
+  return page.locator(selector).evaluate(async (element) => {
     const video = element as HTMLVideoElement;
     const canvas = document.createElement('canvas');
     canvas.width = 1;
@@ -276,6 +276,8 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await expect.poll(() => playbackPeak(b)).toBeLessThan(0.005);
     await b.getByRole('button', { name: 'Включить звук', exact: true }).click();
     await expect.poll(() => playbackPeak(b)).toBeGreaterThan(0.005);
+    await expect(b.getByRole('button', { name: 'Выключить микрофон', exact: true })).toBeVisible();
+    await expect.poll(() => audible(a, 'voice')).toBeGreaterThan(0.005);
     await a.getByLabel('Сообщение', { exact: true }).fill('REALITY desktop integration');
     await a.getByRole('button', { name: 'Отправить сообщение' }).click();
     await expect(b.getByText('REALITY desktop integration', { exact: true })).toBeVisible();
@@ -404,6 +406,80 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
           )
           .toBeLessThanOrEqual(2);
       }
+    }
+    // Both clients retain their screen room while publishing and watching.
+    // Restart one publication without ending the other client's own capture.
+    for (const page of pages) await expect.poll(() => audible(page, 'voice')).toBeGreaterThan(0.005);
+    for (const page of pages) await startScreen(page);
+    for (let index = 0; index < pages.length; index++) {
+      await pages[index]
+        .getByRole('button', { name: new RegExp(`desktop-peer-${1 - index}.*Смотреть экран`) })
+        .click();
+    }
+    const receivedScreen = async (page: Page) => {
+      await expect
+        .poll(() =>
+          page
+            .locator('.screen-viewer video')
+            .evaluateAll((elements) =>
+              elements.some(
+                (element) => (element as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames > 2,
+              ),
+            ),
+        )
+        .toBe(true);
+      await expect.poll(() => movingImage(page, '.screen-viewer video')).toBe(true);
+      await expect.poll(() => audible(page, 'screen')).toBeGreaterThan(0.005);
+      await expect.poll(() => stereoSeparation(page)).toBeGreaterThan(12);
+      await expect.poll(() => audible(page, 'voice')).toBeGreaterThan(0.005);
+    };
+    for (const page of pages) await receivedScreen(page);
+    for (let cycle = 0; cycle < 4; cycle++) {
+      const publisher = pages[cycle % 2];
+      const viewer = pages[1 - (cycle % 2)];
+      await publisher.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
+      await expect(viewer.locator('.screen-viewer')).toHaveCount(0);
+      await expect(
+        viewer.getByRole('button', { name: 'Остановить демонстрацию', exact: true }),
+      ).toBeVisible();
+      if (cycle % 2) {
+        await publisher.getByRole('button', { name: 'Прекратить просмотр', exact: true }).click();
+        await expect(publisher.locator('video')).toHaveCount(0);
+      } else await receivedScreen(publisher);
+      await startScreen(publisher);
+      if (cycle % 2)
+        await publisher
+          .getByRole('button', { name: new RegExp(`desktop-peer-${1 - (cycle % 2)}.*Смотреть экран`) })
+          .click();
+      await viewer
+        .getByRole('button', { name: new RegExp(`desktop-peer-${cycle % 2}.*Смотреть экран`) })
+        .click();
+      for (const page of pages) await receivedScreen(page);
+    }
+    for (const page of pages)
+      await page.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
+    for (const page of pages) {
+      await expect(page.locator('video')).toHaveCount(0);
+      await expect.poll(() => audible(page, 'voice')).toBeGreaterThan(0.005);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            (window as unknown as { __gulTestCaptures: MediaStream[] }).__gulTestCaptures.every((stream) =>
+              stream.getTracks().every((track) => track.readyState === 'ended'),
+            ),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __gulTestPeers: RTCPeerConnection[] }).__gulTestPeers.filter(
+                (peer) => peer.connectionState !== 'closed',
+              ).length,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
     }
     await a.getByRole('button', { name: 'Отключиться' }).click();
     await expect(a.getByRole('button', { name: 'Подключиться', exact: true })).toBeVisible();
