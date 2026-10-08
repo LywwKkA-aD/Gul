@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { build } from 'esbuild';
 
@@ -27,7 +27,7 @@ async function fixture(t: test.TestContext) {
   });
   const output = join(directory, 'ipc.mjs');
   await build({
-    entryPoints: [new URL('../src/main/ipc.ts', import.meta.url).pathname],
+    entryPoints: [fileURLToPath(new URL('../src/main/ipc.ts', import.meta.url))],
     bundle: true,
     platform: 'node',
     format: 'esm',
