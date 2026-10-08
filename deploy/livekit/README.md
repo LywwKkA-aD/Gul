@@ -97,6 +97,42 @@ Xray UUID выводится из прежнего пароля domain-separated
 пользователям отдельно от Git. Перезапуск broker обрывает его логические сессии;
 graceful reload HAProxy сохраняет текущие соединения.
 
+## Постоянные каналы и владелец
+
+Для новой установки добавьте `--managed-channels` к `prepare.py` и
+`prepare_reality.py`. Broker получит `statePath`, все HTTP signaling маршруты
+будут направлены через admission. Для обновления существующего сервера
+сохраните его пароль, TLS и REALITY ключи; замените только broker, его unit,
+добавьте statePath и проверенную маршрутизацию admission.
+
+Unit задаёт `StateDirectory=gul-livekit` и режим 0700. Используется
+`/var/lib/private/gul-livekit/catalog.json`: systemd создаёт симлинк
+`/var/lib/gul-livekit`, который отвергает строгая проверка приватного каталога.
+Это поведение проверено с DynamicUser на Debian 12/systemd 252.
+
+До первого запуска managed broker администратор один раз выполняет bootstrap
+в приватном каталоге с `-bootstrap-owner -config FILE -owner-output FILE`.
+При использовании systemd можно выполнить bootstrap отдельным transient
+unit с такими же DynamicUser/StateDirectory ограничениями и записать экспорт
+внутри этого каталога. После запуска основного unit его владелец каталога
+будет выставлен systemd. Импортируйте экспорт в Gul; не публикуйте его в Git.
+Полная модель прав и ограничения — [CHANNELS.md](../../docs/CHANNELS.md).
+Managed server требует новый клиент с протоколом 2; переключение broker
+требует повторного входа. Проверяйте отсутствие участников перед обновлением.
+
+Дополнительный локальный stand:
+
+```sh
+python3 deploy/livekit/stand_reality.py --managed --output bin/managed-fixture \
+  --xray "$xray_dir/xray" --broker bin/gul-livekit-server
+cd desktop
+GUL_MANAGED_STAND_DIR="$PWD/../bin/managed-fixture" \
+  npm run test:integration -- e2e/managed-channels.live.spec.ts
+```
+
+Он создаёт отдельный private owner export. Реальная проверка encrypted
+identity restart — `member-key-restart.live.spec.ts`, с защищённым OS store.
+
 ## Тесты и локальный стенд
 
 ```sh
@@ -145,5 +181,8 @@ REALITY клиенты делят loopback IP и его login limit. Lease — 6
 продлевается polling. Logout, смена канала и истечение lease удаляют активные
 voice/screen participants; неудачные удаления повторяются maintenance циклом.
 Первичный JWT действует 90 секунд, SFU может его обновлять. RemoveParticipant
-не отзывает ранее выданный JWT. Комнаты рассчитаны на доверенную компанию с
-общим паролем; broker bearer отзывается сразу при logout.
+не отзывает ранее выданный JWT криптографически. В managed режиме broker
+admission запрещает его повторное использование после logout, смены канала
+или отзыва ACL; LiveKit refresh сохраняет обязательные nonce/attributes.
+Broker bearer отзывается сразу при logout. Без statePath сохраняется прежний
+режим доверенной компании с общим паролем.

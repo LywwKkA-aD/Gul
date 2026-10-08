@@ -1,6 +1,6 @@
 # Сервер Gul
 
-Клиент 0.8.0-alpha.5 работает с LiveKit через встроенный VLESS + REALITY.
+Клиент 0.8.0-alpha.6 работает с LiveKit через встроенный VLESS + REALITY.
 Go broker выделен в самостоятельный `server/`; старые голосовые серверы и
 транспортные эксперименты текущей версии не нужны. Подробная установка,
 конфиги systemd/firewall и локальный fixture: [deploy/livekit](../deploy/livekit/README.md).
@@ -10,7 +10,8 @@ Go broker выделен в самостоятельный `server/`; стары
 - HAProxy принимает TCP 443, разделяет REALITY и внутренний TLS.
 - Серверный Xray v26.3.27 принимает REALITY на loopback и разрешает только
   TCP к локальному TLS 443; прочие назначения блокируются.
-- TLS ветка направляет Gul HTTPS API к broker, WSS к LiveKit, TURN/TLS к SFU.
+- TLS ветка направляет Gul HTTPS API к broker, TURN/TLS к SFU. В managed
+  режиме WSS проходит через broker admission перед LiveKit.
 - LiveKit v1.13.8 закреплён по image digest. TURN relay ограничен адресом SFU.
 - Go broker выдаёт сессионный bearer и отдельные voice/screen grants,
   обслуживает каналы/roster и удаление медиа при logout/смене/истечении lease.
@@ -34,6 +35,14 @@ CLI принимает `-config` с приватным `broker.json`. Форма
 bearer и ограничения входа. Config должен быть regular file с 0400/0600;
 systemd credential подходит. Серверные API ключи не выдаются клиентам.
 
+Необязательный `statePath` включает постоянный каталог, владельца, приглашения
+и закрытые каналы. Для systemd DynamicUser используется канонический путь
+`/var/lib/private/gul-livekit/catalog.json`; `StateDirectory=gul-livekit`
+создаёт родительский каталог 0700. Публичный `/var/lib/gul-livekit` — симлинк
+и не подходит строгому no-symlink guard хранилища.
+Bootstrap владельца и модель доступа описаны в [CHANNELS.md](CHANNELS.md).
+Перезапуск не теряет каталог или личные ключи, но требует нового входа сессий.
+
 ## Данные подключения
 
 Владелец передаёт полный `livekit+vless://…` профиль и отдельно случайный пароль
@@ -49,8 +58,11 @@ Broker хранит до 32 сессий в памяти. Lease 60 секунд 
 Login limit — 20 попыток в минуту на IP, 120 суммарно; REALITY клиенты делят
 loopback источник. Initial JWT действует 90 секунд, LiveKit может его обновлять.
 Logout отзывает broker bearer сразу и удаляет активные media participants;
-уже выданный JWT не становится отозванным криптографически. Комнаты предназначены
-для доверенной компании с общим паролем.
+В legacy режиме уже выданный JWT не становится отозванным криптографически.
+В managed режиме admission проверяет живую сессию, nonce, revision и актуальный
+ACL перед каждым join/reconnect/validation, включая обновлённые SFU токены.
+Отзыв доступа закрывает signaling и удаляет voice/screen participants;
+при недоступном cleanup возвращается ошибка с повтором maintenance.
 
 Перезапуск broker теряет логические сессии и требует нового входа.
 Graceful reload HAProxy сохраняет текущие соединения; его используют для
@@ -64,10 +76,14 @@ Firewall защищает внутренние plaintext/admin/TURN порты �
 конфиг не меняется. Smoke проверяет доверенный TLS, HTTPS/TURN через REALITY,
 отказ с неправильным паролем и запрет другого назначения.
 
-На обновлённом действующем VPS проверены два Electron клиента через REALITY/TURN:
+В предыдущей версии alpha.5 на действующем VPS проверены два Electron клиента через REALITY/TURN:
 двусторонний synthetic voice, чат, видео и stereo audio с 20 циклами демонстрации.
 На последней проверке серверные службы active, перезапусков и OOM нет;
-HTTPS healthz прошёл с проверкой TLS. Server module coverage — 87.3%; broker CI прошёл. Native Linux capture
+HTTPS healthz прошёл с проверкой TLS. Новая локальная реализация каталога:
+43 Go tests с race detector, покрытие модуля 82.7%, vet чистый.
+Настоящий локальный LiveKit подтвердил refresh nonce, удаление обоих
+участников при отзыве, отказ старых JWT и сохранение ACL после restart.
+Native Linux capture
 на DISPLAY/PulseAudio стенде подтвердил movingframes в пределах 720p и stereo
 PCM 440 Гц L / 660 Гц R через TURN/TCP. Physical mic, игра Windows 10 ↔ Ubuntu 26,
 физическое PTT и часовой soak остаются отдельными проверками.

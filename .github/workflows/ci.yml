@@ -127,10 +127,10 @@ jobs:
         run: npm run test:integration -- e2e/packaged.spec.ts
       - name: Test capture picker, settings and saved-login components
         if: runner.os != 'Linux'
-        run: npm run test:integration -- e2e/capture-picker-ui.spec.ts e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts
+        run: npm run test:integration -- e2e/capture-picker-ui.spec.ts e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts e2e/channel-management.spec.ts
       - name: Test settings and saved-login interaction on Linux
         if: runner.os == 'Linux'
-        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts
+        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts e2e/channel-management.spec.ts
       - name: Test Windows screen audio transport
         if: runner.os == 'Windows'
         run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts
@@ -146,7 +146,7 @@ jobs:
   media:
     name: Chromium media over REALITY
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -201,6 +201,19 @@ jobs:
           chmod 700 "$PULSE_RUNTIME_PATH"
           pulseaudio --start --exit-idle-time=-1
           dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/native-capture.spec.ts
+      - name: Create isolated managed-channel server
+        run: python3 deploy/livekit/stand_reality.py --managed --output "$RUNNER_TEMP/gul-managed-stand" --xray desktop/resources/xray/linux-x64/xray --broker "$RUNNER_TEMP/gul-livekit-server"
+      - name: Test real SFU admission, access revocation and persisted channels
+        working-directory: desktop
+        env:
+          GUL_MANAGED_STAND_DIR: ${{ runner.temp }}/gul-managed-stand
+        run: npm run test:integration -- e2e/managed-channels.live.spec.ts
+      - name: Test voice and stereo screen through managed admission
+        working-directory: desktop
+        env:
+          GUL_ELECTRON_STAND_DIR: ${{ runner.temp }}/gul-managed-stand
+          PULSE_RUNTIME_PATH: ${{ runner.temp }}/gul-pulse
+        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts
       - name: Test native picker in isolated desktop
         working-directory: desktop
         env:
@@ -233,11 +246,26 @@ jobs:
           mkdir -p "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_DATA_HOME" "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
           env -u GNOME_KEYRING_CONTROL -u GNOME_KEYRING_PID dbus-run-session -- xvfb-run -a sh -c 'printf "%s" "gul-fixture-unlock" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; npm run test:integration -- e2e/password-restart.spec.ts'
+      - name: Test protected owner identity after complete application restart
+        working-directory: desktop
+        env:
+          GUL_MANAGED_STAND_DIR: ${{ runner.temp }}/gul-managed-stand
+          XDG_CURRENT_DESKTOP: GNOME
+          XDG_DATA_HOME: ${{ runner.temp }}/gul-member-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/gul-member-config
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/gul-member-runtime
+        run: |
+          mkdir -p "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_DATA_HOME" "$XDG_DATA_HOME/keyrings" "$XDG_CONFIG_HOME" "$XDG_RUNTIME_DIR"
+          env -u GNOME_KEYRING_CONTROL -u GNOME_KEYRING_PID dbus-run-session -- xvfb-run -a sh -c 'printf "%s" "gul-fixture-unlock" | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; npm run test:integration -- e2e/member-key-restart.live.spec.ts'
       - name: Remove isolated test containers
         if: always()
         run: |
           if test -f "$RUNNER_TEMP/gul-electron-stand/containers.json"; then
             python3 deploy/livekit/stand_reality.py --remove "$RUNNER_TEMP/gul-electron-stand"
+          fi
+          if test -f "$RUNNER_TEMP/gul-managed-stand/containers.json"; then
+            python3 deploy/livekit/stand_reality.py --remove "$RUNNER_TEMP/gul-managed-stand"
           fi
       - name: Stop isolated audio server
         if: always()
