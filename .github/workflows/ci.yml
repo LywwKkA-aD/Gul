@@ -127,10 +127,10 @@ jobs:
         run: npm run test:integration -- e2e/packaged.spec.ts
       - name: Test capture picker, settings and saved-login components
         if: runner.os != 'Linux'
-        run: npm run test:integration -- e2e/capture-picker-ui.spec.ts e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts
+        run: npm run test:integration -- e2e/capture-picker-ui.spec.ts e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts
       - name: Test settings and saved-login interaction on Linux
         if: runner.os == 'Linux'
-        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts
+        run: dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/settings-drag.spec.ts e2e/connect-layout.spec.ts e2e/screen-quality.spec.ts
       - name: Test Windows screen audio transport
         if: runner.os == 'Windows'
         run: npm run test:integration -- e2e/windows-screen-pcm.spec.ts
@@ -189,7 +189,7 @@ jobs:
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=gul_ci_output channels=2 rate=48000
           pactl set-default-sink gul_ci_output
-          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts
+          dbus-run-session -- xvfb-run -a npm run test:integration -- e2e/desktop.live.spec.ts e2e/sdp-bundle.live.spec.ts e2e/sdp-sdk.spec.ts e2e/audio-status.live.spec.ts e2e/dialogs.live.spec.ts e2e/windows-screen-pcm.spec.ts e2e/capture-picker-ui.spec.ts e2e/voice-noise.live.spec.ts e2e/screen-presets.live.spec.ts
       - name: Test native Linux desktop and system audio
         working-directory: desktop
         env:

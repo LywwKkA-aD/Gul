@@ -3,10 +3,11 @@ import {
   createLocalScreenTracks,
   type LocalAudioTrack,
   type LocalVideoTrack,
+  type ScreenShareCaptureOptions,
 } from 'livekit-client';
 import type { ScreenCapture } from './model.ts';
 import { defaultVoiceSettings, type VoiceSettings } from './voice-gate.ts';
-import { screenResolution } from './screen-settings.ts';
+import { defaultScreenQuality, screenPreset, type ScreenQuality } from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
 import { attachLinuxScreenAudio, findPrivateAudioDevice } from './linux-screen-audio.ts';
 import { attachWindowsScreenAudio } from './windows-screen-audio.ts';
@@ -27,25 +28,35 @@ export function microphone(
 ): Promise<LocalAudioTrack> {
   return createLocalAudioTrack(voiceCaptureOptions(settings, deviceId));
 }
-export async function captureScreen(withAudio: boolean): Promise<ScreenCapture> {
+export function screenCaptureOptions(
+  withAudio: boolean,
+  quality: ScreenQuality = defaultScreenQuality,
+): ScreenShareCaptureOptions {
+  const { width, height, frameRate } = screenPreset(quality);
+  return {
+    resolution: { width, height, frameRate },
+    audio: withAudio
+      ? {
+          channelCount: 2,
+          sampleRate: 48000,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          restrictOwnAudio: true,
+        }
+      : false,
+    systemAudio: withAudio ? 'include' : 'exclude',
+    selfBrowserSurface: 'exclude',
+    contentHint: 'motion',
+  };
+}
+export async function captureScreen(
+  withAudio: boolean,
+  quality: ScreenQuality = defaultScreenQuality,
+): Promise<ScreenCapture> {
   let display: ScreenCapture | undefined;
   try {
-    const tracks = await createLocalScreenTracks({
-      resolution: screenResolution,
-      audio: withAudio
-        ? {
-            channelCount: 2,
-            sampleRate: 48000,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            restrictOwnAudio: true,
-          }
-        : false,
-      systemAudio: withAudio ? 'include' : 'exclude',
-      selfBrowserSurface: 'exclude',
-      contentHint: 'motion',
-    });
+    const tracks = await createLocalScreenTracks(screenCaptureOptions(withAudio, quality));
     display = { tracks: tracks as (LocalVideoTrack | LocalAudioTrack)[] };
     if (!withAudio) return display;
     const capabilities = await window.gul.captureCapabilities();

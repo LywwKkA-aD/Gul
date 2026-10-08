@@ -24,6 +24,8 @@ import { PreferenceUpdateQueue, mergePreferences, type PreferencePatch } from '.
 import { RangeUpdates, type RangePatch } from './range-updates.ts';
 import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
+import { ShareStartDialog } from './ShareStartDialog.tsx';
+import { screenPreset, type ScreenQuality } from './media/screen-settings.ts';
 import { selectedSavedServer, passwordSaveNotice, passwordStorageRecoveryMessage } from './saved-login.ts';
 import {
   ParticipantControls,
@@ -81,6 +83,7 @@ export function App() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [shareRequest, setShareRequest] = useState<MediaSession | null>(null);
   const [preferences, setPreferences] = useState(readPreferences);
   const preferenceRef = useRef(preferences);
   const hotkeyRevision = useRef(0);
@@ -97,6 +100,17 @@ export function App() {
     setPreferences(preferenceRef.current);
     savePreferences(preferenceRef.current);
   };
+  useEffect(() => {
+    if (
+      shareRequest &&
+      (session !== shareRequest ||
+        busy ||
+        snapshot.state !== 'connected' ||
+        snapshot.sharing ||
+        snapshot.pendingShare)
+    )
+      setShareRequest(null);
+  }, [shareRequest, session, busy, snapshot.state, snapshot.sharing, snapshot.pendingShare]);
   useEffect(() => {
     let active = true;
     void api
@@ -252,6 +266,7 @@ export function App() {
     setBroker(null);
     setBusy(true);
     setSelectedUser(null);
+    setShareRequest(null);
     setPassword('');
     history.reset();
     setChat(null);
@@ -273,6 +288,7 @@ export function App() {
     setBusy(true);
     setError('');
     setSelectedUser(null);
+    setShareRequest(null);
     try {
       if (!(await lifecycle.step(current, media.leave)).accepted) return;
       const joined = await lifecycle.step(current, () =>
@@ -327,9 +343,14 @@ export function App() {
       if (lifecycle.finish(current)) setBusy(false);
     }
   };
-  const changePreferences = (patch: PreferencePatch) =>
-    preferenceUpdates.run(
-      patch,
+  const changePreferences = (patch: PreferencePatch) => {
+    const { screenQuality, ...change } = patch;
+    // Quality has no hardware work: preserve new intent while older device or DSP work awaits.
+    if (screenQuality !== undefined)
+      persistPreferences(mergePreferences(preferenceRef.current, { screenQuality }));
+    if (!Object.keys(change).length) return Promise.resolve();
+    return preferenceUpdates.run(
+      change,
       () => preferenceRef.current,
       async (next, fields) => {
         if (fields.audioinput !== undefined) await media.setDevice('audioinput', next.audioinput);
@@ -356,6 +377,30 @@ export function App() {
         persistPreferences(mergePreferences(preferenceRef.current, fields));
       },
     );
+  };
+  const startShare = (quality: ScreenQuality) => {
+    const requested = shareRequest;
+    setShareRequest(null);
+    const current = media.getSnapshot();
+    if (
+      !requested ||
+      sessionRef.current !== requested ||
+      busy ||
+      current.state !== 'connected' ||
+      current.sharing ||
+      current.pendingShare
+    )
+      return;
+    persistPreferences(mergePreferences(preferenceRef.current, { screenQuality: quality }));
+    // Invoke capture in this click stack; persisting settings must not consume the user gesture.
+    void run(() =>
+      media.startScreen(
+        api.screen({ channelId: requested.channelId, revision: requested.revision }),
+        true,
+        quality,
+      ),
+    );
+  };
   const changeRanges = (patch: RangePatch) =>
     rangeUpdates.run(patch, (voice) => changePreferences({ voice }));
   const changeLocalAudio = (identity: string, patch: Partial<LocalAudioPreference>) => {
@@ -523,19 +568,16 @@ export function App() {
                 </button>
                 <button
                   className={`icon-button ${snapshot.sharing ? 'active' : ''}`}
-                  disabled={snapshot.pendingShare || (!snapshot.sharing && snapshot.state !== 'connected')}
-                  aria-label={snapshot.sharing ? 'Остановить демонстрацию' : 'Показать экран'}
-                  title={snapshot.sharing ? 'Остановить демонстрацию' : 'Показать экран · 720p / 30 FPS'}
-                  onClick={() =>
-                    void run(() =>
-                      snapshot.sharing
-                        ? media.stopScreen()
-                        : media.startScreen(
-                            api.screen({ channelId: session.channelId, revision: session.revision }),
-                            true,
-                          ),
-                    )
+                  disabled={
+                    snapshot.pendingShare || (!snapshot.sharing && (busy || snapshot.state !== 'connected'))
                   }
+                  aria-label={snapshot.sharing ? 'Остановить демонстрацию' : 'Показать экран'}
+                  title={
+                    snapshot.sharing
+                      ? `Остановить демонстрацию${snapshot.screenQuality ? ` · ${screenPreset(snapshot.screenQuality).label}` : ''}`
+                      : `Показать экран · ${screenPreset(preferences.screenQuality).label}`
+                  }
+                  onClick={() => (snapshot.sharing ? void run(media.stopScreen) : setShareRequest(session))}
                 >
                   <Icon name="screen" />
                 </button>
@@ -551,6 +593,7 @@ export function App() {
 
               {snapshot.sharing && (
                 <small className="capture-status">
+                  {snapshot.screenQuality ? `${screenPreset(snapshot.screenQuality).label} · ` : ''}
                   {snapshot.screenAudio === 'capturing'
                     ? 'Экран и звук компьютера'
                     : snapshot.screenAudio === 'unavailable'
@@ -606,6 +649,13 @@ export function App() {
         </div>
       )}
       <CapturePickerHost />
+      {shareRequest && (
+        <ShareStartDialog
+          quality={preferences.screenQuality}
+          onStart={startShare}
+          onClose={() => setShareRequest(null)}
+        />
+      )}
       {settings && (
         <SettingsDialog
           preferences={preferences}

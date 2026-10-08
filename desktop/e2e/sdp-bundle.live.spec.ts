@@ -1,3 +1,4 @@
+import { startScreen } from './start-screen.ts';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
@@ -296,7 +297,7 @@ test('solo REALITY publisher keeps local offers and remote answers conformed ove
     await expect(page.locator('.channel-users > button')).toHaveCount(1);
     for (let cycle = 0; cycle < 12; cycle++) {
       await expect(page.locator('.channel-users > button')).toHaveCount(1);
-      await page.getByRole('button', { name: 'Показать экран', exact: true }).click();
+      await startScreen(page);
       try {
         await expect(page.getByRole('button', { name: 'Остановить демонстрацию', exact: true })).toBeVisible({
           timeout: 20_000,
@@ -434,22 +435,20 @@ test('three REALITY clients publish, late join, watch, restart and rejoin withou
     };
     for (let i = 0; i < 2; i++) await connectPeer(i);
     const [a, b] = pages;
-    await Promise.all(
-      pages.map((page) => page.getByRole('button', { name: 'Показать экран', exact: true }).click()),
-    );
+    await Promise.all(pages.map((page) => startScreen(page)));
     await a.getByRole('button', { name: /sdp-peer-1.*Смотреть экран/ }).click();
     await b.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
     await Promise.all(pages.map(decoded));
     const c = await connectPeer(2);
     await c.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
     await decoded(c);
-    await c.getByRole('button', { name: 'Показать экран', exact: true }).click();
+    await startScreen(c);
     await a.getByRole('button', { name: /sdp-peer-2.*Смотреть экран/ }).click();
     await decoded(a);
     for (let cycle = 0; cycle < 3; cycle++) {
       await a.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
       await expect(b.locator('.screen-viewer video')).toHaveCount(0);
-      await a.getByRole('button', { name: 'Показать экран', exact: true }).click();
+      await startScreen(a);
       await b.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();
       await decoded(b);
       await c.getByRole('button', { name: /sdp-peer-0.*Смотреть экран/ }).click();

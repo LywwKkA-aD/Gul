@@ -1,4 +1,5 @@
 import { defaultVoiceSettings, voiceSettings, type VoiceSettings } from './media/voice-gate.ts';
+import { defaultScreenQuality, parseScreenQuality, type ScreenQuality } from './media/screen-settings.ts';
 export interface Preferences {
   readonly audioinput: string;
   readonly audiooutput: string;
@@ -7,6 +8,7 @@ export interface Preferences {
   readonly voice: VoiceSettings;
   readonly soundNotifications: boolean;
   readonly hotkeyMode: 'toggle' | 'hold';
+  readonly screenQuality: ScreenQuality;
 }
 
 const defaults: Preferences = Object.freeze({
@@ -17,6 +19,7 @@ const defaults: Preferences = Object.freeze({
   voice: defaultVoiceSettings,
   soundNotifications: false,
   hotkeyMode: 'toggle',
+  screenQuality: defaultScreenQuality,
 });
 
 export function readSavedString(key: 'gul.address' | 'gul.username'): string {
@@ -60,6 +63,7 @@ export function readPreferences(): Preferences {
       voice: readVoice(value.voice),
       soundNotifications: value.soundNotifications === true,
       hotkeyMode: value.hotkeyMode === 'hold' ? 'hold' : 'toggle',
+      screenQuality: parseScreenQuality(value.screenQuality),
     });
   } catch {
     return defaults;

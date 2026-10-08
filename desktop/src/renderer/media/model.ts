@@ -1,7 +1,8 @@
-import type { LocalAudioTrack, LocalVideoTrack, Room, Track } from 'livekit-client';
+import { Track, type LocalAudioTrack, type LocalVideoTrack, type Room } from 'livekit-client';
 import type { AudioState, MediaGrant } from '../../shared/contracts.ts';
 import { defaultVoiceSettings, type VoiceSettings, type VoiceReading } from './voice-gate.ts';
 import type { VoiceProcessorHandle } from './voice-processor.ts';
+import type { ScreenQuality } from './screen-settings.ts';
 
 export interface ParticipantInfo {
   readonly identity: string;
@@ -42,6 +43,7 @@ export interface Snapshot extends AudioState {
   readonly speakers: readonly string[];
   readonly pingMs: number | null;
   readonly sharing: boolean;
+  readonly screenQuality: ScreenQuality | null;
   readonly pendingShare: boolean;
   readonly screenAudio: 'off' | 'capturing' | 'unavailable';
   readonly micLevel: number;
@@ -52,6 +54,24 @@ export interface Snapshot extends AudioState {
 export interface ScreenCapture {
   readonly tracks: readonly (LocalVideoTrack | LocalAudioTrack)[];
   readonly cleanup?: () => void;
+}
+export interface ActiveScreenCapture extends ScreenCapture {
+  readonly room: Room;
+  readonly generation: number;
+  readonly ended: () => void;
+  released: boolean;
+}
+export function screenCaptureTracks(capture: ScreenCapture, withAudio: boolean) {
+  const video = capture.tracks.filter((track) => track.kind === Track.Kind.Video);
+  const audio = capture.tracks.filter((track) => track.kind === Track.Kind.Audio);
+  if (
+    video.length !== 1 ||
+    audio.length > 1 ||
+    (!withAudio && audio.length) ||
+    video.length + audio.length !== capture.tracks.length
+  )
+    throw new Error('Invalid capture');
+  return { video, audio };
 }
 export interface Dependencies {
   readonly screenGrant: () => Promise<MediaGrant>;
@@ -64,7 +84,7 @@ export interface Dependencies {
     reading: (reading: Pick<VoiceReading, 'level' | 'active'>) => void,
     failure: () => void,
   ) => Promise<VoiceProcessorHandle | undefined>;
-  readonly captureFactory?: (withAudio: boolean) => Promise<ScreenCapture>;
+  readonly captureFactory?: (withAudio: boolean, quality?: ScreenQuality) => Promise<ScreenCapture>;
   readonly audioElementFactory?: () => HTMLAudioElement;
   /** Use only after this machine's actual WebRTC H.264 encoder was measured. */
   readonly preferH264?: () => Promise<boolean>;
@@ -82,6 +102,7 @@ export function initialSnapshot(): Snapshot {
     speakers: Object.freeze([]),
     pingMs: null,
     sharing: false,
+    screenQuality: null,
     pendingShare: false,
     screenAudio: 'off',
     micLevel: 0,

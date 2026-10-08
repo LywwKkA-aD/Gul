@@ -1,3 +1,4 @@
+import { startScreen } from './start-screen.ts';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -423,7 +424,7 @@ test('native Linux game stereo excludes Gul while callers remain audible through
       .filter((line) => line.includes('gul_share_')).length;
     await apps[0].evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await publisher.bringToFront();
-    await publisher.getByRole('button', { name: 'Показать экран', exact: true }).click();
+    await startScreen(publisher);
     await expect
       .poll(
         () =>

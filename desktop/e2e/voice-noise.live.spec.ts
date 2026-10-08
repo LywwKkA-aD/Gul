@@ -1,3 +1,4 @@
+import { startScreen } from './start-screen.ts';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -142,9 +143,7 @@ test('two desktop peers preserve speech, measure fan/key suppression and maintai
     // Linux native screen audio requires real private input enumeration, which fake
     // microphone flags hide. Its capture/exclusion proof runs in the native suite.
     if (process.platform !== 'linux') {
-      await Promise.all(
-        pages.map((page) => page.getByRole('button', { name: 'Показать экран', exact: true }).click()),
-      );
+      await Promise.all(pages.map((page) => startScreen(page)));
       await pages[0].getByRole('button', { name: /noise-peer-1.*Смотреть экран/ }).click();
       await pages[1].getByRole('button', { name: /noise-peer-0.*Смотреть экран/ }).click();
       await Promise.all(

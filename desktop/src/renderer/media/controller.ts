@@ -14,6 +14,8 @@ import type { AudioState, MediaGrant, MediaSession } from '../../shared/contract
 import { audioElement, captureScreen } from './capture.ts';
 import {
   initialSnapshot,
+  screenCaptureTracks,
+  type ActiveScreenCapture as Capture,
   type Dependencies,
   type ScreenCapture,
   type ScreenInfo,
@@ -26,18 +28,17 @@ import { Devices } from './devices.ts';
 import { Microphone } from './microphone.ts';
 import { microphoneReading } from './microphone-reading.ts';
 import type { VoiceSettings } from './voice-gate.ts';
-import { screenPublishOptions } from './screen-settings.ts';
+import {
+  defaultScreenQuality,
+  parseScreenQuality,
+  screenPublishOptions,
+  screenVideoConstraints,
+  type ScreenQuality,
+} from './screen-settings.ts';
 import { captureFailureName } from './capture-diagnostics.ts';
 import { speakingIdentities } from './speaking.ts';
 import { ScreenCleanup } from './screen-cleanup.ts';
 export type { Snapshot, ScreenCapture, ScreenInfo } from './model.ts';
-
-interface Capture extends ScreenCapture {
-  readonly room: Room;
-  readonly generation: number;
-  readonly ended: () => void;
-  released: boolean;
-}
 
 /** Chromium owns microphone, screen, A/V playback and WebRTC. Main owns credentials and REALITY. */
 export class MediaController {
@@ -291,7 +292,11 @@ export class MediaController {
       throw new Error('Не удалось отправить сообщение.');
     }
   };
-  startScreen = async (input: MediaGrant | Promise<MediaGrant>, withAudio: boolean): Promise<void> => {
+  startScreen = async (
+    input: MediaGrant | Promise<MediaGrant>,
+    withAudio: boolean,
+    quality: ScreenQuality = defaultScreenQuality,
+  ): Promise<void> => {
     // Handle grant rejection immediately while an OS picker may remain open.
     const granted = Promise.resolve(input).then(
       (value) => value,
@@ -305,13 +310,14 @@ export class MediaController {
     }
     const epoch = this.epoch;
     const generation = ++this.captureGeneration;
+    const selectedQuality = parseScreenQuality(quality);
     this.update({ pendingShare: true, error: '', warning: '' });
     let captured: ScreenCapture | undefined;
     let capture: Capture | undefined;
     let stage = 'capture';
     try {
       // Trigger selection before the first await so the original gesture reaches Chromium.
-      captured = await (this.dependencies.captureFactory ?? captureScreen)(withAudio);
+      captured = await (this.dependencies.captureFactory ?? captureScreen)(withAudio, selectedQuality);
       if (this.epoch !== epoch || generation !== this.captureGeneration) {
         this.discard(captured);
         return;
@@ -330,15 +336,7 @@ export class MediaController {
         this.discard(captured);
         return;
       }
-      const video = captured.tracks.filter((track) => track.kind === Track.Kind.Video);
-      const audio = captured.tracks.filter((track) => track.kind === Track.Kind.Audio);
-      if (
-        video.length !== 1 ||
-        audio.length > 1 ||
-        (!withAudio && audio.length) ||
-        video.length + audio.length !== captured.tracks.length
-      )
-        throw new Error('Invalid capture');
+      const { video, audio } = screenCaptureTracks(captured, withAudio);
       capture = {
         ...captured,
         room,
@@ -354,11 +352,7 @@ export class MediaController {
       if (captured.tracks.some((track) => track.mediaStreamTrack.readyState === 'ended'))
         throw new Error('Capture ended');
       stage = 'constraints';
-      await video[0].mediaStreamTrack.applyConstraints({
-        width: { max: 1280 },
-        height: { max: 720 },
-        frameRate: { max: 30 },
-      });
+      await video[0].mediaStreamTrack.applyConstraints(screenVideoConstraints(selectedQuality));
       const h264 = (await this.dependencies.preferH264?.()) ?? false;
       stage = 'publication';
       for (const track of captured.tracks) {
@@ -366,7 +360,7 @@ export class MediaController {
         const isVideo = track.kind === Track.Kind.Video;
         const publication = await room.localParticipant.publishTrack(
           track,
-          screenPublishOptions(isVideo, h264),
+          screenPublishOptions(isVideo, h264, selectedQuality),
         );
         if (!this.currentCapture(capture)) {
           await unpublish(room, track);
@@ -383,6 +377,7 @@ export class MediaController {
       if (this.currentCapture(capture))
         this.update({
           sharing: true,
+          screenQuality: selectedQuality,
           pendingShare: false,
           screenAudio: audio.length ? 'capturing' : withAudio ? 'unavailable' : 'off',
           warning:
@@ -400,6 +395,7 @@ export class MediaController {
         this.update({
           pendingShare: false,
           sharing: false,
+          screenQuality: null,
           screenAudio: 'off',
           videos: this.snapshot.videos.filter((video) => !video.local),
           error: 'Не удалось начать демонстрацию. Проверьте разрешение на захват экрана.',
@@ -418,6 +414,7 @@ export class MediaController {
     this.stagedCapture = undefined;
     this.update({
       sharing: false,
+      screenQuality: null,
       pendingShare: true,
       screenAudio: 'off',
       videos: this.snapshot.videos.filter((video) => !video.local),
@@ -519,7 +516,7 @@ export class MediaController {
     if (this.stagedCapture) this.discard(this.stagedCapture);
     this.stagedCapture = undefined;
     this.clearScreenPlayback();
-    this.update({ sharing: false, pendingShare: true, screenAudio: 'off', videos: [] });
+    this.update({ sharing: false, screenQuality: null, pendingShare: true, screenAudio: 'off', videos: [] });
     this.refreshScreens();
     this.screenCleanup.add(
       epoch,

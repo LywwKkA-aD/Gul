@@ -47,6 +47,7 @@ test('saved device and key preferences never persist a password or media token',
     voice: defaultVoiceSettings,
     soundNotifications: false,
     hotkeyMode: 'toggle',
+    screenQuality: '720p30',
   });
   assert.equal(Object.isFrozen(preferences), true);
   savePreferences(preferences);
@@ -82,6 +83,7 @@ test('corrupt and unavailable storage defaults to an unregistered global key', (
       voice: defaultVoiceSettings,
       soundNotifications: false,
       hotkeyMode: 'toggle',
+      screenQuality: '720p30',
     });
   }
   storage(null, true);
@@ -107,6 +109,20 @@ test('voice preferences validate settings and drop unknown secret fields', () =>
   assert.equal(written.get('gul.preferences')?.includes('fixture-secret'), false);
   storage(JSON.stringify({ voice: { inputGain: 100 } }));
   assert.equal(readPreferences().voice.inputGain, 1);
+});
+
+test('screen quality defaults safely and persists only supported presets', () => {
+  for (const quality of ['720p30', '720p60', '1080p30', '1080p60']) {
+    const written = storage(JSON.stringify({ screenQuality: quality }));
+    const preferences = readPreferences();
+    assert.equal(preferences.screenQuality, quality);
+    savePreferences(preferences);
+    assert.equal(JSON.parse(written.get('gul.preferences')!).screenQuality, quality);
+  }
+  for (const quality of [undefined, null, '4k120', '1080p60 ', {}, 60]) {
+    storage(JSON.stringify({ screenQuality: quality }));
+    assert.equal(readPreferences().screenQuality, '720p30');
+  }
 });
 
 test('key capture maps physical keys independently of keyboard language and rejects modifier-only presses', () => {

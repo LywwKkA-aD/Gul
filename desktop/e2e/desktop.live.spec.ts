@@ -1,3 +1,4 @@
+import { startScreen } from './start-screen.ts';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { readFile, mkdtemp, rm, access } from 'node:fs/promises';
@@ -277,7 +278,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await a.getByLabel('Сообщение', { exact: true }).fill('REALITY desktop integration');
     await a.getByRole('button', { name: 'Отправить сообщение' }).click();
     await expect(b.getByText('REALITY desktop integration', { exact: true })).toBeVisible();
-    await a.getByRole('button', { name: 'Показать экран', exact: true }).click();
+    await startScreen(a);
     await expect(b.getByRole('button', { name: /desktop-peer-0.*Смотреть экран/ })).toBeVisible({
       timeout: 20_000,
     });
@@ -357,7 +358,7 @@ test('two Electron clients exchange voice, chat and moving stereo screen through
     await expect(b.locator('video')).toHaveCount(0);
     for (let cycle = 0; cycle < 20; cycle++) {
       console.log(`Screen lifecycle cycle ${cycle + 1}/20`);
-      await a.getByRole('button', { name: 'Показать экран', exact: true }).click();
+      await startScreen(a);
       const watch = b.getByRole('button', { name: /desktop-peer-0.*Смотреть экран/ });
       await expect(watch).toBeVisible();
       await watch.click();

@@ -47,7 +47,7 @@ test('all settings sliders drag continuously, return to the initial value and pe
         import {savePreferences} from './preferences.ts';
         import './fonts.css'; import './style.css'; import './dialogs.css';
         const initial={audioinput:'default',audiooutput:'default',shortcut:'F8',toggleEnabled:false,
-          soundNotifications:false,hotkeyMode:'toggle',voice:{...defaultVoiceSettings,mode:'vad'}};
+          soundNotifications:false,hotkeyMode:'toggle',screenQuality:'720p30',voice:{...defaultVoiceSettings,mode:'vad'}};
         function Fixture(){
           const [open,setOpen]=useState(true),[preferences,setPreferences]=useState(initial);
           const saved=useRef(initial), [queue]=useState(()=>new PreferenceUpdateQueue());

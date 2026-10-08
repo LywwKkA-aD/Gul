@@ -1,3 +1,4 @@
+import { startScreen } from './start-screen.ts';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -40,7 +41,7 @@ test('native source requests use app cards, explicit selection and cancellation'
     await page.getByRole('button', { name: 'Подключиться', exact: true }).click();
     await expect(page.getByText('Голос подключён', { exact: true })).toBeVisible({ timeout: 25_000 });
     const show = page.getByRole('button', { name: 'Показать экран', exact: true });
-    await show.click();
+    await startScreen(page);
     const dialog = page.getByRole('dialog', { name: 'Демонстрация экрана', exact: true });
     await expect(dialog).toBeVisible({ timeout: 15_000 });
     await expect(dialog.getByRole('checkbox')).toHaveCount(0);
@@ -62,7 +63,7 @@ test('native source requests use app cards, explicit selection and cancellation'
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Остановить демонстрацию', exact: true })).toHaveCount(0);
     await expect(show).toBeEnabled();
-    await show.click();
+    await startScreen(page);
     await expect(dialog).toBeVisible();
     await dialog.getByRole('tab', { name: /Окна/u }).click();
     await expect(confirm).toBeDisabled();
@@ -89,7 +90,7 @@ test('native source requests use app cards, explicit selection and cancellation'
       .toBe(true);
     await page.getByRole('button', { name: 'Остановить демонстрацию', exact: true }).click();
     await expect(show).toBeEnabled();
-    await show.click();
+    await startScreen(page);
     await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);

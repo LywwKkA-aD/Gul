@@ -12,6 +12,7 @@ const initial: Preferences = {
   voice: defaultVoiceSettings,
   soundNotifications: false,
   hotkeyMode: 'toggle',
+  screenQuality: '720p30',
 };
 function deferred() {
   let resolve!: () => void;

@@ -7,6 +7,7 @@ import { shortcutFromKey, type Preferences } from './preferences.ts';
 import { audioDeviceOptions } from './audio-device-options.ts';
 import type { PreferencePatch } from './preference-updates.ts';
 import type { RangePatch } from './range-updates.ts';
+import { screenPresets, parseScreenQuality } from './media/screen-settings.ts';
 
 export function SettingsDialog({
   preferences,
@@ -25,7 +26,7 @@ export function SettingsDialog({
   onAdjust: (patch: RangePatch) => Promise<void>;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<'sound' | 'keys' | 'about'>('sound');
+  const [tab, setTab] = useState<'sound' | 'screen' | 'keys' | 'about'>('sound');
   const [devices, setDevices] = useState<readonly MediaDeviceInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -94,6 +95,18 @@ export function SettingsDialog({
           }}
         >
           Звук
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'screen'}
+          aria-controls="screen-settings"
+          id="screen-tab"
+          onClick={() => {
+            setTab('screen');
+            setRecording(false);
+          }}
+        >
+          Демонстрация
         </button>
         <button
           role="tab"
@@ -169,6 +182,29 @@ export function SettingsDialog({
             Звук демонстрации передаётся отдельно от микрофона. Захват системного звука зависит от источника и
             операционной системы.
           </p>
+        </section>
+      ) : tab === 'screen' ? (
+        <section role="tabpanel" id="screen-settings" aria-labelledby="screen-tab">
+          <label>
+            Качество демонстрации
+            <select
+              aria-label="Качество демонстрации"
+              value={preferences.screenQuality}
+              disabled={busy}
+              onChange={(event) => void change({ screenQuality: parseScreenQuality(event.target.value) })}
+            >
+              {screenPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="subtle settings-help">
+            Выбранное качество применяется к следующей демонстрации. Текущая продолжает работать без
+            перезапуска.
+          </p>
+          <p className="subtle settings-help">{capabilities?.details}</p>
         </section>
       ) : tab === 'keys' ? (
         <section role="tabpanel" id="keys-settings" aria-labelledby="keys-tab">
