@@ -23,6 +23,12 @@ export class ConnectionLifecycle {
   current(operation: number): boolean {
     return this.revision === operation;
   }
+  pollRevision(): number | null {
+    return this.running === undefined && !this.pending.size ? this.revision : null;
+  }
+  acceptPoll(revision: number): boolean {
+    return this.pollRevision() === revision;
+  }
   finish(operation: number): boolean {
     if (!this.current(operation)) return false;
     this.running = undefined;

@@ -152,3 +152,50 @@ test('current failures remain reviewable, synchronous teardown failures cannot s
   lifecycle.finish(current);
   assert.notEqual(lifecycle.begin(), null);
 });
+
+test('channel transitions fence already pending roster results even after the transition finishes', async () => {
+  const lifecycle = new ConnectionLifecycle();
+  const oldPoll = lifecycle.pollRevision()!;
+  assert.equal(lifecycle.acceptPoll(oldPoll), true);
+  const operation = lifecycle.begin()!;
+  assert.equal(lifecycle.pollRevision(), null);
+  assert.equal(lifecycle.acceptPoll(oldPoll), false);
+  lifecycle.finish(operation);
+  assert.equal(lifecycle.acceptPoll(oldPoll), false);
+  const currentPoll = lifecycle.pollRevision()!;
+  assert.equal(lifecycle.acceptPoll(currentPoll), true);
+});
+
+test('a transient missing authority during a channel move cannot dispatch logout', async () => {
+  const lifecycle = new ConnectionLifecycle();
+  const response = deferred<null>();
+  const revision = lifecycle.pollRevision()!;
+  let disconnected = false;
+  const poll = response.promise.then((state) => {
+    if (lifecycle.acceptPoll(revision) && state === null) disconnected = true;
+  });
+  const moving = lifecycle.begin()!;
+  response.resolve(null);
+  await poll;
+  assert.equal(disconnected, false);
+  lifecycle.finish(moving);
+  assert.equal(lifecycle.acceptPoll(lifecycle.pollRevision()!), true);
+});
+
+test('roster observation remains blocked until both cancellation cleanups finish', async () => {
+  const lifecycle = new ConnectionLifecycle();
+  const oldPoll = lifecycle.pollRevision()!;
+  const operation = lifecycle.invalidate();
+  const media = deferred();
+  const cleanup = lifecycle.cleanup(
+    operation,
+    () => media.promise,
+    async () => {},
+  );
+  assert.equal(lifecycle.pollRevision(), null);
+  assert.equal(lifecycle.acceptPoll(oldPoll), false);
+  media.resolve();
+  await cleanup;
+  assert.equal(lifecycle.acceptPoll(oldPoll), false);
+  assert.equal(lifecycle.acceptPoll(lifecycle.pollRevision()!), true);
+});

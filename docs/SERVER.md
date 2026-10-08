@@ -80,7 +80,7 @@ Firewall защищает внутренние plaintext/admin/TURN порты �
 двусторонний synthetic voice, чат, видео и stereo audio с 20 циклами демонстрации.
 На последней проверке серверные службы active, перезапусков и OOM нет;
 HTTPS healthz прошёл с проверкой TLS. Новая локальная реализация каталога:
-43 Go tests с race detector, покрытие модуля 82.7%, vet чистый.
+45 Go tests с race detector, покрытие модуля 82.8%, vet чистый.
 Настоящий локальный LiveKit подтвердил refresh nonce, удаление обоих
 участников при отзыве, отказ старых JWT и сохранение ACL после restart.
 Native Linux capture

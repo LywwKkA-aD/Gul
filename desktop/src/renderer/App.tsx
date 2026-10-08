@@ -145,19 +145,21 @@ export function App() {
     let active = true;
     let pending = false;
     const update = async () => {
-      if (pending) return;
+      const revision = lifecycle.pollRevision();
+      if (pending || revision === null || sessionRef.current !== session) return;
       pending = true;
       try {
         const next = await api.state();
-        if (active) {
-          if (next === null && sessionRef.current === session) {
+        if (active && sessionRef.current === session && lifecycle.acceptPoll(revision)) {
+          if (next === null) {
             void leave();
             return;
           }
           setBroker(next);
         }
       } catch {
-        if (active) setError('Не удалось обновить список участников');
+        if (active && sessionRef.current === session && lifecycle.acceptPoll(revision))
+          setError('Не удалось обновить список участников');
       } finally {
         pending = false;
       }
@@ -168,7 +170,7 @@ export function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [api, session]);
+  }, [api, session, lifecycle]);
   useEffect(
     () =>
       api.onPushToTalk((pressed) => {
