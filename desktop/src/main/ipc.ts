@@ -76,6 +76,14 @@ export function installIPC(
         () => services.connections.connectSaved(value),
       ),
     'gul:servers': () => services.serverList(),
+    'gul:unlock-password-storage': (_event, value) => {
+      if (value !== undefined || authority.connected()) throw failure('GUL_INPUT_INVALID');
+      return services.passwordStorage.unlock();
+    },
+    'gul:open-password-storage': (_event, value) => {
+      if (value !== undefined || authority.connected()) throw failure('GUL_INPUT_INVALID');
+      return services.passwordStorage.open();
+    },
     'gul:forget-server': async (_event, value) => {
       if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
       if (!(await services.servers.forget(value)).persisted) throw failure('GUL_STORAGE_WRITE_FAILED');

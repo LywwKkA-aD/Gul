@@ -61,11 +61,21 @@ export interface SavedServerInfo {
   readonly lastUsed: number;
   readonly hasPassword: boolean;
   readonly rememberPassword: boolean;
-  readonly passwordStatus: 'saved' | 'missing' | 'unavailable' | 'locked' | 'save-failed';
+  readonly passwordStatus: 'saved' | 'missing' | 'unavailable' | 'locked' | 'unreadable' | 'save-failed';
+}
+export interface PasswordStorageInfo {
+  readonly provider: 'gnome' | 'other' | 'unavailable';
+  readonly state: 'ready' | 'locked' | 'missing' | 'unavailable';
+  readonly restartRequired: boolean;
+}
+export interface PasswordStorageRecovery {
+  readonly state: 'unlocked' | 'cancelled' | 'missing' | 'unavailable';
+  readonly restartRequired: boolean;
 }
 export interface ServerList {
   readonly servers: readonly SavedServerInfo[];
   readonly storage: 'protected' | 'unavailable';
+  readonly passwordStorage?: PasswordStorageInfo;
   readonly lastSave: {
     readonly address: string;
     readonly status: 'saved' | 'not-requested' | 'unavailable' | 'encrypt-failed' | 'write-failed';
@@ -101,6 +111,8 @@ export interface DesktopAPI {
   connectSaved(address: string, username: string, rememberPassword?: boolean): Promise<MediaSession>;
   servers(): Promise<ServerList>;
   forgetServer(address: string): Promise<void>;
+  unlockPasswordStorage(): Promise<PasswordStorageRecovery>;
+  openPasswordStorage(): Promise<boolean>;
   captureCapabilities(): Promise<CaptureCapabilities>;
   onCapturePicker(listener: (request: CapturePickerRequest | null) => void): () => void;
   selectCaptureSource(requestId: string, sourceKey: string | null): Promise<void>;

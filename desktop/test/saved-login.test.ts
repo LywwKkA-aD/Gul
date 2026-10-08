@@ -5,6 +5,7 @@ import {
   selectedSavedServer,
   savedPasswordMessage,
   passwordSaveNotice,
+  passwordStorageRecoveryMessage,
 } from '../src/renderer/saved-login.ts';
 
 const saved: ServerList = {
@@ -41,6 +42,31 @@ test('locked and failed credentials explain manual entry without returning passw
   assert.equal(
     savedPasswordMessage({ ...saved.servers[0], hasPassword: false, passwordStatus: 'missing' }),
     '',
+  );
+});
+
+test('recovery distinguishes native lock, sticky process cache and unreadable ciphertext with fixed instructions', () => {
+  assert.match(
+    savedPasswordMessage({ ...saved.servers[0], hasPassword: false, passwordStatus: 'unreadable' }),
+    /расшифровать/iu,
+  );
+  assert.match(
+    savedPasswordMessage({ ...saved.servers[0], hasPassword: false, passwordStatus: 'unreadable' }),
+    /полностью.*Gul/iu,
+  );
+  assert.match(passwordStorageRecoveryMessage({ state: 'unlocked', restartRequired: true }), /полностью/iu);
+  assert.match(
+    passwordStorageRecoveryMessage({ state: 'unlocked', restartRequired: false }),
+    /разблокировано/iu,
+  );
+  assert.match(passwordStorageRecoveryMessage({ state: 'cancelled', restartRequired: false }), /отменено/iu);
+  assert.match(
+    passwordStorageRecoveryMessage({ state: 'missing', restartRequired: false }),
+    /Пароли и ключи/iu,
+  );
+  assert.match(
+    passwordStorageRecoveryMessage({ state: 'unavailable', restartRequired: false }),
+    /Пароли и ключи/iu,
   );
 });
 

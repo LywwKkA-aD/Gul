@@ -1,0 +1,4 @@
+Gul's Linux system-keyring helper is part of Gul and uses the MIT license.
+Source: desktop/native/password-store/linux.c
+It communicates only with the user's local Secret Service and returns status codes.
+It never reads or returns a stored secret or a system unlock password.

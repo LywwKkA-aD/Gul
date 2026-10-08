@@ -227,7 +227,10 @@ if (primaryInstance) {
     .whenReady()
     .then(async () => {
       Menu.setApplicationMenu(null);
-      services = new AppServices(authority);
+      services = new AppServices(
+        authority,
+        join(resourceRoot, 'password-store', `${process.platform}-${process.arch}`, 'gul-password-store'),
+      );
       await services.initialize();
       uninstallIPC = installIPC(
         authority,

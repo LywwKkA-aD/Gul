@@ -8,19 +8,28 @@ import { getCaptureCapabilities } from './capture-capabilities.ts';
 import type { SessionAuthority } from './session.ts';
 import type { AppInfo, ServerList } from '../shared/contracts.ts';
 import { failure } from './validation.ts';
+import { PasswordStorage } from './password-storage.ts';
 
 export class AppServices {
   readonly servers: SavedServerStore;
   readonly connections: ConnectionManager;
+  readonly passwordStorage: PasswordStorage;
   readonly journal = new DiagnosticsJournal();
   private update: UpdateNotice | null = null;
   private readonly updateAbort = new AbortController();
   private updateCheck: Promise<unknown> = Promise.resolve();
-  constructor(authority: SessionAuthority) {
+  constructor(authority: SessionAuthority, passwordStoreExecutable: string) {
+    this.passwordStorage = new PasswordStorage({
+      platform: process.platform,
+      executable: passwordStoreExecutable,
+      safeStorage,
+      applicationName: app.getName(),
+    });
     this.servers = new SavedServerStore({
       file: join(app.getPath('userData'), 'servers.json'),
       safeStorage,
       platform: process.platform,
+      passwordStorage: () => this.passwordStorage.getSnapshot(),
     });
     this.connections = new ConnectionManager(authority, this.servers);
   }
@@ -34,11 +43,13 @@ export class AppServices {
         },
       );
   }
-  serverList(): ServerList {
+  async serverList(): Promise<ServerList> {
+    const passwordStorage = await this.passwordStorage.status();
     return {
       servers: this.servers.list(),
       storage: this.servers.storageStatus(),
       lastSave: this.connections.lastSave(),
+      passwordStorage,
     };
   }
   async info(): Promise<AppInfo> {
@@ -78,6 +89,7 @@ export class AppServices {
   }
   async close(): Promise<void> {
     this.updateAbort.abort();
+    await this.passwordStorage.close();
     await this.connections.disconnect();
   }
 }

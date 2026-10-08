@@ -1,4 +1,4 @@
-import type { ConnectInput, SavedServerInfo, ServerList } from '../shared/contracts.ts';
+import type { ConnectInput, SavedServerInfo, ServerList, PasswordStorageInfo } from '../shared/contracts.ts';
 import { parseRealityProfile } from '../transport/profile.ts';
 import { connectInput, failure } from './validation.ts';
 import { protectedStorage, readBoundedJSON, writePrivateJSON, type SafeStorageAdapter } from './storage.ts';
@@ -17,7 +17,7 @@ export type SavedConnection =
       readonly kind: 'password-required';
       readonly address: string;
       readonly username: string;
-      readonly reason: 'unavailable' | 'locked' | 'missing' | 'save-failed';
+      readonly reason: 'unavailable' | 'locked' | 'unreadable' | 'missing' | 'save-failed';
     }
   | { readonly kind: 'missing' };
 export interface RememberResult {
@@ -31,6 +31,7 @@ interface Options {
   readonly safeStorage: SafeStorageAdapter;
   readonly platform: string;
   readonly now?: () => number;
+  readonly passwordStorage?: () => PasswordStorageInfo;
 }
 interface FailedWrite {
   readonly address: string;
@@ -89,7 +90,9 @@ export class SavedServerStore {
                 ? 'unavailable'
                 : resolved.kind === 'password-required' && resolved.reason === 'locked'
                   ? 'locked'
-                  : 'missing';
+                  : resolved.kind === 'password-required' && resolved.reason === 'unreadable'
+                    ? 'unreadable'
+                    : 'missing';
         return Object.freeze({
           address: entry.address,
           username: entry.username,
@@ -102,6 +105,14 @@ export class SavedServerStore {
     );
   }
   storageStatus(): 'protected' | 'unavailable' {
+    const health = this.options.passwordStorage?.();
+    if (
+      this.options.platform === 'linux' &&
+      health &&
+      health.provider !== 'other' &&
+      health.state !== 'ready'
+    )
+      return 'unavailable';
     return protectedStorage(this.options.safeStorage, this.options.platform) ? 'protected' : 'unavailable';
   }
   /** Call only after the server accepts a login; renderer never calls this directly. */
@@ -197,7 +208,9 @@ export class SavedServerStore {
   resolve(address: string): SavedConnection {
     const entry = this.records.find((candidate) => candidate.address === address);
     if (!entry) return { kind: 'missing' };
-    const required = (reason: 'unavailable' | 'locked' | 'missing' | 'save-failed'): SavedConnection => ({
+    const required = (
+      reason: 'unavailable' | 'locked' | 'unreadable' | 'missing' | 'save-failed',
+    ): SavedConnection => ({
       kind: 'password-required',
       address: entry.address,
       username: entry.username,
@@ -206,6 +219,8 @@ export class SavedServerStore {
     const failedWrite = this.failedWrites.find((failure) => failure.address === address);
     if (entry.passwordBlocked || (failedWrite && !failedWrite.usablePreviousPassword))
       return required('save-failed');
+    if (this.options.platform === 'linux' && this.options.passwordStorage?.().state === 'locked')
+      return required('locked');
     if (this.storageStatus() !== 'protected') return required('unavailable');
     if (!entry.encryptedPassword) return required('missing');
     try {
@@ -219,13 +234,13 @@ export class SavedServerStore {
         !decrypted.password ||
         decrypted.password.length > 1024
       )
-        return required('locked');
+        return required('unreadable');
       return {
         kind: 'ready',
         input: { address: entry.address, username: entry.username, password: decrypted.password },
       };
     } catch {
-      return required('locked');
+      return required('unreadable');
     }
   }
   /** Only non-secret metadata is migrated; legacy keyring entries are never read. */

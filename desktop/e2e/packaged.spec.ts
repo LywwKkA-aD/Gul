@@ -15,7 +15,11 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
   const profile = await mkdtemp(join(tmpdir(), 'gul-packaged-e2e-'));
   const app = await electron.launch({ executablePath, args: [`--user-data-dir=${profile}`] });
   let appClosed = false;
+  let processExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let startup: ReturnType<typeof readPackagedStartup> = { ready: false, windows: [], events: [] };
+  app.process().once('exit', (code, signal) => {
+    processExit = { code, signal };
+  });
   app.on('close', () => {
     appClosed = true;
   });
@@ -57,6 +61,20 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
         },
       );
       expect(code).toBe(1);
+      const passwordStore = join(resourceRoot, 'password-store', 'linux-x64', 'gul-password-store');
+      await access(passwordStore, constants.X_OK);
+      // Missing arguments must terminate before contacting the user's D-Bus session.
+      const passwordStoreCode = await promisify(execFile)(passwordStore, [], {
+        timeout: 5000,
+        maxBuffer: 128,
+      }).then(
+        () => 0,
+        (error: unknown) =>
+          error && typeof error === 'object' && 'code' in error && typeof error.code === 'number'
+            ? error.code
+            : -1,
+      );
+      expect(passwordStoreCode).toBe(64);
     }
     if (process.platform === 'win32') {
       const helper = join(resourceRoot, 'audio-capture', 'win32-x64', 'gul-audio.exe');
@@ -132,7 +150,7 @@ test('packaged app loads the sandboxed UI and includes the verified native Xray'
     } catch {
       /* Preserve the last bounded snapshot if the app exited. */
     }
-    console.info('GUL_PACKAGED_STARTUP', JSON.stringify({ appClosed, ...startup }));
+    console.info('GUL_PACKAGED_STARTUP', JSON.stringify({ appClosed, processExit, ...startup }));
     throw error;
   } finally {
     await app.close();

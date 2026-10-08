@@ -91,7 +91,7 @@ test('Linux basic_text never encrypts, stores or reads a password', async (t) =>
   });
 });
 
-test('a locked or corrupt keyring falls back to manual input without exposing errors', async (t) => {
+test('a corrupt or different-key ciphertext is unreadable without falsely claiming a locked keyring', async (t) => {
   const adapter = secure();
   const { store } = await fixture(t, adapter);
   await store.remember(input);
@@ -100,16 +100,49 @@ test('a locked or corrupt keyring falls back to manual input without exposing er
   };
   assert.equal(store.list()[0].hasPassword, false);
   assert.equal(store.list()[0].rememberPassword, true);
-  assert.equal(store.list()[0].passwordStatus, 'locked');
+  assert.equal(store.list()[0].passwordStatus, 'unreadable');
   assert.deepEqual(store.resolve(address), {
     kind: 'password-required',
     address,
     username: input.username,
-    reason: 'locked',
+    reason: 'unreadable',
   });
   adapter.decryptString = secure().decryptString;
   assert.equal(store.list()[0].hasPassword, true);
   assert.equal(store.list()[0].passwordStatus, 'saved');
+});
+
+test('confirmed locked native key metadata avoids synchronous storage reads and preserves the ciphertext', async (t) => {
+  const { store, file } = await fixture(t);
+  await store.remember(input);
+  const before = await readFile(file, 'utf8');
+  let calls = 0;
+  let locked = true;
+  const reopened = new SavedServerStore({
+    file,
+    platform: 'linux',
+    safeStorage: {
+      ...secure(),
+      isEncryptionAvailable: () => {
+        ++calls;
+        return true;
+      },
+    },
+    passwordStorage: () => ({
+      provider: 'gnome',
+      state: locked ? 'locked' : 'ready',
+      restartRequired: false,
+    }),
+  });
+  await reopened.load();
+  assert.equal(reopened.list()[0].passwordStatus, 'locked');
+  assert.equal(reopened.storageStatus(), 'unavailable');
+  assert.equal(calls, 0);
+  assert.equal(await readFile(file, 'utf8'), before);
+  locked = false;
+  assert.equal(reopened.list()[0].passwordStatus, 'saved');
+  assert.deepEqual(reopened.resolve(address), { kind: 'ready', input });
+  assert.equal(await readFile(file, 'utf8'), before);
 });
 
 test('transient encryption refusal preserves ciphertext and consent while blocking a stale previous password', async (t) => {
@@ -178,10 +211,25 @@ test('alpha1 encrypted profiles migrate consent and a transient unlock failure n
   adapter.decryptString = () => {
     throw Error('private lock');
   };
-  assert.equal(reopened.list()[0].passwordStatus, 'locked');
+  assert.equal(reopened.list()[0].passwordStatus, 'unreadable');
   assert.equal(await readFile(file, 'utf8'), original);
   adapter.decryptString = secure().decryptString;
   assert.equal(reopened.list()[0].hasPassword, true);
+});
+
+test('GNOME metadata does not disable valid KWallet passwords on Linux', async (t) => {
+  const { file } = await fixture(t);
+  const store = new SavedServerStore({
+    file,
+    platform: 'linux',
+    safeStorage: secure('kwallet6'),
+    passwordStorage: () => ({ provider: 'other', state: 'unavailable', restartRequired: false }),
+  });
+  await store.load();
+  assert.equal((await store.remember(input)).passwordSaved, true);
+  assert.equal(store.storageStatus(), 'protected');
+  assert.equal(store.list()[0].passwordStatus, 'saved');
+  assert.deepEqual(store.resolve(address), { kind: 'ready', input });
 });
 
 test('a failed atomic replacement keeps the committed profile and blocks using its different old password', async (t) => {

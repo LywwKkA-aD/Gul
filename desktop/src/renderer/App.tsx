@@ -24,7 +24,7 @@ import { PreferenceUpdateQueue, mergePreferences, type PreferencePatch } from '.
 import { RangeUpdates, type RangePatch } from './range-updates.ts';
 import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
-import { selectedSavedServer, passwordSaveNotice } from './saved-login.ts';
+import { selectedSavedServer, passwordSaveNotice, passwordStorageRecoveryMessage } from './saved-login.ts';
 import {
   ParticipantControls,
   ParticipantRow,
@@ -75,6 +75,7 @@ export function App() {
     storage: 'unavailable',
     lastSave: null,
   });
+  const [storageNotice, setStorageNotice] = useState('');
   const [capabilities, setCapabilities] = useState<CaptureCapabilities | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [error, setError] = useState('');
@@ -407,6 +408,7 @@ export function App() {
           password={password}
           remember={rememberPassword}
           saved={savedServers}
+          storageNotice={storageNotice}
           busy={busy}
           error={error}
           onAddress={setAddress}
@@ -426,6 +428,21 @@ export function App() {
             })
           }
           onRefreshSaved={() => void run(async () => setSavedServers(await api.servers()))}
+          onUnlockStorage={() =>
+            void run(async () => {
+              const result = await api.unlockPasswordStorage();
+              setSavedServers(await api.servers());
+              setStorageNotice(passwordStorageRecoveryMessage(result));
+            })
+          }
+          onOpenStorage={() =>
+            void run(async () => {
+              if (!(await api.openPasswordStorage()))
+                setError(
+                  'Приложение «Пароли и ключи» не установлено. Следуйте инструкции по хранилищу в Gul.',
+                );
+            })
+          }
           onConnect={() => void enter()}
           onCancel={() => void run(leave)}
         />

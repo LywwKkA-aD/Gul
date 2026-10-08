@@ -9,6 +9,7 @@ export function ConnectPanel({
   password,
   remember,
   saved,
+  storageNotice,
   busy,
   error,
   onAddress,
@@ -18,6 +19,8 @@ export function ConnectPanel({
   onChoose,
   onForget,
   onRefreshSaved,
+  onUnlockStorage,
+  onOpenStorage,
   onConnect,
   onCancel,
 }: {
@@ -26,6 +29,7 @@ export function ConnectPanel({
   password: string;
   remember: boolean;
   saved: ServerList;
+  storageNotice?: string;
   busy: boolean;
   error: string;
   onAddress: (value: string) => void;
@@ -35,6 +39,8 @@ export function ConnectPanel({
   onChoose: (server: SavedServerInfo) => void;
   onForget: (address: string) => void;
   onRefreshSaved: () => void;
+  onUnlockStorage: () => void;
+  onOpenStorage: () => void;
   onConnect: () => void;
   onCancel: () => void;
 }) {
@@ -96,11 +102,49 @@ export function ConnectPanel({
               {passwordMessage}
             </p>
           )}
+          {storageNotice && (
+            <p className="subtle" role="status">
+              {storageNotice}
+            </p>
+          )}
           {selected?.rememberPassword && !hasPassword && selected.passwordStatus !== 'missing' && (
             <button type="button" className="secondary-button" disabled={busy} onClick={onRefreshSaved}>
               Повторить чтение сохранённого пароля
             </button>
           )}
+          {saved.passwordStorage &&
+            saved.passwordStorage.provider !== 'other' &&
+            ((!hasPassword && selected?.rememberPassword) ||
+              saved.passwordStorage.state !== 'ready' ||
+              saved.passwordStorage.restartRequired) && (
+              <section className="password-storage-help" aria-label="Восстановление хранилища паролей">
+                {saved.passwordStorage.state === 'locked' && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={onUnlockStorage}
+                  >
+                    Разблокировать хранилище
+                  </button>
+                )}
+                <button type="button" className="secondary-button" disabled={busy} onClick={onOpenStorage}>
+                  Открыть «Пароли и ключи»
+                </button>
+                {saved.passwordStorage.state !== 'ready' && (
+                  <p className="subtle">
+                    В «Пароли и ключи» выберите связку «Вход» (Login) и нажмите значок замка, чтобы
+                    разблокировать её. Нужен пароль этой связки: обычно он совпадает с паролем входа в Ubuntu.
+                    Если связки нет, создайте защищённую связку паролей и назначьте её связкой по умолчанию.
+                  </p>
+                )}
+                {(saved.passwordStorage.restartRequired || selected?.passwordStatus === 'unreadable') && (
+                  <p className="subtle" role="status">
+                    Полностью закройте Gul и запустите снова, чтобы повторить доступ к защищённому хранилищу.
+                  </p>
+                )}
+              </section>
+            )}
           <label className="checkbox-control">
             <input
               type="checkbox"
@@ -112,7 +156,7 @@ export function ConnectPanel({
           </label>
           {saved.storage === 'unavailable' && (
             <p className="subtle">
-              Защищённое хранилище недоступно. Адрес и ник сохранятся, пароль потребуется при следующем входе.
+              Защищённое хранилище недоступно. Адрес и ник сохранятся; новый пароль пока нельзя запомнить.
             </p>
           )}
           <button className="primary" type="submit" disabled={busy}>

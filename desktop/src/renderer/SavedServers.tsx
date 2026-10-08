@@ -38,9 +38,11 @@ export function SavedServers({
                 ? ' · пароль сохранён'
                 : server.passwordStatus === 'locked'
                   ? ' · хранилище заблокировано'
-                  : server.passwordStatus === 'save-failed'
-                    ? ' · пароль не сохранён'
-                    : ''}
+                  : server.passwordStatus === 'unreadable'
+                    ? ' · пароль недоступен'
+                    : server.passwordStatus === 'save-failed'
+                      ? ' · пароль не сохранён'
+                      : ''}
             </small>
           </button>
           <button

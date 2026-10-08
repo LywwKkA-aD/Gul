@@ -29,6 +29,7 @@ desktop/resources/xray/*/xray.exe
 desktop/resources/ptt/*/gul-ptt
 desktop/resources/ptt/*/gul-ptt.exe
 desktop/resources/audio-capture/*/gul-audio
+desktop/resources/password-store/*/gul-password-store
 *.exe
 *.obj
 *.pdb

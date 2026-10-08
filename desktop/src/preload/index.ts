@@ -14,6 +14,7 @@ import type {
   CaptureCapabilities,
   AppInfo,
   ScreenAudioLease,
+  PasswordStorageRecovery,
 } from '../shared/contracts.ts';
 
 if (contextBridge.executeInMainWorld({ func: installDeviceAudioGuard }) !== true)
@@ -34,6 +35,8 @@ const api: DesktopAPI = Object.freeze({
   connectSaved: (address: string, username: string, rememberPassword = true) =>
     invoke<MediaSession>('gul:connect-saved', { address, username, rememberPassword }),
   servers: () => invoke<ServerList>('gul:servers'),
+  unlockPasswordStorage: () => invoke<PasswordStorageRecovery>('gul:unlock-password-storage'),
+  openPasswordStorage: () => invoke<boolean>('gul:open-password-storage'),
   forgetServer: (address: string) => invoke<void>('gul:forget-server', address),
   captureCapabilities: () => invoke<CaptureCapabilities>('gul:capture-capabilities'),
   onCapturePicker: (listener: (request: CapturePickerRequest | null) => void) => {
