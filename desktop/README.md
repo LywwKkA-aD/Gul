@@ -1,6 +1,6 @@
 # Gul desktop
 
-Единственный клиент Gul **0.8.0-alpha.4**: Electron, TypeScript, React и
+Единственный клиент Gul **0.8.0-alpha.5**: Electron, TypeScript, React и
 LiveKit JS. Chromium владеет голосом, экраном и playback; официальный
 Xray v26.3.27 поставляется отдельным executable. Go клиент отсутствует;
 серверный broker находится в `../server/`.
@@ -43,8 +43,8 @@ npm audit --audit-level=moderate
 ```
 
 Test runner требует минимум 80% строк, ветвей и функций проверяемых TS модулей.
-Локально 348 tests: 346 passed/2 platform skips на macOS. TS coverage:
-89.66% строк, 90.46% ветвей, 88.70% функций. Installed packaged smoke
+Локально 367 tests: 365 passed/2 platform skips на macOS. TS coverage:
+89.68% строк, 90.39% ветвей, 88.46% функций. Installed packaged smoke
 с sandbox прошёл на Windows/Linux/macOS arm64/x64; Linux DEB установлен.
 Windows F8 hook registration/dispose и семь Linux portal DBus сценариев прошли.
 Для реального media E2E сначала подготовьте отдельный REALITY/LiveKit stand:

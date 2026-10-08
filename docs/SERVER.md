@@ -1,6 +1,6 @@
 # Сервер Gul
 
-Клиент 0.8.0-alpha.4 работает с LiveKit через встроенный VLESS + REALITY.
+Клиент 0.8.0-alpha.5 работает с LiveKit через встроенный VLESS + REALITY.
 Go broker выделен в самостоятельный `server/`; старые голосовые серверы и
 транспортные эксперименты текущей версии не нужны. Подробная установка,
 конфиги systemd/firewall и локальный fixture: [deploy/livekit](../deploy/livekit/README.md).
