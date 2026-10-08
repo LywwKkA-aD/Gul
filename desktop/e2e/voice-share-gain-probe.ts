@@ -1,5 +1,6 @@
 export interface GainLevels {
   readonly frames: number;
+  /** P90 over all RMS frames; voicedDb is the median above the speech floor. */
   readonly speechDb: number;
   readonly voicedDb: number;
 }
@@ -28,6 +29,10 @@ export interface ShareGainSample {
   readonly levels: Readonly<Record<'raw' | 'outgoing' | 'decoded' | 'output', GainLevels>>;
   readonly measuredOutputGainDb: number;
   readonly stereo?: {
+    readonly frames: number;
+    readonly validFrames: number;
+    readonly leftMarkerDb: number;
+    readonly rightMarkerDb: number;
     readonly leftSeparationDb: number;
     readonly rightSeparationDb: number;
     readonly leftNonMarkerDb: number;
@@ -37,6 +42,7 @@ export interface ShareGainSample {
 export interface VoiceShareGainProbe {
   checkpoint(): ShareGainState;
   state(): ShareGainState;
+  screenReady(): boolean;
   sample(duration: number): Promise<ShareGainSample>;
   relay(): Promise<readonly { readonly type: string; readonly protocol: string }[]>;
   close(): void;
@@ -238,6 +244,8 @@ export function installVoiceShareGainProbe(): void {
       else unmarked += power;
     });
     return {
+      audible: marked + unmarked > 1e-12,
+      markerDb: 10 * Math.log10(Math.max(1e-20, marked)),
       separationDb: 10 * Math.log10(Math.max(1e-20, markerPower(440)) / Math.max(1e-20, markerPower(880))),
       nonMarkerDb: 10 * Math.log10(Math.max(1e-20, unmarked) / Math.max(1e-20, marked)),
     };
@@ -256,8 +264,12 @@ export function installVoiceShareGainProbe(): void {
       return state();
     },
     state,
+    screenReady() {
+      const channels = meterFor('screen')?.channels;
+      return Boolean(channels?.every((channel) => spectrum(channel).markerDb > -60));
+    },
     async sample(duration) {
-      if (!Number.isFinite(duration) || duration < 1000 || duration > 10_000)
+      if (!Number.isFinite(duration) || duration < 1000 || duration > 20_000)
         throw new Error('Invalid gain sample duration.');
       const samples = {
         raw: [] as number[],
@@ -266,7 +278,8 @@ export function installVoiceShareGainProbe(): void {
         output: [] as number[],
       };
       const ratios: number[] = [];
-      const markers: NonNullable<ShareGainSample['stereo']>[] = [];
+      const markers: Omit<NonNullable<ShareGainSample['stereo']>, 'frames' | 'validFrames'>[] = [];
+      let screenFrames = 0;
       const deadline = performance.now() + duration;
       while (performance.now() < deadline) {
         const frame: Partial<Record<keyof typeof samples, number>> = {};
@@ -281,12 +294,18 @@ export function installVoiceShareGainProbe(): void {
         const channels = meterFor('screen')?.channels;
         if (channels) {
           const [left, right] = channels.map(spectrum);
-          markers.push({
-            leftSeparationDb: left.separationDb,
-            rightSeparationDb: -right.separationDb,
-            leftNonMarkerDb: left.nonMarkerDb,
-            rightNonMarkerDb: right.nonMarkerDb,
-          });
+          screenFrames++;
+          // Pure silence has no defined energy ratio. Broadband audio without
+          // markers remains valid and must fail the leakage and marker checks.
+          if (left.audible && right.audible)
+            markers.push({
+              leftMarkerDb: left.markerDb,
+              rightMarkerDb: right.markerDb,
+              leftSeparationDb: left.separationDb,
+              rightSeparationDb: -right.separationDb,
+              leftNonMarkerDb: left.nonMarkerDb,
+              rightNonMarkerDb: right.nonMarkerDb,
+            });
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -299,9 +318,19 @@ export function installVoiceShareGainProbe(): void {
           output: levels(samples.output),
         },
         measuredOutputGainDb: quantile(ratios, 0.5),
-        ...(markers.length
+        ...(screenFrames
           ? {
               stereo: {
+                frames: screenFrames,
+                validFrames: markers.length,
+                leftMarkerDb: quantile(
+                  markers.map((marker) => marker.leftMarkerDb),
+                  0.1,
+                ),
+                rightMarkerDb: quantile(
+                  markers.map((marker) => marker.rightMarkerDb),
+                  0.1,
+                ),
                 leftSeparationDb: quantile(
                   markers.map((marker) => marker.leftSeparationDb),
                   0.5,

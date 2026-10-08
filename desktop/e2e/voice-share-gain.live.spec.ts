@@ -7,6 +7,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,7 +30,8 @@ import {
 const require = createRequire(import.meta.url);
 const fixture = process.env.GUL_ELECTRON_STAND_DIR;
 const inputGain = 1.2;
-const sampleDuration = 6400;
+// Cover at least three complete loops of both independent public utterances.
+const sampleDuration = 18_000;
 const warmupDuration = 12_000;
 const name = (peer: number) => `share-gain-peer-${peer}`;
 
@@ -101,7 +103,9 @@ async function pulseMicrophone(
     endpoint,
     'set-source-volume',
     `gul_gain_mic_${peer}`,
-    '20%',
+    // Actual private-source PCM measured -33.38 dBFS RMS at 70%; Pulse's cubic
+    // 20% volume attenuated this public speech to an unrealistic -66.02 dBFS.
+    '70%',
   ]);
   // A pipe source consumes PCM as fast as supplied. Pace 480 mono frames per 10ms,
   // reusing one chunk without a catch-up queue. This never creates a sink input
@@ -240,10 +244,10 @@ function stableState(actual: ShareGainState, baseline: ShareGainState, gain: num
 function stableLevels(actual: ShareGainSample, baseline: ShareGainSample, gain: number) {
   for (const stage of ['raw', 'outgoing', 'decoded', 'output'] as const) {
     expect(actual.levels[stage].frames).toBeGreaterThan(100);
-    expect(actual.levels[stage].speechDb, `${stage} voiced peak dB`).toBeGreaterThan(-50);
+    expect(actual.levels[stage].speechDb, `${stage} p90 RMS dB`).toBeGreaterThan(-50);
     expect(
       Math.abs(actual.levels[stage].speechDb - baseline.levels[stage].speechDb),
-      `${stage} voiced peak drift`,
+      `${stage} p90 RMS drift`,
     ).toBeLessThan(2);
     expect(
       Math.abs(actual.levels[stage].voicedDb - baseline.levels[stage].voicedDb),
@@ -271,6 +275,38 @@ async function sample(pages: readonly Page[]): Promise<ShareGainSample[]> {
   );
 }
 
+async function settleBeforeShares(pages: readonly Page[], checkpoints: readonly ShareGainState[]) {
+  let previous: readonly ShareGainSample[] | undefined;
+  let stableWindows = 0;
+  for (let window = 1; window <= 4; window++) {
+    const current = await sample(pages);
+    current.forEach((measurement, peer) => {
+      stableState(measurement.state, checkpoints[peer], 0.65, 0);
+      stableLevels(measurement, measurement, 0.65);
+    });
+    const drift = current.flatMap((measurement, peer) =>
+      (['raw', 'outgoing', 'decoded', 'output'] as const).flatMap((stage) => {
+        const prior = previous?.[peer].levels[stage];
+        return prior
+          ? [
+              Math.abs(measurement.levels[stage].speechDb - prior.speechDb),
+              Math.abs(measurement.levels[stage].voicedDb - prior.voicedDb),
+            ]
+          : [];
+      }),
+    );
+    const maximumDrift = drift.length ? Math.max(...drift) : undefined;
+    stableWindows = maximumDrift !== undefined && maximumDrift <= 1.5 ? stableWindows + 1 : 0;
+    console.info(
+      'GUL_SHARE_GAIN_PREROLL',
+      JSON.stringify({ window, maximumDrift, stableWindows, levels: current.map((value) => value.levels) }),
+    );
+    if (stableWindows >= 2) return;
+    previous = current;
+  }
+  throw new Error('Microphone APM did not settle before screen sharing (two stable control windows).');
+}
+
 test('two encoded REALITY peers preserve microphone and speaker gain through two own screen shares', async () => {
   test.skip(
     process.platform === 'win32',
@@ -284,20 +320,36 @@ test('two encoded REALITY peers preserve microphone and speaker gain through two
   const originalVolumes: number[][] = [];
   let closeAudio = async () => {};
   try {
-    const speech = await readFile(new URL('./testdata/noise/clean-speech.wav', import.meta.url));
-    const microphone = join(directory, 'microphone.wav');
-    await writeFile(microphone, speech, {
-      mode: 0o600,
-    });
+    const hashes = new Map(
+      (await readFile(new URL('./testdata/noise/SHA256SUMS', import.meta.url), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const [hash, file] = line.trim().split(/\s+/);
+          return [file, hash];
+        }),
+    );
+    const microphones = await Promise.all(
+      ['clean-speech.wav', 'clean-speech-peer.wav'].map(async (file, peer) => {
+        const microphone = join(directory, `microphone-${peer}.wav`);
+        const speech = await readFile(new URL(`./testdata/noise/${file}`, import.meta.url));
+        expect(createHash('sha256').update(speech).digest('hex'), 'Pinned public speech PCM').toBe(
+          hashes.get(file),
+        );
+        await writeFile(microphone, speech, { mode: 0o600 });
+        return microphone;
+      }),
+    );
     const address = (await readFile(resolve(fixture!, 'address'), 'utf8')).trim();
     const password = (await readFile(resolve(fixture!, 'join-password'), 'utf8')).trim();
     const audio = await isolatedGameAudio();
     closeAudio = audio.close;
     for (let peer = 0; peer < 2; peer++) {
+      const microphone = microphones[peer];
       if (process.platform === 'linux')
         inputs.push(await pulseMicrophone(audio.environments[peer], peer, microphone, directory));
       originalVolumes.push(await sourceVolume(audio.environments[peer], peer));
-      originalVolumes[peer].forEach((value) => expect(Math.abs(value - 13107)).toBeLessThanOrEqual(1));
+      originalVolumes[peer].forEach((value) => expect(Math.abs(value - 45875)).toBeLessThanOrEqual(1));
       const app = await electron.launch({
         executablePath: require('electron'),
         args: [
@@ -344,8 +396,9 @@ test('two encoded REALITY peers preserve microphone and speaker gain through two
       await configureMicrophone(page, peer);
     }
     for (const page of pages) await expect(page.locator('audio[data-source="voice"]')).toHaveCount(1);
-    // Two complete 5.855-second public speech loops let the initial APM settle.
-    // Screen transitions retain this capture; no later warmup masks a gain change.
+    await Promise.all(pages.map((page, peer) => configurePeerVolume(page, 1 - peer, 0.65)));
+    // Independent speech avoids identical microphone/playback waveforms biasing AEC.
+    // Confirm bounded cold-start settling before sharing; transitions retain this capture.
     await new Promise((done) => setTimeout(done, warmupDuration));
     const checkpoints = await Promise.all(
       pages.map((page) =>
@@ -356,6 +409,7 @@ test('two encoded REALITY peers preserve microphone and speaker gain through two
         ),
       ),
     );
+    await settleBeforeShares(pages, checkpoints);
     const [publisher, viewer] = pages;
     for (const [cycle, gain] of [0.65, 1.4].entries()) {
       await Promise.all(pages.map((page, peer) => configurePeerVolume(page, 1 - peer, gain)));
@@ -375,6 +429,17 @@ test('two encoded REALITY peers preserve microphone and speaker gain through two
       await watch.click();
       await expect(viewer.locator('audio[data-source="screen"]')).toHaveCount(1, { timeout: 20_000 });
       await expect(viewer.locator('.screen-viewer video')).toBeVisible();
+      await expect
+        .poll(
+          () =>
+            viewer.evaluate(() =>
+              (
+                window as unknown as { __gulVoiceShareGainProbe: VoiceShareGainProbe }
+              ).__gulVoiceShareGainProbe.screenReady(),
+            ),
+          { timeout: 10_000, message: 'Encoded screen audio must contain audible stereo markers' },
+        )
+        .toBe(true);
       const sharing = await sample(pages);
       console.info('GUL_SHARE_GAIN_SHARING', JSON.stringify({ cycle: cycle + 1, gain, sharing }));
       const sharingVolumes = await Promise.all(audio.environments.map(sourceVolume));
@@ -385,6 +450,10 @@ test('two encoded REALITY peers preserve microphone and speaker gain through two
         stableState(measurement.state, checkpoints[peer], gain, peer === 1 ? 1 : 0);
         stableLevels(measurement, before[peer], gain);
       });
+      expect(sharing[1].stereo?.validFrames).toBeGreaterThan(100);
+      expect(sharing[1].stereo!.validFrames / sharing[1].stereo!.frames).toBeGreaterThan(0.9);
+      expect(sharing[1].stereo?.leftMarkerDb).toBeGreaterThan(-60);
+      expect(sharing[1].stereo?.rightMarkerDb).toBeGreaterThan(-60);
       expect(sharing[1].stereo?.leftSeparationDb).toBeGreaterThan(8);
       expect(sharing[1].stereo?.rightSeparationDb).toBeGreaterThan(8);
       // The encoded marker fixture measured -58 to -62 dB outside marker bands.
