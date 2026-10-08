@@ -20,7 +20,8 @@ import { ScreenPanel } from './ScreenPanel.tsx';
 import { SoundCues } from './sound-cues.ts';
 import { ConnectPanel } from './ConnectPanel.tsx';
 import { ConnectionLifecycle } from './connection-lifecycle.ts';
-import { PreferenceUpdateQueue, mergePreferences } from './preference-updates.ts';
+import { PreferenceUpdateQueue, mergePreferences, type PreferencePatch } from './preference-updates.ts';
+import { RangeUpdates, type RangePatch } from './range-updates.ts';
 import { presentationSnapshot } from './presentation-snapshot.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import { selectedSavedServer, passwordSaveNotice } from './saved-login.ts';
@@ -88,6 +89,7 @@ export function App() {
   const [chat, setChat] = useState<{ channelId: number; entries: readonly ChatEntry[] } | null>(null);
   const [lifecycle] = useState(() => new ConnectionLifecycle());
   const [preferenceUpdates] = useState(() => new PreferenceUpdateQueue());
+  const [rangeUpdates] = useState(() => new RangeUpdates());
 
   const persistPreferences = (next: Preferences) => {
     preferenceRef.current = Object.freeze(next);
@@ -324,7 +326,7 @@ export function App() {
       if (lifecycle.finish(current)) setBusy(false);
     }
   };
-  const changePreferences = (patch: Partial<Preferences>) =>
+  const changePreferences = (patch: PreferencePatch) =>
     preferenceUpdates.run(
       patch,
       () => preferenceRef.current,
@@ -353,6 +355,8 @@ export function App() {
         persistPreferences(mergePreferences(preferenceRef.current, fields));
       },
     );
+  const changeRanges = (patch: RangePatch) =>
+    rangeUpdates.run(patch, (voice) => changePreferences({ voice }));
   const changeLocalAudio = (identity: string, patch: Partial<LocalAudioPreference>) => {
     const previous = localAudioRef.current[identity] ?? defaultLocalAudio;
     const next = { ...previous, ...patch };
@@ -592,6 +596,7 @@ export function App() {
           capabilities={capabilities}
           appInfo={appInfo}
           onChange={changePreferences}
+          onAdjust={changeRanges}
           onClose={() => setSettings(false)}
         />
       )}

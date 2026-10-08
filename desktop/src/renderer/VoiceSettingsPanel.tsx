@@ -1,14 +1,18 @@
 import { useSyncExternalStore } from 'react';
 import type { MediaController } from './media/controller.ts';
 import type { VoiceSettings } from './media/voice-gate.ts';
+import { SettingsRange } from './SettingsRange.tsx';
+import type { RangePatch } from './range-updates.ts';
 
 export function VoiceSettingsPanel({
   media,
   onChange,
+  onAdjust,
   busy,
 }: {
   media: MediaController;
   onChange: (patch: Partial<VoiceSettings>) => Promise<void>;
+  onAdjust: (patch: RangePatch) => Promise<void>;
   busy: boolean;
 }) {
   const snapshot = useSyncExternalStore(media.subscribe, media.getSnapshot);
@@ -33,42 +37,39 @@ export function VoiceSettingsPanel({
       </label>
       <label>
         Усиление микрофона · {Math.round(voice.inputGain * 100)}%
-        <input
+        <SettingsRange
           aria-label="Усиление микрофона"
-          type="range"
           min={0}
           max={2}
           step={0.05}
           value={voice.inputGain}
           disabled={busy}
-          onChange={(event) => void onChange({ inputGain: Number(event.target.value) })}
+          onChange={(value) => onAdjust({ inputGain: value })}
         />
       </label>
       {voice.mode === 'vad' && (
         <>
           <label>
             Порог активации · {voice.thresholdDb} дБ
-            <input
+            <SettingsRange
               aria-label="Порог активации"
-              type="range"
               min={-80}
               max={-6}
               value={voice.thresholdDb}
               disabled={busy}
-              onChange={(event) => void onChange({ thresholdDb: Number(event.target.value) })}
+              onChange={(value) => onAdjust({ thresholdDb: value })}
             />
           </label>
           <label>
             Задержка выключения · {voice.holdMs} мс
-            <input
+            <SettingsRange
               aria-label="Задержка выключения"
-              type="range"
               min={0}
               max={1000}
               step={50}
               value={voice.holdMs}
               disabled={busy}
-              onChange={(event) => void onChange({ holdMs: Number(event.target.value) })}
+              onChange={(value) => onAdjust({ holdMs: value })}
             />
           </label>
         </>

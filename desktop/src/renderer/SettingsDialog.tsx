@@ -5,6 +5,8 @@ import { VoiceSettingsPanel } from './VoiceSettingsPanel.tsx';
 import { Dialog } from './Dialog.tsx';
 import { shortcutFromKey, type Preferences } from './preferences.ts';
 import { audioDeviceOptions } from './audio-device-options.ts';
+import type { PreferencePatch } from './preference-updates.ts';
+import type { RangePatch } from './range-updates.ts';
 
 export function SettingsDialog({
   preferences,
@@ -12,13 +14,15 @@ export function SettingsDialog({
   capabilities,
   appInfo,
   onChange,
+  onAdjust,
   onClose,
 }: {
   preferences: Preferences;
   media: MediaController;
   capabilities: CaptureCapabilities | null;
   appInfo: AppInfo | null;
-  onChange: (patch: Partial<Preferences>) => Promise<void>;
+  onChange: (patch: PreferencePatch) => Promise<void>;
+  onAdjust: (patch: RangePatch) => Promise<void>;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<'sound' | 'keys' | 'about'>('sound');
@@ -27,6 +31,7 @@ export function SettingsDialog({
   const [recording, setRecording] = useState(false);
   const [diagnosticSaved, setDiagnosticSaved] = useState(false);
   const [error, setError] = useState('');
+  const adjustmentRevision = useRef(0);
   const shortcutInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const refreshDevices = async () => {
@@ -50,7 +55,7 @@ export function SettingsDialog({
       navigator.mediaDevices.removeEventListener('devicechange', update);
     };
   }, []);
-  const change = async (patch: Partial<Preferences>) => {
+  const change = async (patch: PreferencePatch) => {
     if (busy) return;
     setBusy(true);
     setError('');
@@ -61,6 +66,17 @@ export function SettingsDialog({
         setError(failure instanceof Error ? failure.message : 'Не удалось применить настройку.');
     } finally {
       if (mounted.current) setBusy(false);
+    }
+  };
+  const adjust = async (patch: RangePatch) => {
+    const revision = ++adjustmentRevision.current;
+    setError('');
+    try {
+      await onAdjust(patch);
+    } catch (failure) {
+      if (mounted.current && adjustmentRevision.current === revision)
+        setError(failure instanceof Error ? failure.message : 'Не удалось применить настройку.');
+      throw failure;
     }
   };
   return (
@@ -136,7 +152,8 @@ export function SettingsDialog({
           <VoiceSettingsPanel
             media={media}
             busy={busy}
-            onChange={(patch) => change({ voice: { ...preferences.voice, ...patch } })}
+            onChange={(patch) => change({ voice: patch })}
+            onAdjust={adjust}
           />
           <label className="checkbox-control">
             <input

@@ -26,7 +26,7 @@ test('reopening settings during pending voice work cannot overwrite a newer outp
   let saved = initial;
   const actual: string[] = [];
   const voice = queue.run(
-    { voice: { ...initial.voice, noiseSuppression: false } },
+    { voice: { noiseSuppression: false } },
     () => saved,
     async (next, patch) => {
       await pending.promise;
@@ -48,12 +48,12 @@ test('reopening settings during pending voice work cannot overwrite a newer outp
   assert.equal(saved.audiooutput, 'headphones');
   assert.equal(saved.voice.noiseSuppression, false);
 });
-test('a full voice snapshot from the reopened dialog applies only the fields the user changed', async () => {
+test('an explicit voice patch from the reopened dialog preserves another pending setting', async () => {
   const queue = new PreferenceUpdateQueue();
   const pending = deferred();
   let saved = initial;
   const first = queue.run(
-    { voice: { ...initial.voice, noiseSuppression: false } },
+    { voice: { noiseSuppression: false } },
     () => saved,
     async (_next, patch) => {
       await pending.promise;
@@ -61,7 +61,7 @@ test('a full voice snapshot from the reopened dialog applies only the fields the
     },
   );
   const second = queue.run(
-    { voice: { ...initial.voice, inputGain: 1.5 } },
+    { voice: { inputGain: 1.5 } },
     () => saved,
     async (next, patch) => {
       assert.equal(next.voice.noiseSuppression, false);
@@ -100,7 +100,7 @@ test('successful voice work preserves unrelated preferences changed while it awa
   const pending = deferred();
   let saved = initial;
   const update = queue.run(
-    { voice: { ...initial.voice, inputGain: 1.2 } },
+    { voice: { inputGain: 1.2 } },
     () => saved,
     async (_next, patch) => {
       await pending.promise;
@@ -113,4 +113,21 @@ test('successful voice work preserves unrelated preferences changed while it awa
   assert.equal(saved.soundNotifications, true);
   assert.equal(saved.voice.inputGain, 1.2);
   assert.equal(Object.isFrozen(saved), true);
+});
+test('dragging back to the saved gain preserves that explicit intent while an older change is pending', async () => {
+  const queue = new PreferenceUpdateQueue();
+  const pending = deferred();
+  let saved = initial;
+  const applied: number[] = [];
+  const apply = async (_next: Preferences, patch: Parameters<typeof mergePreferences>[1]) => {
+    await pending.promise;
+    saved = mergePreferences(saved, patch);
+    applied.push(saved.voice.inputGain);
+  };
+  const first = queue.run({ voice: { inputGain: 1.5 } }, () => saved, apply);
+  const last = queue.run({ voice: { inputGain: 1 } }, () => saved, apply);
+  pending.resolve();
+  await Promise.all([first, last]);
+  assert.deepEqual(applied, [1.5, 1]);
+  assert.equal(saved.voice.inputGain, 1);
 });
