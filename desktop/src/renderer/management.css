@@ -1,0 +1,52 @@
+.member-identity {
+  margin: 10px 0;
+}
+.member-identity summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.member-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.channel-management-actions {
+  display: grid;
+  gap: 5px;
+  padding: 0 12px 10px;
+}
+.channel-management-actions button {
+  font-size: 11px;
+  padding: 6px 8px;
+  text-align: left;
+}
+.channel-lock {
+  font-size: 9px;
+  color: var(--text-2);
+}
+.channel-member-list {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px;
+  margin: 12px 0;
+}
+.channel-member-list legend {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.channel-member-list .checkbox-control {
+  margin: 6px 0;
+}
+
+.channel-management-actions button {
+  color: var(--sb-text-2);
+  border-color: var(--sb-line);
+  background: var(--sb-1);
+}
+.channel-lock {
+  color: var(--sb-text-3);
+}

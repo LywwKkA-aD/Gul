@@ -1,4 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  MemberCredentialInfo,
+  ImportMemberCredential,
+  RedeemInvitation,
+  ManagementContext,
+  MemberList,
+  ChannelPermissions,
+  ChannelCreate,
+  ChannelUpdate,
+  ChannelDelete,
+  Invitation,
+} from '../shared/management.ts';
 import { publicError } from './errors.ts';
 import { installDeviceAudioGuard } from './media-guard.ts';
 import type { CapturePickerRequest } from '../shared/capture-picker.ts';
@@ -38,6 +50,20 @@ const api: DesktopAPI = Object.freeze({
   unlockPasswordStorage: () => invoke<PasswordStorageRecovery>('gul:unlock-password-storage'),
   openPasswordStorage: () => invoke<boolean>('gul:open-password-storage'),
   forgetServer: (address: string) => invoke<void>('gul:forget-server', address),
+  memberCredential: (address: string) => invoke<MemberCredentialInfo>('gul:member-credential', address),
+  importMemberCredential: (input: ImportMemberCredential) =>
+    invoke<MemberCredentialInfo | null>('gul:import-member-credential', input),
+  setMemberCredentialConsent: (input: ImportMemberCredential) =>
+    invoke<MemberCredentialInfo>('gul:set-member-credential-consent', input),
+  clearMemberCredential: (address: string) => invoke<void>('gul:clear-member-credential', address),
+  redeemInvitation: (input: RedeemInvitation) => invoke<MemberCredentialInfo>('gul:redeem-invitation', input),
+  members: (context: ManagementContext) => invoke<MemberList>('gul:members', context),
+  channelPermissions: (input: ManagementContext & { channelId: number }) =>
+    invoke<ChannelPermissions>('gul:channel-permissions', input),
+  createChannel: (input: ChannelCreate) => invoke<BrokerState>('gul:create-channel', input),
+  updateChannel: (input: ChannelUpdate) => invoke<BrokerState>('gul:update-channel', input),
+  deleteChannel: (input: ChannelDelete) => invoke<BrokerState>('gul:delete-channel', input),
+  createInvitation: (context: ManagementContext) => invoke<Invitation>('gul:create-invitation', context),
   captureCapabilities: () => invoke<CaptureCapabilities>('gul:capture-capabilities'),
   onCapturePicker: (listener: (request: CapturePickerRequest | null) => void) => {
     if (typeof listener !== 'function') throw new TypeError('GUL_INPUT_INVALID');

@@ -1,5 +1,8 @@
 import { app, dialog, shell, safeStorage, type BrowserWindow } from 'electron';
 import { join } from 'node:path';
+import { MemberCredentialStore } from './member-credentials.ts';
+import { MemberAccess } from './member-access.ts';
+import type { ImportMemberCredential } from '../shared/management.ts';
 import { SavedServerStore } from './servers.ts';
 import { ConnectionManager } from './connections.ts';
 import { DiagnosticsJournal, exportDiagnostics } from './diagnostics.ts';
@@ -11,6 +14,8 @@ import { failure } from './validation.ts';
 import { PasswordStorage } from './password-storage.ts';
 
 export class AppServices {
+  readonly memberKeys: MemberCredentialStore;
+  readonly members: MemberAccess;
   readonly servers: SavedServerStore;
   readonly connections: ConnectionManager;
   readonly passwordStorage: PasswordStorage;
@@ -31,10 +36,17 @@ export class AppServices {
       platform: process.platform,
       passwordStorage: () => this.passwordStorage.getSnapshot(),
     });
-    this.connections = new ConnectionManager(authority, this.servers);
+    this.memberKeys = new MemberCredentialStore({
+      file: join(app.getPath('userData'), 'members.json'),
+      safeStorage,
+      platform: process.platform,
+      passwordStorage: () => this.passwordStorage.getSnapshot(),
+    });
+    this.members = new MemberAccess(authority, this.memberKeys);
+    this.connections = new ConnectionManager(authority, this.servers, this.memberKeys);
   }
   async initialize(): Promise<void> {
-    await this.servers.load();
+    await Promise.all([this.servers.load(), this.memberKeys.load()]);
     this.journal.record('app-start');
     if (app.isPackaged)
       this.updateCheck = checkForUpdate({ current: app.getVersion(), signal: this.updateAbort.signal }).then(
@@ -51,6 +63,20 @@ export class AppServices {
       lastSave: this.connections.lastSave(),
       passwordStorage,
     };
+  }
+  importMemberCredential(window: BrowserWindow, value: ImportMemberCredential) {
+    return this.members.import(value, async () => {
+      const choice = await dialog.showOpenDialog(window, {
+        title: 'Загрузить личный ключ Gul',
+        filters: [{ name: 'Gul member key', extensions: ['json'] }],
+        properties: ['openFile'],
+      });
+      return choice.canceled ? null : (choice.filePaths[0] ?? null);
+    });
+  }
+  async forgetServer(address: string): Promise<void> {
+    await this.members.clear(address);
+    if (!(await this.servers.forget(address)).persisted) throw failure('GUL_STORAGE_WRITE_FAILED');
   }
   async info(): Promise<AppInfo> {
     await this.updateCheck;

@@ -86,8 +86,26 @@ export function installIPC(
     },
     'gul:forget-server': async (_event, value) => {
       if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
-      if (!(await services.servers.forget(value)).persisted) throw failure('GUL_STORAGE_WRITE_FAILED');
+      await services.forgetServer(value);
     },
+    'gul:member-credential': (_event, value) => {
+      if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
+      return services.members.describe(value);
+    },
+    'gul:import-member-credential': (event, value) =>
+      services.importMemberCredential(current(event), value as never),
+    'gul:set-member-credential-consent': (_event, value) => services.members.consent(value as never),
+    'gul:clear-member-credential': (_event, value) => {
+      if (typeof value !== 'string') throw failure('GUL_INPUT_INVALID');
+      return services.members.clear(value);
+    },
+    'gul:redeem-invitation': (_event, value) => services.members.redeem(value as never),
+    'gul:members': (_event, value) => authority.members(value as never),
+    'gul:channel-permissions': (_event, value) => authority.channelPermissions(value as never),
+    'gul:create-channel': (_event, value) => authority.createChannel(value as never),
+    'gul:update-channel': (_event, value) => authority.updateChannel(value as never),
+    'gul:delete-channel': (_event, value) => authority.deleteChannel(value as never),
+    'gul:create-invitation': (_event, value) => authority.createInvitation(value as never),
     'gul:capture-capabilities': () => capture.capabilities(),
     'gul:select-capture-source': (_event, value) => {
       const { requestId, sourceKey } = capturePickerInput(value);

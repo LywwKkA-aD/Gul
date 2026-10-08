@@ -33,12 +33,21 @@ export function ChannelList({
         className={`channel ${channel.id === selected ? 'selected' : ''}`}
         aria-label={channel.name}
         aria-current={channel.id === selected ? 'true' : undefined}
-        disabled={busy}
+        disabled={busy || channel.canJoin === false}
         onClick={() => onChannel(channel.id)}
         style={{ paddingLeft: 12 + Math.min(depth, 5) * 12 }}
       >
         <Icon name="voice" />
         <span className="channel-name">{channel.name}</span>
+        {channel.access === 'restricted' && (
+          <span
+            className="channel-lock"
+            title={channel.canJoin === false ? 'Нет доступа' : 'Закрытый канал'}
+            aria-label={channel.canJoin === false ? 'Нет доступа' : 'Закрытый канал'}
+          >
+            Закр.
+          </span>
+        )}
         <small>{channel.users?.length || ''}</small>
       </button>
       {!!channel.users?.length && (

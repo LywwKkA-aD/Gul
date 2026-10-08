@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { SessionAuthority, type SessionGateway } from '../src/main/session.ts';
 
 const address = 'livekit+vless://203.0.113.7?security=reality';
+const info = {
+  protocolVersion: 2,
+  serverId: null,
+  channelManagement: false,
+  memberAuthentication: false,
+  maxChannels: 64,
+};
 const input = { address, username: 'Тест', password: 'private-password' };
 const base = () => ({
   sessionToken: 'private-broker-session',
@@ -32,6 +39,7 @@ function fake() {
     brokerOrigin: 'https://203.0.113.7',
     request: async <T>(method: 'GET' | 'POST', path: string, token?: string, body?: unknown): Promise<T> => {
       calls.push({ method, path, token, body });
+      if (path === '/api/gul/info') return info as T;
       if (path === '/api/gul/login') return structuredClone(login) as T;
       if (path === '/api/gul/screen')
         return (delayed ? await delayed : { ...login.grant, identity: 'screen.7' }) as T;
@@ -164,10 +172,12 @@ test('connect replacement fences an older pending login and cleans its gateway',
   const a = fake(),
     b = fake();
   let resolve!: (value: unknown) => void;
-  a.gateway.request = async <T>() =>
-    (await new Promise<unknown>((done) => {
+  a.gateway.request = async <T>(_method: 'GET' | 'POST', path: string) => {
+    if (path === '/api/gul/info') return info as T;
+    return (await new Promise<unknown>((done) => {
       resolve = done;
     })) as T;
+  };
   let attempt = 0;
   const authority = new SessionAuthority(async () => (attempt++ ? b.gateway : a.gateway));
   const first = authority.connect(input);

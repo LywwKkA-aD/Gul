@@ -136,3 +136,43 @@ test('last save notice exposes only fixed status and remains visible after disco
   assert.equal(f.manager.lastSave()?.status, 'encrypt-failed');
   assert.equal(JSON.stringify(f.manager.lastSave()).includes(input.password), false);
 });
+
+test('individual identity is independent from transport password and confirmed only after accepted bound login', async () => {
+  const f = fixture(),
+    key = {
+      format: 'gul-member-key-v1' as const,
+      serverId: 'a'.repeat(32),
+      memberId: 'b'.repeat(32),
+      credential: Buffer.alloc(32, 3).toString('base64url'),
+    };
+  const accepted = {
+    ...session,
+    serverId: key.serverId,
+    member: { id: key.memberId, role: 'owner' as const },
+  };
+  let received: unknown,
+    confirmed = 0;
+  const authority = {
+    ...f.authority,
+    connect: async (_input: ConnectInput, value?: unknown) => {
+      received = value;
+      return accepted;
+    },
+  };
+  const identities = {
+    resolve: () => ({ kind: 'ready' as const, key, rememberIdentity: true }),
+    confirm: async () => {
+      confirmed++;
+      return {} as never;
+    },
+  };
+  const manager = new ConnectionManager(authority, f.store, identities);
+  await manager.connect({ input, rememberPassword: false });
+  assert.deepEqual(received, key);
+  assert.equal(confirmed, 1);
+  assert.equal(f.saved[0].password, '');
+  identities.resolve = () =>
+    ({ kind: 'required', reason: 'unavailable', serverId: key.serverId, memberId: key.memberId }) as never;
+  await assert.rejects(manager.connect({ input, rememberPassword: true }), /GUL_MEMBER_KEY_REQUIRED/);
+  assert.equal(confirmed, 1);
+});

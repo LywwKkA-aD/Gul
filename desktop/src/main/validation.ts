@@ -7,6 +7,7 @@ import type {
   ScreenRequest,
   UserInfo,
 } from '../shared/contracts.ts';
+import { managedMetadata, type ManagementMetadata } from './management-validation.ts';
 
 export function failure(code: string): Error {
   return new Error(code);
@@ -26,7 +27,7 @@ function text(value: unknown, maximum: number): value is string {
   );
 }
 export function channelId(value: unknown): value is number {
-  return integer(value, 0, 3);
+  return integer(value, 0, 0x7fffffff);
 }
 function only(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
@@ -78,7 +79,7 @@ export function capturePickerInput(value: unknown): { requestId: string; sourceK
     throw failure('GUL_INPUT_INVALID');
   return { requestId: value.requestId, sourceKey: value.sourceKey };
 }
-export interface Login {
+export interface Login extends ManagementMetadata {
   readonly sessionToken: string;
   readonly sessionId: number;
   readonly identity: string;
@@ -87,7 +88,7 @@ export interface Login {
   readonly revision: number;
   readonly grant: MediaGrant;
 }
-interface Scope {
+interface Scope extends ManagementMetadata {
   sessionId: number;
   channelId: number;
   revision: number;
@@ -144,6 +145,7 @@ export function loginResponse(
   previous?: Login,
   expectedChannel?: number,
 ): Login {
+  const metadata = managedMetadata(value, previous?.serverId ? previous : undefined);
   if (
     !record(value) ||
     !text(value.sessionToken, 256) ||
@@ -151,6 +153,7 @@ export function loginResponse(
     value.identity !== `voice.${value.sessionId}` ||
     !text(value.name, 256) ||
     !channelId(value.channelId) ||
+    (!metadata.serverId && (value.channelId as number) > 3) ||
     !integer(value.revision, 1)
   )
     throw failure('GUL_GRANT_INVALID');
@@ -166,6 +169,7 @@ export function loginResponse(
   const scope = { sessionId: value.sessionId, channelId: value.channelId, revision: value.revision };
   return {
     ...scope,
+    ...metadata,
     sessionToken: value.sessionToken,
     identity: value.identity,
     name: value.name,
@@ -193,31 +197,61 @@ function user(value: unknown): UserInfo {
     isSelf: value.isSelf,
   };
 }
-function tree(value: unknown, seen: Set<number>, depth = 0): ChannelNode {
+function tree(
+  value: unknown,
+  seen: Set<number>,
+  depth = 0,
+  managed = false,
+  sessions = new Set<number>(),
+): ChannelNode {
   if (
-    depth > 4 ||
+    depth > (managed ? 1 : 4) ||
     !record(value) ||
     !channelId(value.id) ||
+    (!managed && value.id > 3) ||
+    seen.size >= (managed ? 64 : 4) ||
     seen.has(value.id) ||
     !text(value.name, 256) ||
     !integer(value.position, -2147483648, 2147483647) ||
     (value.users !== null && (!Array.isArray(value.users) || value.users.length > 128)) ||
-    (value.children !== null && (!Array.isArray(value.children) || value.children.length > 4))
+    (value.children !== null &&
+      (!Array.isArray(value.children) || value.children.length > (managed ? 63 : 4))) ||
+    (managed &&
+      (!integer(value.version, 1) ||
+        !['open', 'restricted'].includes(value.access as string) ||
+        typeof value.canJoin !== 'boolean'))
   )
     throw failure('GUL_STATE_INVALID');
   seen.add(value.id);
+  const users = value.users === null ? null : (value.users as unknown[]).map(user);
+  if (managed && users) {
+    if (value.canJoin === false && users.length) throw failure('GUL_STATE_INVALID');
+    for (const participant of users) {
+      if (participant.channelId !== value.id || sessions.has(participant.session) || sessions.size >= 128)
+        throw failure('GUL_STATE_INVALID');
+      sessions.add(participant.session);
+    }
+  }
   return {
     id: value.id,
     name: value.name,
     position: value.position,
-    users: value.users === null ? null : (value.users as unknown[]).map(user),
+    users,
+    ...(managed
+      ? {
+          version: value.version as number,
+          access: value.access as 'open' | 'restricted',
+          canJoin: value.canJoin as boolean,
+        }
+      : {}),
     children:
       value.children === null
         ? null
-        : (value.children as unknown[]).map((node) => tree(node, seen, depth + 1)),
+        : (value.children as unknown[]).map((node) => tree(node, seen, depth + 1, managed, sessions)),
   };
 }
 export function brokerState(value: unknown, scope: Scope): BrokerState {
+  const metadata = managedMetadata(value, scope.serverId ? scope : undefined);
   if (
     !record(value) ||
     value.selfSession !== scope.sessionId ||
@@ -225,10 +259,24 @@ export function brokerState(value: unknown, scope: Scope): BrokerState {
     value.revision !== scope.revision
   )
     throw failure('GUL_STATE_INVALID');
+  const catalog = tree(value.tree, new Set(), 0, !!metadata.serverId);
+  if (metadata.serverId) {
+    const nodes = [catalog, ...(catalog.children ?? [])],
+      current = nodes.find((node) => node.id === scope.channelId);
+    const users = nodes.flatMap((node) => node.users ?? []);
+    if (
+      catalog.id !== 0 ||
+      !current?.canJoin ||
+      !users.some((user) => user.session === scope.sessionId) ||
+      users.some((user) => user.isSelf !== (user.session === scope.sessionId))
+    )
+      throw failure('GUL_STATE_INVALID');
+  }
   return {
     selfSession: scope.sessionId,
     selfChannel: scope.channelId,
     revision: scope.revision,
-    tree: tree(value.tree, new Set()),
+    tree: catalog,
+    ...metadata,
   };
 }

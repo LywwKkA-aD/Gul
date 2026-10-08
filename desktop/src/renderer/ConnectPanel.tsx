@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { SavedServerInfo, ServerList } from '../shared/contracts.ts';
 import { SavedServers } from './SavedServers.tsx';
 import { selectedSavedServer, savedPasswordMessage } from './saved-login.ts';
@@ -23,6 +24,7 @@ export function ConnectPanel({
   onOpenStorage,
   onConnect,
   onCancel,
+  identityPanel,
 }: {
   address: string;
   username: string;
@@ -43,6 +45,7 @@ export function ConnectPanel({
   onOpenStorage: () => void;
   onConnect: () => void;
   onCancel: () => void;
+  identityPanel?: ReactNode;
 }) {
   const selected = selectedSavedServer(saved, address);
   const hasPassword = selected?.hasPassword === true;
@@ -159,6 +162,7 @@ export function ConnectPanel({
               Защищённое хранилище недоступно. Адрес и ник сохранятся; новый пароль пока нельзя запомнить.
             </p>
           )}
+          {identityPanel}
           <button className="primary" type="submit" disabled={busy}>
             {busy ? 'Подключаемся…' : 'Подключиться'}
           </button>

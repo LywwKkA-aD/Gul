@@ -29,7 +29,33 @@ const methods = new Map([
   ['/api/gul/audio', 'POST'],
   ['/api/gul/screen', 'POST'],
   ['/api/gul/logout', 'POST'],
+  ['/api/gul/info', 'GET'],
+  ['/api/gul/members', 'GET'],
+  ['/api/gul/channels/create', 'POST'],
+  ['/api/gul/channels/update', 'POST'],
+  ['/api/gul/channels/delete', 'POST'],
+  ['/api/gul/channels/permissions', 'POST'],
+  ['/api/gul/invites/create', 'POST'],
+  ['/api/gul/invites/redeem', 'POST'],
 ]);
+
+/** Match fixed server codes to their status; exception bodies never become error messages. */
+export function brokerError(status: number, value: unknown): GatewayError {
+  const code =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>).code
+      : undefined;
+  if (status === 404) return new GatewayError('not-found');
+  if (status === 403 && code === 'owner_required') return new GatewayError('owner-required');
+  if (status === 403 && code === 'access_denied') return new GatewayError('access-denied');
+  if (status === 409 && code === 'channel_busy') return new GatewayError('channel-busy');
+  if (status === 426 && code === 'upgrade_required') return new GatewayError('upgrade-required');
+  if (status === 503 && code === 'media_cleanup_pending') return new GatewayError('cleanup-pending');
+  if (status === 503 && code === 'storage_unavailable') return new GatewayError('storage-unavailable');
+  return new GatewayError(
+    status === 401 || status === 403 ? 'authentication' : status === 409 ? 'stale' : 'server',
+  );
+}
 
 export function brokerRequest<T>(
   agent: https.Agent,
@@ -73,20 +99,12 @@ export function brokerRequest<T>(
       },
       (response) => {
         const status = response.statusCode ?? 0;
-        if (status < 200 || status >= 300) {
-          response.resume();
-          finish(
-            new GatewayError(
-              status === 401 || status === 403 ? 'authentication' : status === 409 ? 'stale' : 'server',
-            ),
-          );
-          return;
-        }
+        const error = status < 200 || status >= 300;
         const chunks: Buffer[] = [];
         let size = 0;
         response.on('data', (chunk: Buffer) => {
           size += chunk.length;
-          if (size > 1024 * 1024) {
+          if (size > (error ? 1024 : 1024 * 1024)) {
             finish(new GatewayError('server'));
             response.destroy();
           } else chunks.push(chunk);
@@ -96,7 +114,15 @@ export function brokerRequest<T>(
         response.on('end', () => {
           try {
             const data = Buffer.concat(chunks).toString('utf8');
-            finish(undefined, data ? (JSON.parse(data) as T) : undefined);
+            if (error) {
+              let value: unknown;
+              try {
+                value = data ? JSON.parse(data) : undefined;
+              } catch {
+                /* Non-JSON errors retain only their status. */
+              }
+              finish(brokerError(status, value));
+            } else finish(undefined, data ? (JSON.parse(data) as T) : undefined);
           } catch {
             finish(new GatewayError('server'));
           }

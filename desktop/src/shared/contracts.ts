@@ -1,4 +1,17 @@
 import type { CapturePickerRequest } from './capture-picker.ts';
+import type {
+  MemberIdentity,
+  ManagementContext,
+  ChannelCreate,
+  ChannelUpdate,
+  ChannelDelete,
+  ChannelPermissions,
+  MemberList,
+  Invitation,
+  MemberCredentialInfo,
+  ImportMemberCredential,
+  RedeemInvitation,
+} from './management.ts';
 
 /** Main owns broker credentials; only short-lived media grants cross IPC. */
 export interface AudioState {
@@ -28,6 +41,9 @@ export interface MediaSession {
   readonly channelId: number;
   readonly revision: number;
   readonly grant: MediaGrant;
+  readonly serverId?: string | null;
+  readonly member?: MemberIdentity;
+  readonly catalogVersion?: number;
 }
 export interface UserInfo {
   readonly session: number;
@@ -44,12 +60,18 @@ export interface ChannelNode {
   readonly position: number;
   readonly users: readonly UserInfo[] | null;
   readonly children: readonly ChannelNode[] | null;
+  readonly version?: number;
+  readonly access?: 'open' | 'restricted';
+  readonly canJoin?: boolean;
 }
 export interface BrokerState {
   readonly tree: ChannelNode;
   readonly selfSession: number;
   readonly selfChannel: number;
   readonly revision: number;
+  readonly serverId?: string | null;
+  readonly member?: MemberIdentity;
+  readonly catalogVersion?: number;
 }
 export interface ScreenRequest {
   readonly channelId: number;
@@ -113,6 +135,17 @@ export interface DesktopAPI {
   forgetServer(address: string): Promise<void>;
   unlockPasswordStorage(): Promise<PasswordStorageRecovery>;
   openPasswordStorage(): Promise<boolean>;
+  memberCredential(address: string): Promise<MemberCredentialInfo>;
+  importMemberCredential(input: ImportMemberCredential): Promise<MemberCredentialInfo | null>;
+  setMemberCredentialConsent(input: ImportMemberCredential): Promise<MemberCredentialInfo>;
+  clearMemberCredential(address: string): Promise<void>;
+  redeemInvitation(input: RedeemInvitation): Promise<MemberCredentialInfo>;
+  members(context: ManagementContext): Promise<MemberList>;
+  channelPermissions(input: ManagementContext & { readonly channelId: number }): Promise<ChannelPermissions>;
+  createChannel(input: ChannelCreate): Promise<BrokerState>;
+  updateChannel(input: ChannelUpdate): Promise<BrokerState>;
+  deleteChannel(input: ChannelDelete): Promise<BrokerState>;
+  createInvitation(context: ManagementContext): Promise<Invitation>;
   captureCapabilities(): Promise<CaptureCapabilities>;
   onCapturePicker(listener: (request: CapturePickerRequest | null) => void): () => void;
   selectCaptureSource(requestId: string, sourceKey: string | null): Promise<void>;

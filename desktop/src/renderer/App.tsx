@@ -13,6 +13,8 @@ import type { ChatEntry } from './media/model.ts';
 import { Icon } from './MediaElements.tsx';
 import { GulLogo } from './GulLogo.tsx';
 import { CapturePickerHost } from './CapturePickerHost.tsx';
+import { MemberIdentityPanel } from './MemberIdentityPanel.tsx';
+import { ChannelManagement } from './ChannelManagement.tsx';
 import { ChannelList, flattenChannels } from './ChannelList.tsx';
 import { ChatPanel } from './ChatPanel.tsx';
 import { EphemeralChatHistory } from './chat-history.ts';
@@ -147,7 +149,13 @@ export function App() {
       pending = true;
       try {
         const next = await api.state();
-        if (active) setBroker(next);
+        if (active) {
+          if (next === null && sessionRef.current === session) {
+            void leave();
+            return;
+          }
+          setBroker(next);
+        }
       } catch {
         if (active) setError('Не удалось обновить список участников');
       } finally {
@@ -456,6 +464,15 @@ export function App() {
           storageNotice={storageNotice}
           busy={busy}
           error={error}
+          identityPanel={
+            <MemberIdentityPanel
+              api={api}
+              input={{ address, username, password }}
+              busy={busy}
+              protectedStorage={savedServers.storage === 'protected'}
+              onError={setError}
+            />
+          }
           onAddress={setAddress}
           onUsername={setUsername}
           onPassword={setPassword}
@@ -501,6 +518,14 @@ export function App() {
                 <small className="subtle">{snapshot.state === 'connected' ? 'В сети' : 'Подключение…'}</small>
               </div>
             </div>
+            <ChannelManagement
+              key={session.epoch}
+              api={api}
+              session={session}
+              broker={broker}
+              busy={busy}
+              onState={setBroker}
+            />
             <div className="section-label">ГОЛОСОВЫЕ КАНАЛЫ</div>
             <ChannelList
               tree={broker?.tree}

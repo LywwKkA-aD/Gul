@@ -21,6 +21,33 @@ const key = Buffer.alloc(32, 3).toString('base64url');
 let folder: string, xray: string, ca: Buffer, server: tls.Server, port: number;
 const accepted = new Set<net.Socket>();
 const broker = http.createServer((req, res) => {
+  if (
+    req.url === '/api/gul/info' ||
+    req.url === '/api/gul/members' ||
+    req.url?.startsWith('/api/gul/channels/') ||
+    req.url?.startsWith('/api/gul/invites/')
+  ) {
+    if (req.url === '/api/gul/channels/delete') {
+      res.writeHead(409);
+      res.end(JSON.stringify({ code: 'channel_busy', credential: 'private-unused' }));
+      return;
+    }
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () =>
+      res.end(
+        JSON.stringify({
+          method: req.method,
+          path: req.url,
+          body: body ? JSON.parse(body) : null,
+          authorization: req.headers.authorization ?? '',
+        }),
+      ),
+    );
+    return;
+  }
   if (req.url === '/healthz') {
     res.end(JSON.stringify({ status: 'ok' }));
     return;
@@ -440,3 +467,44 @@ test(
     }
   },
 );
+
+test('management endpoints use fixed methods and pinned broker transport; error DTOs are sanitized', async () => {
+  const gateway = await openGateway();
+  try {
+    for (const path of ['/api/gul/info', '/api/gul/members']) {
+      const result = await gateway.request<{ method: string; path: string }>(
+        'GET',
+        path,
+        'fixed-broker-token',
+      );
+      assert.equal(result.method, 'GET');
+      assert.equal(result.path, path);
+      await assert.rejects(gateway.request('POST', path));
+      await assert.rejects(gateway.request('GET', path + '?path=outside'));
+    }
+    for (const route of [
+      'channels/create',
+      'channels/update',
+      'channels/permissions',
+      'invites/create',
+      'invites/redeem',
+    ]) {
+      const path = '/api/gul/' + route,
+        result = await gateway.request<{ body: unknown; authorization: string }>(
+          'POST',
+          path,
+          'fixed-broker-token',
+          { name: 'Bounded' },
+        );
+      assert.deepEqual(result.body, { name: 'Bounded' });
+      assert.equal(result.authorization, 'Bearer fixed-broker-token');
+      await assert.rejects(gateway.request('GET', path));
+    }
+    await assert.rejects(
+      gateway.request('POST', '/api/gul/channels/delete', 'fixed-broker-token', {}),
+      (error: Error) => error.message === 'Канал занят; удаление недоступно',
+    );
+  } finally {
+    await gateway.close();
+  }
+});

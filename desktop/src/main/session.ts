@@ -6,6 +6,35 @@ import type {
   MediaSession,
   ScreenRequest,
 } from '../shared/contracts.ts';
+import type {
+  ManagementContext,
+  ChannelCreate,
+  ChannelUpdate,
+  ChannelDelete,
+  ChannelPermissions,
+  MemberList,
+  Invitation,
+  RedeemInvitation,
+} from '../shared/management.ts';
+import { GatewayError } from '../transport/errors.ts';
+import {
+  parseMemberKey,
+  createMemberCredential,
+  memberCredential,
+  memberId,
+  type MemberKey,
+} from './member-credentials.ts';
+import {
+  serverInfo,
+  managedMetadata,
+  managementContext,
+  createChannelInput,
+  updateChannelInput,
+  deleteChannelInput,
+  channelPermissions,
+  memberList,
+  invitation,
+} from './management-validation.ts';
 import { allowedNetwork } from './security.ts';
 import {
   audioInput,
@@ -45,13 +74,19 @@ export class SessionAuthority {
   private readonly gateways = new Set<SessionGateway>();
   private readonly creations = new Set<Promise<SessionGateway>>();
   private readonly cleanupTasks = new Set<Promise<void>>();
+  private readonly catalogVersions = new WeakMap<Active, number>();
+  private readonly redemptionCredentials = new Map<
+    string,
+    { readonly serverId: string; readonly credential: string }
+  >();
   private readonly gatewayEpochs = new WeakMap<SessionGateway, number>();
   constructor(createGateway: GatewayFactory) {
     this.createGateway = createGateway;
   }
 
-  async connect(value: ConnectInput): Promise<MediaSession> {
+  async connect(value: ConnectInput, memberKey?: MemberKey): Promise<MediaSession> {
     const input = connectInput(value);
+    const key = memberKey === undefined ? undefined : parseMemberKey(memberKey);
     const epoch = ++this.epoch;
     this.endpoints = [];
     const previous = this.active ?? this.transitioning;
@@ -63,14 +98,24 @@ export class SessionAuthority {
     try {
       gateway = await this.makeGateway({ address: input.address, password: input.password });
       if (epoch !== this.epoch) throw failure('GUL_SESSION_STALE');
+      const info = await this.info(gateway);
+      if (epoch !== this.epoch) throw failure('GUL_SESSION_STALE');
+      if (key && !info?.memberAuthentication) throw failure('GUL_MEMBER_UNSUPPORTED');
+      if (key && key.serverId !== info?.serverId) throw failure('GUL_MEMBER_MISMATCH');
       const login = loginResponse(
         await gateway.request('POST', '/api/gul/login', undefined, {
           username: input.username,
           password: input.password,
+          ...(info ? { protocolVersion: 2 } : {}),
+          ...(key ? { memberCredential: key.credential } : {}),
         }),
         gateway.brokerOrigin,
       );
       if (epoch !== this.epoch) throw failure('GUL_SESSION_STALE');
+      if (info?.serverId && login.serverId !== info.serverId) throw failure('GUL_MEMBER_MISMATCH');
+      if (key && (login.member?.id !== key.memberId || !['owner', 'member'].includes(login.member.role)))
+        throw failure('GUL_MEMBER_MISMATCH');
+      if (!key && login.member && login.member.role !== 'guest') throw failure('GUL_MEMBER_MISMATCH');
       this.advance(gateway, epoch);
       const active = { gateway, login, epoch };
       const session = this.rendererSession(active);
@@ -102,14 +147,24 @@ export class SessionAuthority {
     try {
       const result = await active.gateway.request('GET', '/api/gul/state', active.login.sessionToken);
       this.assertActive(active);
-      return brokerState(result, active.login);
+      return this.acceptState(result, active);
     } catch (error) {
+      if (
+        this.active === active &&
+        active.login.serverId &&
+        error instanceof GatewayError &&
+        error.code === 'authentication'
+      ) {
+        await this.disconnect();
+        return null;
+      }
       throw safe(error, 'GUL_STATE_FAILED');
     }
   }
   async channel(id: number): Promise<MediaSession> {
     if (!channelId(id)) throw failure('GUL_INPUT_INVALID');
     const active = this.required();
+    if (!active.login.serverId && id > 3) throw failure('GUL_INPUT_INVALID');
     return this.mutate(async () => {
       this.assertActive(active);
       const refreshing = active.login.channelId === id;
@@ -127,6 +182,11 @@ export class SessionAuthority {
           refreshing ? undefined : active.login,
           id,
         );
+        if (active.login.serverId)
+          managedMetadata(login, {
+            ...active.login,
+            catalogVersion: this.catalogVersions.get(active) ?? active.login.catalogVersion,
+          });
         if (
           refreshing &&
           (login.sessionToken !== active.login.sessionToken ||
@@ -189,6 +249,169 @@ export class SessionAuthority {
       throw safe(error, 'GUL_SCREEN_FAILED');
     }
   }
+  forgetIdentity(address: string): void {
+    const target = connectInput({ address, username: 'identity', password: '' }).address;
+    if (!this.idle()) throw failure('GUL_SESSION_STALE');
+    for (const name of this.redemptionCredentials.keys())
+      if (name.startsWith(target + '\0')) this.redemptionCredentials.delete(name);
+  }
+  operationRevision(): number {
+    return this.epoch;
+  }
+  idle(): boolean {
+    return !this.active && !this.transitioning && this.creations.size === 0 && this.gateways.size === 0;
+  }
+  async members(value: ManagementContext): Promise<MemberList> {
+    const context = managementContext(value),
+      active = this.owner(context);
+    try {
+      const result = await active.gateway.request('GET', '/api/gul/members', active.login.sessionToken);
+      this.assertActive(active);
+      return memberList(result, active.login.member!.id!);
+    } catch (error) {
+      throw safe(error, 'GUL_MANAGEMENT_FAILED');
+    }
+  }
+  async channelPermissions(value: ManagementContext & { channelId: number }): Promise<ChannelPermissions> {
+    const context = managementContext(value, ['channelId']),
+      active = this.owner(context);
+    if (!channelId(value.channelId)) throw failure('GUL_INPUT_INVALID');
+    try {
+      const result = await active.gateway.request(
+        'POST',
+        '/api/gul/channels/permissions',
+        active.login.sessionToken,
+        { channelId: value.channelId },
+      );
+      this.assertActive(active);
+      return channelPermissions(result, value.channelId);
+    } catch (error) {
+      throw safe(error, 'GUL_MANAGEMENT_FAILED');
+    }
+  }
+  async createChannel(value: ChannelCreate): Promise<BrokerState> {
+    const input = createChannelInput(value);
+    const { epoch, serverId, ...body } = input;
+    return this.catalog({ epoch, serverId }, '/api/gul/channels/create', body);
+  }
+  async updateChannel(value: ChannelUpdate): Promise<BrokerState> {
+    const input = updateChannelInput(value);
+    const { epoch, serverId, ...body } = input;
+    return this.catalog({ epoch, serverId }, '/api/gul/channels/update', body);
+  }
+  async deleteChannel(value: ChannelDelete): Promise<BrokerState> {
+    const input = deleteChannelInput(value);
+    const { epoch, serverId, ...body } = input;
+    return this.catalog({ epoch, serverId }, '/api/gul/channels/delete', body);
+  }
+  async createInvitation(value: ManagementContext): Promise<Invitation> {
+    const context = managementContext(value),
+      active = this.owner(context);
+    try {
+      const result = await active.gateway.request(
+        'POST',
+        '/api/gul/invites/create',
+        active.login.sessionToken,
+        {},
+      );
+      this.assertActive(active);
+      return invitation(result);
+    } catch (error) {
+      throw safe(error, 'GUL_MANAGEMENT_FAILED');
+    }
+  }
+  async redeemInvitation(value: RedeemInvitation): Promise<MemberKey> {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      Object.keys(value).some((key) => !['input', 'inviteToken', 'rememberIdentity'].includes(key)) ||
+      !memberCredential(value.inviteToken) ||
+      typeof value.rememberIdentity !== 'boolean'
+    )
+      throw failure('GUL_INPUT_INVALID');
+    const input = connectInput(value.input);
+    if (!this.idle()) throw failure('GUL_SESSION_STALE');
+    const epoch = ++this.epoch,
+      retryKey = input.address + '\0' + value.inviteToken;
+    let gateway: SessionGateway | undefined;
+    try {
+      gateway = await this.makeGateway(input);
+      const info = await this.info(gateway);
+      if (epoch !== this.epoch) throw failure('GUL_SESSION_STALE');
+      if (!info?.memberAuthentication || !info.serverId) throw failure('GUL_MEMBER_UNSUPPORTED');
+      const previous = this.redemptionCredentials.get(retryKey);
+      if (previous && previous.serverId !== info.serverId) throw failure('GUL_MEMBER_MISMATCH');
+      const credential = previous?.credential ?? createMemberCredential();
+      if (!previous) {
+        this.redemptionCredentials.set(retryKey, Object.freeze({ serverId: info.serverId, credential }));
+        if (this.redemptionCredentials.size > 8)
+          this.redemptionCredentials.delete(this.redemptionCredentials.keys().next().value!);
+      }
+      const result = await gateway.request<unknown>('POST', '/api/gul/invites/redeem', undefined, {
+        protocolVersion: 2,
+        username: input.username,
+        password: input.password,
+        inviteToken: value.inviteToken,
+        memberCredential: credential,
+      });
+      if (epoch !== this.epoch) throw failure('GUL_SESSION_STALE');
+      const data = result as { serverId?: unknown; member?: { id?: unknown; role?: unknown } };
+      if (
+        !data ||
+        data.serverId !== info.serverId ||
+        !memberId(data.member?.id) ||
+        data.member?.role !== 'member'
+      )
+        throw failure('GUL_MEMBER_MISMATCH');
+      return parseMemberKey({
+        format: 'gul-member-key-v1',
+        serverId: info.serverId,
+        memberId: data.member.id,
+        credential,
+      });
+    } catch (error) {
+      throw epoch !== this.epoch ? failure('GUL_SESSION_STALE') : safe(error, 'GUL_REDEEM_FAILED');
+    } finally {
+      if (gateway) await this.close(gateway);
+    }
+  }
+  private acceptState(value: unknown, active: Active): BrokerState {
+    const result = brokerState(value, {
+      ...active.login,
+      catalogVersion: this.catalogVersions.get(active) ?? active.login.catalogVersion,
+    });
+    if (result.catalogVersion !== undefined) this.catalogVersions.set(active, result.catalogVersion);
+    return result;
+  }
+  private owner(context: ManagementContext): Active {
+    const active = this.required();
+    if (context.epoch !== active.epoch || context.serverId !== active.login.serverId)
+      throw failure('GUL_SESSION_STALE');
+    if (active.login.member?.role !== 'owner') throw failure('GUL_OWNER_REQUIRED');
+    return active;
+  }
+  private catalog(context: ManagementContext, path: string, body: unknown): Promise<BrokerState> {
+    const active = this.owner(context);
+    return this.mutate(async () => {
+      this.assertActive(active);
+      try {
+        const result = await active.gateway.request('POST', path, active.login.sessionToken, body);
+        this.assertActive(active);
+        return this.acceptState(result, active);
+      } catch (error) {
+        throw safe(error, 'GUL_MANAGEMENT_FAILED');
+      }
+    });
+  }
+  private async info(gateway: SessionGateway) {
+    try {
+      return serverInfo(await gateway.request('GET', '/api/gul/info'));
+    } catch (error) {
+      if (error instanceof GatewayError && error.code === 'not-found') return null;
+      throw error;
+    }
+  }
   private rendererGrant(active: Active, grant: MediaGrant): MediaGrant {
     const url = active.gateway.signalURL(active.epoch, grant.token);
     this.endpoints = [...new Set([...this.endpoints, url])];
@@ -212,6 +435,9 @@ export class SessionAuthority {
       name: login.name,
       channelId: login.channelId,
       revision: login.revision,
+      ...(login.serverId !== undefined
+        ? { serverId: login.serverId, member: login.member, catalogVersion: login.catalogVersion }
+        : {}),
       grant: this.rendererGrant(active, login.grant),
     };
   }
@@ -286,7 +512,22 @@ const safeCodes = new Set([
   'GUL_STATE_INVALID',
   'GUL_SESSION_STALE',
   'GUL_NOT_CONNECTED',
+  'GUL_MEMBER_MISMATCH',
+  'GUL_MEMBER_UNSUPPORTED',
+  'GUL_INFO_INVALID',
+  'GUL_UPGRADE_REQUIRED',
+  'GUL_OWNER_REQUIRED',
 ]);
 function safe(error: unknown, fallback: string): Error {
+  const codes: Readonly<Record<string, string>> = {
+    'owner-required': 'GUL_OWNER_REQUIRED',
+    'access-denied': 'GUL_ACCESS_DENIED',
+    'channel-busy': 'GUL_CHANNEL_BUSY',
+    stale: 'GUL_CATALOG_CONFLICT',
+    'upgrade-required': 'GUL_UPGRADE_REQUIRED',
+    'cleanup-pending': 'GUL_CLEANUP_PENDING',
+    'storage-unavailable': 'GUL_SERVER_STORAGE_UNAVAILABLE',
+  };
+  if (error instanceof GatewayError && codes[error.code]) return failure(codes[error.code]);
   return failure(error instanceof Error && safeCodes.has(error.message) ? error.message : fallback);
 }

@@ -1,5 +1,6 @@
 import type { ConnectInput, MediaSession, ServerList } from '../shared/contracts.ts';
 import type { SessionAuthority } from './session.ts';
+import type { MemberCredentialStore } from './member-credentials.ts';
 import type { SavedServerStore } from './servers.ts';
 import { connectInput, failure } from './validation.ts';
 
@@ -12,12 +13,15 @@ export class ConnectionManager {
   private saveNotice: ServerList['lastSave'] = null;
   private readonly authority: Pick<SessionAuthority, 'connect' | 'disconnect' | 'mediaEpoch'>;
   private readonly store: Pick<SavedServerStore, 'remember' | 'resolve'>;
+  private readonly identities?: Pick<MemberCredentialStore, 'resolve' | 'confirm'>;
   constructor(
     authority: Pick<SessionAuthority, 'connect' | 'disconnect' | 'mediaEpoch'>,
     store: Pick<SavedServerStore, 'remember' | 'resolve'>,
+    identities?: Pick<MemberCredentialStore, 'resolve' | 'confirm'>,
   ) {
     this.authority = authority;
     this.store = store;
+    this.identities = identities;
   }
   async connect(value: unknown): Promise<MediaSession> {
     if (
@@ -49,9 +53,20 @@ export class ConnectionManager {
   }
   private async accept(input: ConnectInput, rememberPassword: boolean): Promise<MediaSession> {
     const operation = ++this.operation;
-    const session = await this.authority.connect(input);
+    const identity = this.identities?.resolve(input.address);
+    if (identity?.kind === 'required') throw failure('GUL_MEMBER_KEY_REQUIRED');
+    const session = await this.authority.connect(
+      input,
+      identity?.kind === 'ready' ? identity.key : undefined,
+    );
     if (operation !== this.operation || this.authority.mediaEpoch() !== session.epoch)
       throw failure('GUL_SESSION_STALE');
+    if (identity?.kind === 'ready') {
+      if (!session.serverId || !session.member) throw failure('GUL_MEMBER_MISMATCH');
+      await this.identities!.confirm(input.address, session.serverId, session.member);
+      if (operation !== this.operation || this.authority.mediaEpoch() !== session.epoch)
+        throw failure('GUL_SESSION_STALE');
+    }
     const saved = await this.store
       .remember({ ...input, password: rememberPassword ? input.password : '' })
       .catch(() => ({
